@@ -6,7 +6,7 @@
       "category": "secrets",
       "severity": "critical",
       "description": "Django SECRET_KEY is hardcoded",
-      "pattern": "SECRET_KEY\\s*=\\s*['\"][^'\"]{20,}['\"]",
+      "pattern": "SECRET_KEY\\s*=\\s*['\"][^'\"]{8,}['\"]",
       "cwe": "CWE-798",
       "owasp": "A02:2021 - Cryptographic Failures",
       "fix": "Store SECRET_KEY in environment variables",

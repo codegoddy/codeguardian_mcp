@@ -425,7 +425,7 @@ async function runRobustTests() {
     `;
     const vulns = await scanForVulnerabilities(djangoCode, 'python');
     assert(vulns.length >= 2, 'Should detect multiple Django security issues');
-    assert(vulns.some(v => v.name.includes('SECRET_KEY')), 'Should detect hardcoded SECRET_KEY');
+    assert(vulns.some(v => v.name.includes('Secret Key')), 'Should detect hardcoded SECRET_KEY');
     assert(vulns.some(v => v.name.includes('SQL')), 'Should detect SQL injection');
   } catch (error) {
     assert(false, `Django security scanning failed: ${error.message}`);
