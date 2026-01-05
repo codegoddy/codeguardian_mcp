@@ -1,0 +1,284 @@
+{
+  "rules": [
+    {
+      "id": "PY-SEC-001",
+      "name": "Hardcoded Django Secret Key",
+      "category": "secrets",
+      "severity": "critical",
+      "description": "Django SECRET_KEY is hardcoded",
+      "pattern": "SECRET_KEY\\s*=\\s*['\"][^'\"]{20,}['\"]",
+      "cwe": "CWE-798",
+      "owasp": "A02:2021 - Cryptographic Failures",
+      "fix": "Store SECRET_KEY in environment variables",
+      "references": [
+        "https://docs.djangoproject.com/en/stable/ref/settings/#secret-key"
+      ]
+    },
+    {
+      "id": "PY-SEC-002",
+      "name": "SQL Injection - String Formatting",
+      "category": "injection",
+      "severity": "critical",
+      "description": "SQL query using string formatting (injection risk)",
+      "pattern": "(execute|executemany|raw)\\s*\\([^)]*%s[^)]*\\)",
+      "cwe": "CWE-89",
+      "owasp": "A03:2021 - Injection",
+      "fix": "Use parameterized queries with placeholders",
+      "references": [
+        "https://owasp.org/Top10/A03_2021-Injection/"
+      ]
+    },
+    {
+      "id": "PY-SEC-003",
+      "name": "SQL Injection - F-String",
+      "category": "injection",
+      "severity": "critical",
+      "description": "SQL query using f-string (injection risk)",
+      "pattern": "f['\"].*?(SELECT|INSERT|UPDATE|DELETE).*?\\{.*?\\}",
+      "cwe": "CWE-89",
+      "owasp": "A03:2021 - Injection",
+      "fix": "Use parameterized queries instead of f-strings",
+      "references": [
+        "https://owasp.org/Top10/A03_2021-Injection/"
+      ]
+    },
+    {
+      "id": "PY-SEC-004",
+      "name": "Unsafe Pickle Usage",
+      "category": "deserialization",
+      "severity": "critical",
+      "description": "pickle.loads() can execute arbitrary code",
+      "pattern": "pickle\\.loads?\\s*\\(",
+      "cwe": "CWE-502",
+      "owasp": "A08:2021 - Software and Data Integrity Failures",
+      "fix": "Use JSON or validate pickle data source",
+      "references": [
+        "https://owasp.org/Top10/A08_2021-Software_and_Data_Integrity_Failures/"
+      ]
+    },
+    {
+      "id": "PY-SEC-005",
+      "name": "Unsafe YAML Load",
+      "category": "deserialization",
+      "severity": "critical",
+      "description": "yaml.load() without SafeLoader can execute code",
+      "pattern": "yaml\\.load\\s*\\([^,)]+\\)",
+      "cwe": "CWE-502",
+      "owasp": "A08:2021 - Software and Data Integrity Failures",
+      "fix": "Use yaml.safe_load() instead",
+      "references": [
+        "https://owasp.org/Top10/A08_2021-Software_and_Data_Integrity_Failures/"
+      ]
+    },
+    {
+      "id": "PY-SEC-006",
+      "name": "Command Injection - os.system",
+      "category": "injection",
+      "severity": "critical",
+      "description": "os.system() with user input can lead to command injection",
+      "pattern": "os\\.system\\s*\\([^)]*\\+[^)]*\\)",
+      "cwe": "CWE-78",
+      "owasp": "A03:2021 - Injection",
+      "fix": "Use subprocess with list arguments instead",
+      "references": [
+        "https://owasp.org/Top10/A03_2021-Injection/"
+      ]
+    },
+    {
+      "id": "PY-SEC-007",
+      "name": "Command Injection - subprocess.shell",
+      "category": "injection",
+      "severity": "critical",
+      "description": "subprocess with shell=True can lead to command injection",
+      "pattern": "subprocess\\.(call|run|Popen)\\s*\\([^)]*shell\\s*=\\s*True",
+      "cwe": "CWE-78",
+      "owasp": "A03:2021 - Injection",
+      "fix": "Use shell=False and pass command as list",
+      "references": [
+        "https://owasp.org/Top10/A03_2021-Injection/"
+      ]
+    },
+    {
+      "id": "PY-SEC-008",
+      "name": "Path Traversal Risk",
+      "category": "path-traversal",
+      "severity": "high",
+      "description": "File operations with .. can lead to path traversal",
+      "pattern": "(open|read|write)\\s*\\([^)]*\\.\\.",
+      "cwe": "CWE-22",
+      "owasp": "A01:2021 - Broken Access Control",
+      "fix": "Validate and sanitize file paths",
+      "references": [
+        "https://owasp.org/Top10/A01_2021-Broken_Access_Control/"
+      ]
+    },
+    {
+      "id": "PY-SEC-009",
+      "name": "Django Debug Mode",
+      "category": "configuration",
+      "severity": "high",
+      "description": "Django DEBUG should be False in production",
+      "pattern": "DEBUG\\s*=\\s*True",
+      "cwe": "CWE-489",
+      "owasp": "A05:2021 - Security Misconfiguration",
+      "fix": "Set DEBUG = False in production settings",
+      "references": [
+        "https://docs.djangoproject.com/en/stable/ref/settings/#debug"
+      ]
+    },
+    {
+      "id": "PY-SEC-010",
+      "name": "Flask Debug Mode",
+      "category": "configuration",
+      "severity": "high",
+      "description": "Flask debug mode should be disabled in production",
+      "pattern": "app\\.run\\s*\\([^)]*debug\\s*=\\s*True",
+      "cwe": "CWE-489",
+      "owasp": "A05:2021 - Security Misconfiguration",
+      "fix": "Set debug=False in production",
+      "references": [
+        "https://flask.palletsprojects.com/en/stable/config/"
+      ]
+    },
+    {
+      "id": "PY-SEC-011",
+      "name": "Weak Hash Algorithm",
+      "category": "crypto",
+      "severity": "high",
+      "description": "MD5 or SHA1 used for hashing",
+      "pattern": "hashlib\\.(md5|sha1)\\s*\\(",
+      "cwe": "CWE-327",
+      "owasp": "A02:2021 - Cryptographic Failures",
+      "fix": "Use hashlib.sha256() or stronger",
+      "references": [
+        "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"
+      ]
+    },
+    {
+      "id": "PY-SEC-012",
+      "name": "Insecure Random",
+      "category": "crypto",
+      "severity": "medium",
+      "description": "random module is not cryptographically secure",
+      "pattern": "random\\.(random|randint|choice)\\s*\\(",
+      "cwe": "CWE-338",
+      "owasp": "A02:2021 - Cryptographic Failures",
+      "fix": "Use secrets module for security-sensitive operations",
+      "references": [
+        "https://docs.python.org/3/library/secrets.html"
+      ]
+    },
+    {
+      "id": "PY-SEC-013",
+      "name": "SQL Injection - Django Raw Query",
+      "category": "injection",
+      "severity": "critical",
+      "description": "Django raw() query with string formatting",
+      "pattern": "\\.raw\\s*\\([^)]*%[^)]*\\)",
+      "cwe": "CWE-89",
+      "owasp": "A03:2021 - Injection",
+      "fix": "Use Django ORM or parameterized raw queries",
+      "references": [
+        "https://docs.djangoproject.com/en/stable/topics/security/#sql-injection-protection"
+      ]
+    },
+    {
+      "id": "PY-SEC-014",
+      "name": "XSS - Django mark_safe",
+      "category": "xss",
+      "severity": "high",
+      "description": "mark_safe() can lead to XSS if input is not sanitized",
+      "pattern": "mark_safe\\s*\\(",
+      "cwe": "CWE-79",
+      "owasp": "A03:2021 - Injection",
+      "fix": "Sanitize user input before using mark_safe()",
+      "references": [
+        "https://docs.djangoproject.com/en/stable/ref/utils/#django.utils.safestring.mark_safe"
+      ]
+    },
+    {
+      "id": "PY-SEC-015",
+      "name": "Disabled CSRF Protection",
+      "category": "csrf",
+      "severity": "high",
+      "description": "CSRF protection disabled",
+      "pattern": "@csrf_exempt",
+      "cwe": "CWE-352",
+      "owasp": "A01:2021 - Broken Access Control",
+      "fix": "Only disable CSRF for specific API endpoints, not views",
+      "references": [
+        "https://docs.djangoproject.com/en/stable/ref/csrf/"
+      ]
+    },
+    {
+      "id": "PY-SEC-016",
+      "name": "Insecure SSL Context",
+      "category": "transport",
+      "severity": "high",
+      "description": "SSL certificate verification disabled",
+      "pattern": "verify\\s*=\\s*False",
+      "cwe": "CWE-295",
+      "owasp": "A02:2021 - Cryptographic Failures",
+      "fix": "Always verify SSL certificates in production",
+      "references": [
+        "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"
+      ]
+    },
+    {
+      "id": "PY-SEC-017",
+      "name": "Hardcoded Database Credentials",
+      "category": "secrets",
+      "severity": "critical",
+      "description": "Database credentials hardcoded in settings",
+      "pattern": "(PASSWORD|USER|HOST)\\s*['\"]:\\s*['\"][^'\"]+['\"]",
+      "cwe": "CWE-798",
+      "owasp": "A02:2021 - Cryptographic Failures",
+      "fix": "Use environment variables for database credentials",
+      "references": [
+        "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"
+      ]
+    },
+    {
+      "id": "PY-SEC-018",
+      "name": "Unsafe Template Rendering",
+      "category": "xss",
+      "severity": "high",
+      "description": "Template rendering without autoescape",
+      "pattern": "autoescape\\s*=\\s*False",
+      "cwe": "CWE-79",
+      "owasp": "A03:2021 - Injection",
+      "fix": "Enable autoescape in templates",
+      "references": [
+        "https://owasp.org/Top10/A03_2021-Injection/"
+      ]
+    },
+    {
+      "id": "PY-SEC-019",
+      "name": "Mass Assignment Vulnerability",
+      "category": "data",
+      "severity": "medium",
+      "description": "Direct assignment from request data without filtering",
+      "pattern": "\\w+\\.__dict__\\.update\\s*\\(request\\.",
+      "cwe": "CWE-915",
+      "owasp": "A01:2021 - Broken Access Control",
+      "fix": "Explicitly define allowed fields for mass assignment",
+      "references": [
+        "https://owasp.org/Top10/A01_2021-Broken_Access_Control/"
+      ]
+    },
+    {
+      "id": "PY-SEC-020",
+      "name": "Unsafe Redirect",
+      "category": "redirect",
+      "severity": "medium",
+      "description": "Unvalidated redirect can lead to phishing",
+      "pattern": "redirect\\s*\\(request\\.(GET|POST)",
+      "cwe": "CWE-601",
+      "owasp": "A01:2021 - Broken Access Control",
+      "fix": "Validate redirect URLs against whitelist",
+      "references": [
+        "https://owasp.org/Top10/A01_2021-Broken_Access_Control/"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+# Source files
+src/
+tests/
+examples/
+
+# Config files
+tsconfig.json
+jest.config.js
+.eslintrc.json
+
+# Documentation
+*.md
+!README.md
+
+# Development
+.vscode/
+.idea/
+*.log
+
+# Testing
+coverage/
+
+# Temporary
+tmp_rovodev_*
