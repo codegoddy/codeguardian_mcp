@@ -116,16 +116,32 @@ async function buildJavaScriptSymbolTable(code: string): Promise<SymbolTable> {
     }
   }
 
-  // Extract imports
+  // Extract imports and imported names
   const importPatterns = [
-    /import\s+.*?\s+from\s+['"]([^'"]+)['"]/g,  // import ... from '...'
-    /require\s*\(\s*['"]([^'"]+)['"]\s*\)/g,    // require('...')
+    // import { name1, name2 } from 'module'
+    { pattern: /import\s*{([^}]+)}\s*from\s*['"]([^'"]+)['"]/g, type: 'named' },
+    // import name from 'module'
+    { pattern: /import\s+(\w+)\s+from\s+['"]([^'"]+)['"]/g, type: 'default' },
+    // import * as name from 'module'
+    { pattern: /import\s*\*\s*as\s+(\w+)\s+from\s+['"]([^'"]+)['"]/g, type: 'namespace' },
+    // require('module')
+    { pattern: /require\s*\(\s*['"]([^'"]+)['"]\s*\)/g, type: 'require' },
   ];
 
-  for (const pattern of importPatterns) {
+  for (const { pattern, type } of importPatterns) {
     let match;
     while ((match = pattern.exec(code)) !== null) {
-      symbolTable.imports.push(match[1]);
+      if (type === 'named') {
+        // Extract individual named imports
+        const names = match[1].split(',').map(n => n.trim().split(' as ')[0].trim());
+        symbolTable.functions.push(...names);
+        symbolTable.imports.push(match[2]);
+      } else if (type === 'default' || type === 'namespace') {
+        symbolTable.functions.push(match[1]);
+        symbolTable.imports.push(match[2]);
+      } else if (type === 'require') {
+        symbolTable.imports.push(match[1]);
+      }
     }
   }
 
@@ -136,6 +152,16 @@ async function buildJavaScriptSymbolTable(code: string): Promise<SymbolTable> {
   }
 
   logger.debug(`Found ${symbolTable.functions.length} functions, ${symbolTable.classes.length} classes, ${symbolTable.interfaces?.length || 0} interfaces`);
+
+  symbolTable.classFields = {};
+  const interfaceFieldPattern = /interface\s+(\w+)\s*{([^}]*)}/g;
+  let fieldMatch;
+  while ((fieldMatch = interfaceFieldPattern.exec(code)) !== null) {
+    const className = fieldMatch[1];
+    const body = fieldMatch[2];
+    const fieldsMatch = body.match(/(\w+):/g) || [];
+    symbolTable.classFields[className] = fieldsMatch.map(f => f.replace(':', '').trim());
+  }
 
   return symbolTable;
 }
@@ -183,7 +209,9 @@ async function buildPythonSymbolTable(code: string): Promise<SymbolTable> {
     }
     
     // Check if we're exiting a class (non-indented line)
-    if (inClass && line.length > 0 && line[0] !== ' ' && line[0] !== '\t') {
+    // Python indentation is complex, but for this heuristic:
+    // If line is not empty and starts with non-whitespace, we exited the class
+    if (inClass && line.length > 0 && !line.startsWith(' ') && !line.startsWith('\t')) {
       inClass = false;
     }
     
@@ -191,6 +219,7 @@ async function buildPythonSymbolTable(code: string): Promise<SymbolTable> {
     if (inClass && (trimmed.startsWith('def ') || trimmed.startsWith('async def '))) {
       const methodMatch = trimmed.match(/def\s+(\w+)\s*\(/);
       if (methodMatch && !symbolTable.functions.includes(methodMatch[1])) {
+        // We track methods as functions for now to allow loose matching
         symbolTable.functions.push(methodMatch[1]);
       }
     }
@@ -203,18 +232,61 @@ async function buildPythonSymbolTable(code: string): Promise<SymbolTable> {
     symbolTable.classes.push(match[1]);
   }
 
-  // Extract imports (enhanced)
-  const importPatterns = [
-    /import\s+(\w+)/g,                          // import module
-    /from\s+([\w.]+)\s+import/g,                // from module import
-    /from\s+([\w.]+)\s+import\s+([\w,\s]+)/g,  // from module import name1, name2
-  ];
+  // Extract imports and imported names (enhanced)
+  // Process line by line for imports to avoid multiline regex issues
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('from ')) {
+      const fromMatch = trimmed.match(/from\s+([\w.]+)\s+import\s+(.+)/);
+      if (fromMatch) {
+        const module = fromMatch[1];
+        if (!symbolTable.imports.includes(module)) {
+          symbolTable.imports.push(module);
+        }
+        
+        // Handle "import (a, b, c)" syntax or simple "import a, b"
+        let namesPart = fromMatch[2];
+        // Remove comments
+        namesPart = namesPart.split('#')[0];
+        // Remove parentheses if present (simple handling)
+        namesPart = namesPart.replace(/[()]/g, '');
+        
+        const names = namesPart.split(',').map(n => {
+          const parts = n.trim().split(/\s+as\s+/);
+          return parts[0].trim(); // Get original name
+        }).filter(n => n);
 
-  for (const pattern of importPatterns) {
-    let match;
-    while ((match = pattern.exec(code)) !== null) {
-      if (!symbolTable.imports.includes(match[1])) {
-        symbolTable.imports.push(match[1]);
+        const aliases = namesPart.split(',').map(n => {
+            const parts = n.trim().split(/\s+as\s+/);
+            return parts.length > 1 ? parts[1].trim() : parts[0].trim(); // Get alias or original name
+        }).filter(n => n);
+
+        symbolTable.functions.push(...aliases.filter(n => !symbolTable.functions.includes(n)));
+        
+        // Also add aliases to imports list so we know they are valid modules/objects
+        // Actually, let's add them to variables if they are objects, but we put them in functions
+        // to pass the "function exists" check.
+      }
+    } else if (trimmed.startsWith('import ')) {
+      const importMatch = trimmed.match(/import\s+(.+)/);
+      if (importMatch) {
+        let namesPart = importMatch[1];
+        namesPart = namesPart.split('#')[0];
+        
+        const parts = namesPart.split(',');
+        for (const part of parts) {
+            const importDef = part.trim();
+            if (importDef.includes(' as ')) {
+                const [module, alias] = importDef.split(' as ').map(s => s.trim());
+                if (!symbolTable.imports.includes(module)) symbolTable.imports.push(module);
+                if (!symbolTable.imports.includes(alias)) symbolTable.imports.push(alias);
+                // Also treat alias as a known symbol
+                if (!symbolTable.variables.includes(alias)) symbolTable.variables.push(alias);
+            } else {
+                if (!symbolTable.imports.includes(importDef)) symbolTable.imports.push(importDef);
+                if (!symbolTable.variables.includes(importDef)) symbolTable.variables.push(importDef);
+            }
+        }
       }
     }
   }
@@ -236,6 +308,18 @@ async function buildPythonSymbolTable(code: string): Promise<SymbolTable> {
   }
 
   logger.debug(`Found ${symbolTable.functions.length} functions, ${symbolTable.classes.length} classes`);
+
+  symbolTable.classFields = {};
+  const fieldPattern = /class\s+(\w+):.*?(?:^|\n)\s+self\.(\w+)\s*=/gs;
+  let fieldMatch;
+  while ((fieldMatch = fieldPattern.exec(code)) !== null) {
+    const className = fieldMatch[1];
+    const field = fieldMatch[2];
+    if (!symbolTable.classFields[className]) {
+      symbolTable.classFields[className] = [];
+    }
+    symbolTable.classFields[className].push(field);
+  }
 
   return symbolTable;
 }
