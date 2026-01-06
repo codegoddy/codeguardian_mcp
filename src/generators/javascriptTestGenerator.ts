@@ -2,35 +2,32 @@
  * Strip TypeScript types to make code parseable by Acorn
  */
 function stripTypeScriptTypes(code: string): string {
-  let cleaned = code;
-  
-  // Remove interface declarations (multi-line)
-  cleaned = cleaned.replace(/interface\s+\w+\s*\{[\s\S]*?\}/g, '');
-  
-  // Remove type aliases
-  cleaned = cleaned.replace(/type\s+\w+\s*=\s*[^;]+;/g, '');
-  
-  // Remove type annotations from function parameters
-  // Match : Type but not => (arrow functions)
-  cleaned = cleaned.replace(/:\s*([\w\[\]<>|&]+)(?=\s*[,)=])/g, '');
-  
-  // Remove return type annotations from functions
-  // Match ): Type { but preserve the parenthesis and brace
-  cleaned = cleaned.replace(/\)\s*:\s*[\w\[\]<>|&]+\s*(?=\{)/g, ') ');
-  
-  // Remove generic type parameters from function declarations
-  // Match <T> or <T, U> but not comparison operators
-  cleaned = cleaned.replace(/\bfunction\s+\w+\s*<[^>]+>/g, (match) => {
-    return match.replace(/<[^>]+>/, '');
-  });
-  
-  // Remove 'as' type assertions
-  cleaned = cleaned.replace(/\s+as\s+\w+/g, '');
-  
-  // Remove readonly, public, private, protected modifiers
-  cleaned = cleaned.replace(/\b(readonly|public|private|protected)\s+/g, '');
-  
-  return cleaned;
+    // This is a more robust implementation that handles more TypeScript syntax
+    // It's still not perfect, but it's a significant improvement
+
+    // Remove interface and type declarations
+    let cleaned = code.replace(/interface\s+\w+(\s*<[^>]+>)?\s*\{[\s\S]*?\}/g, '');
+    cleaned = cleaned.replace(/type\s+\w+\s*=\s*[^;]+;/g, '');
+
+    // Remove type annotations from variables, parameters, and function returns
+    cleaned = cleaned.replace(/:\s*[\w\[\]<>|&'.\s]+\s*(?=[;=),])/g, '');
+
+    // Remove return type annotations from arrow functions
+    cleaned = cleaned.replace(/\)\s*:\s*[\w\[\]<>|&'.\s]+\s*=>/g, ') =>');
+
+    // Remove generic type parameters <T>
+    cleaned = cleaned.replace(/<[^>]+>/g, '');
+
+    // Remove public, private, protected, readonly keywords
+    cleaned = cleaned.replace(/\b(public|private|protected|readonly)\b/g, '');
+
+    // Remove 'as' type assertions
+    cleaned = cleaned.replace(/\s+as\s+\w+/g, '');
+
+    // Remove 'declare' statements
+    cleaned = cleaned.replace(/\bdeclare\s+/g, '');
+
+    return cleaned;
 }
 
 /**

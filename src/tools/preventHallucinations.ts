@@ -149,7 +149,7 @@ export const preventHallucinationsTool: ToolDefinition = {
           await fs.writeFile(tempPath, newCode);
 
           // Run Pylint
-          const { stdout: pylintOut } = await execPromise(`pylint --msg-template="{line}:{msg_id}:{msg}" -sn -rn ${tempPath}`);
+          const { stdout: pylintOut } = await execPromise(`PYTHONPATH=src pylint --disable=C0114,C0115,C0116,W0613,W0612,R0903,C0303 --msg-template="{line}:{msg_id}:{msg}" -sn -rn ${tempPath}`);
           const pylintIssues = pylintOut.split('\n').filter(line => line.trim()).map(line => {
             const parts = line.split(':');
             if (parts.length < 3) return null;

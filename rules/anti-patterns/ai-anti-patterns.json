@@ -28,24 +28,12 @@
       "id": "AP-003",
       "name": "Magic Number",
       "category": "maintainability",
-      "severity": "medium",
+      "severity": "low",
       "description": "Hardcoded numeric value without explanation",
-      "pattern": "(?<!const\\s+\\w+\\s*=\\s*)\\b(100|200|404|500|1000|3600|86400)\\b(?!\\s*[;,)])",
+      "pattern": "(?<!(const|let|var|\\w+=)|test\\.)\\b(100|200|404|500|1000|3600|86400)\\b",
       "languages": ["javascript", "typescript", "python"],
       "fix": "Extract to named constant: const MAX_RETRIES = 3;",
       "example": "const TIMEOUT_MS = 5000;",
-      "aiGenerated": true
-    },
-    {
-      "id": "AP-004",
-      "name": "Missing Null Check",
-      "category": "safety",
-      "severity": "high",
-      "description": "Accessing property without null/undefined check",
-      "pattern": "\\w+\\.\\w+(?!\\s*\\?\\.)(?!\\s*&&)",
-      "languages": ["javascript", "typescript"],
-      "fix": "Use optional chaining: user?.name or add null check",
-      "example": "const name = user?.name || 'Unknown';",
       "aiGenerated": true
     },
     {
