@@ -77,7 +77,9 @@ async function buildJavaScriptSymbolTable(code: string): Promise<SymbolTable> {
   }
 
   // Extract class methods (async method() or method())
-  const classMethodPattern = /(?:async\s+)?(\w+)\s*\([^)]*\)\s*(?::\s*\w+)?\s*{/g;
+  // Modified to handle complex return types (generics like Promise<T>, unions, etc.)
+  // Matches: [async] name (...) [: returnType] {
+  const classMethodPattern = /(?:async\s+)?(\w+)\s*\([^)]*\)\s*(?::[^\{]+)?\s*{/g;
   let match;
   while ((match = classMethodPattern.exec(code)) !== null) {
     const methodName = match[1];
@@ -86,9 +88,10 @@ async function buildJavaScriptSymbolTable(code: string): Promise<SymbolTable> {
         methodName !== 'if' && 
         methodName !== 'for' && 
         methodName !== 'while' && 
-        methodName !== 'switch' &&
+        methodName !== 'switch' && 
         methodName !== 'catch' &&
         methodName !== 'function' &&
+        methodName !== 'constructor' &&
         !symbolTable.functions.includes(methodName)) {
       symbolTable.functions.push(methodName);
     }

@@ -19,7 +19,7 @@ export const PYTHON_BUILTINS = new Set([
   
   // Common exceptions
   'Exception', 'ValueError', 'TypeError', 'KeyError', 'AttributeError', 'IndexError',
-  'RuntimeError', 'NotImplementedError', 'StopIteration', 'ImportError',
+  'RuntimeError', 'NotImplementedError', 'StopIteration', 'ImportError', 'JSONDecodeError',
 ]);
 
 // Python standard library modules and their common functions
@@ -27,7 +27,7 @@ export const PYTHON_STDLIB: Record<string, string[]> = {
   'os': ['getenv', 'environ', 'path', 'getcwd', 'chdir', 'listdir', 'mkdir', 'remove', 'rename', 'system', 'walk'],
   'os.path': ['join', 'exists', 'isfile', 'isdir', 'basename', 'dirname', 'abspath', 'split'],
   'sys': ['argv', 'exit', 'path', 'version', 'platform', 'stdout', 'stderr', 'stdin'],
-  'json': ['loads', 'dumps', 'load', 'dump'],
+  'json': ['loads', 'dumps', 'load', 'dump', 'JSONDecodeError'],
   'datetime': ['datetime', 'date', 'time', 'timedelta', 'timezone', 'utcnow', 'now', 'strptime', 'strftime'],
   'time': ['sleep', 'time', 'strftime', 'strptime'],
   're': ['match', 'search', 'findall', 'sub', 'compile', 'split'],
@@ -78,6 +78,8 @@ export const PYTHON_THIRD_PARTY: Record<string, string[]> = {
   'redis': ['Redis', 'StrictRedis'],
   'celery': ['Celery', 'task', 'shared_task'],
   'pytest': ['fixture', 'mark', 'raises', 'skip', 'parametrize'],
+  'httpx': ['AsyncClient', 'Client', 'get', 'post', 'Timeout', 'Limits'],
+  'openai': ['OpenAI', 'ChatCompletion', 'Completion'],
 };
 
 // JavaScript/TypeScript built-in objects and functions

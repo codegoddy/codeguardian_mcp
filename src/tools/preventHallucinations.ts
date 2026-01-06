@@ -11,6 +11,10 @@ import { validateReferences } from '../analyzers/referenceValidator.js';
 import { checkTypeConsistency } from '../analyzers/typeChecker.js';
 import { detectContradictions } from '../analyzers/contradictionDetector.js';
 import { logger } from '../utils/logger.js';
+import { promises as fs } from 'fs';
+import { promisify } from 'util';
+import { exec } from 'child_process';
+const execPromise = promisify(exec);
 
 export const preventHallucinationsTool: ToolDefinition = {
   definition: {
@@ -96,6 +100,7 @@ export const preventHallucinationsTool: ToolDefinition = {
       const symbolTable = {
         functions: [...new Set([...existingSymbols.functions, ...newSymbols.functions])],
         classes: [...new Set([...existingSymbols.classes, ...newSymbols.classes])],
+        interfaces: [...new Set([...(existingSymbols.interfaces || []), ...(newSymbols.interfaces || [])])],
         variables: [...new Set([...existingSymbols.variables, ...newSymbols.variables])],
         imports: [...new Set([...existingSymbols.imports, ...newSymbols.imports])],
         dependencies: [...new Set([...(existingSymbols.dependencies || []), ...(newSymbols.dependencies || [])])],
@@ -127,6 +132,57 @@ export const preventHallucinationsTool: ToolDefinition = {
         ...typeIssues,
         ...contradictionIssues,
       ];
+
+      // Additional static analysis for Python
+      if (language === 'python') {
+        let tempPath;
+        try {
+          tempPath = `/tmp/halluc_${Date.now()}.py`;
+          await fs.writeFile(tempPath, newCode);
+
+          // Run Pylint
+          const { stdout: pylintOut } = await execPromise(`pylint --msg-template="{line}:{msg_id}:{msg}" -sn -rn ${tempPath}`);
+          const pylintIssues = pylintOut.split('\n').filter(line => line.trim()).map(line => {
+            const parts = line.split(':');
+            if (parts.length < 3) return null;
+            const [lineNum, id, ...msgParts] = parts;
+            const msg = msgParts.join(':').trim();
+            return {
+              type: 'pylint',
+              severity: (id.startsWith('E') ? 'critical' : 'medium') as 'critical' | 'high' | 'medium' | 'low',
+              message: msg,
+              line: parseInt(lineNum.trim()),
+              column: 0,
+              confidence: 95,
+            };
+          }).filter(issue => issue !== null);
+          allIssues.push(...pylintIssues);
+
+          // Run mypy
+          const { stdout: mypyOut } = await execPromise(`mypy --show-error-codes --no-color-output --no-error-summary ${tempPath}`);
+          const mypyIssues = mypyOut.split('\n').filter(line => line.trim()).map(line => {
+            const parts = line.split(':');
+            if (parts.length < 3) return null;
+            const [ , lineNum, ...msgParts] = parts; // file is first, ignore since temp
+            const msg = msgParts.join(':').trim();
+            return {
+              type: 'mypy',
+              severity: 'high' as 'critical' | 'high' | 'medium' | 'low',
+              message: msg,
+              line: parseInt(lineNum.trim()),
+              column: 0,
+              confidence: 90,
+            };
+          }).filter(issue => issue !== null);
+          allIssues.push(...mypyIssues);
+        } catch (err) {
+          logger.error('Static analysis check failed:', err);
+        } finally {
+          if (tempPath) {
+            await fs.unlink(tempPath).catch(() => {});
+          }
+        }
+      }
 
       // Calculate hallucination score (0-100, higher = more hallucinations)
       const hallucinationScore = calculateHallucinationScore(allIssues, symbolTable);

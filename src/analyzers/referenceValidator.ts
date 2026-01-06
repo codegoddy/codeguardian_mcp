@@ -378,7 +378,7 @@ function isBuiltInFunction(name: string, language: string): boolean {
       'reduce', 'forEach', 'find', 'findIndex', 'includes', 'indexOf',
       'keys', 'values', 'entries', 'assign', 'freeze', 'seal'
     ],
-    python: ['print', 'len', 'range', 'str', 'int', 'float', 'list', 'dict', 'set', 'tuple', 'open', 'input', 'type', 'isinstance', 'sum', 'min', 'max', 'sorted', 'reversed', 'enumerate', 'zip', 'map', 'filter'],
+    python: ['print', 'len', 'range', 'str', 'int', 'float', 'list', 'dict', 'set', 'tuple', 'open', 'input', 'type', 'isinstance', 'sum', 'min', 'max', 'sorted', 'reversed', 'enumerate', 'zip', 'map', 'filter', 'super'],
     go: ['make', 'len', 'cap', 'append', 'copy', 'delete', 'print', 'println', 'panic', 'recover'],
   };
 
@@ -392,7 +392,7 @@ function isBuiltInClass(name: string, language: string): boolean {
   const builtIns: Record<string, string[]> = {
     javascript: ['Array', 'Object', 'String', 'Number', 'Boolean', 'Date', 'RegExp', 'Error', 'Promise', 'Map', 'Set'],
     typescript: ['Array', 'Object', 'String', 'Number', 'Boolean', 'Date', 'RegExp', 'Error', 'Promise', 'Map', 'Set'],
-    python: ['list', 'dict', 'set', 'tuple', 'str', 'int', 'float', 'bool', 'Exception', 'ValueError', 'TypeError'],
+    python: ['list', 'dict', 'set', 'tuple', 'str', 'int', 'float', 'bool', 'Exception', 'ValueError', 'TypeError', 'JSONDecodeError'],
     go: [],
   };
 
@@ -406,7 +406,7 @@ function isBuiltInVariable(name: string, language: string): boolean {
   const builtIns: Record<string, string[]> = {
     javascript: ['window', 'document', 'console', 'process', 'global', 'undefined', 'null', 'NaN', 'Infinity'],
     typescript: ['window', 'document', 'console', 'process', 'global', 'undefined', 'null', 'NaN', 'Infinity'],
-    python: ['True', 'False', 'None', '__name__', '__file__', '__doc__'],
+    python: ['True', 'False', 'None', '__name__', '__file__', '__doc__', 'self', 'cls'],
     go: ['nil', 'true', 'false'],
   };
 
