@@ -3,7 +3,6 @@ import { preventHallucinationsTool } from '../../src/tools/preventHallucinations
 import { describe, expect, test } from '@jest/globals';
 
 const PYTHON_CODE_V2 = `
-import logging
 import json
 import httpx
 from app.core.logging_config import get_logger

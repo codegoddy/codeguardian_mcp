@@ -10,6 +10,7 @@ import { buildSymbolTable } from '../analyzers/symbolTable.js';
 import { validateReferences } from '../analyzers/referenceValidator.js';
 import { checkTypeConsistency } from '../analyzers/typeChecker.js';
 import { detectContradictions } from '../analyzers/contradictionDetector.js';
+import { validateImports } from '../analyzers/importValidator.js';
 import { logger } from '../utils/logger.js';
 import { promises as fs } from 'fs';
 import { promisify } from 'util';
@@ -114,6 +115,12 @@ export const preventHallucinationsTool: ToolDefinition = {
         ? await validateReferences(newCode, symbolTable, language)
         : [];
 
+      // Step 2.5: Validate imports (unused import detection)
+      logger.debug('Validating imports...');
+      const importIssues = opts.checkImportConsistency
+        ? await validateImports(newCode, language)
+        : [];
+
       // Step 3: Check type consistency
       logger.debug('Checking type consistency...');
       const typeIssues = opts.checkTypeConsistency
@@ -129,6 +136,7 @@ export const preventHallucinationsTool: ToolDefinition = {
       // Combine all issues
       const allIssues = [
         ...referenceIssues,
+        ...importIssues,
         ...typeIssues,
         ...contradictionIssues,
       ];

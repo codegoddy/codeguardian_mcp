@@ -53,5 +53,20 @@ After further testing with complex scenarios, additional issues were identified 
 -   **Issue**: `httpx` and other common libraries were missing.
 -   **Fix**: Added `httpx`, `openai` to `PYTHON_THIRD_PARTY` and `JSONDecodeError` to `PYTHON_BUILTINS` in `standardLibrary.ts`.
 
+## Feature Addition: Unused Import Detection
+
+To further reduce hallucinations (where AI imports libraries it doesn't use), a new analyzer was added.
+
+### Implementation
+-   **`src/analyzers/importValidator.ts`**: A new analyzer that extracts imports and checks for their usage in the code body (excluding comments).
+-   **Logic**: Uses a robust regex `(?:^|\W)symbol(?:$|\W)` to detect symbol usage while respecting word boundaries. This avoids false positives where a symbol name is a substring of another word (e.g., `os` vs `cost`).
+-   **Integration**: Enabled via `checkImportConsistency` option in `preventHallucinationsTool`.
+
+### Verification
+-   **Test Case**: `tests/integration/test-unused-imports.js` verified correct detection for:
+    -   Python: `import json` (used), `import os` (unused).
+    -   TypeScript: `import { readFileSync }` (used), `import { join }` (unused).
+-   **Result**: 100% accuracy in test cases.
+
 ## Final Status
 ✅ **Fixed & robust**. Validated against both Python and TypeScript reproduction cases (`tests/integration/hallucinationV2.test.ts`).
