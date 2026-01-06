@@ -115,13 +115,13 @@ export async function validateReferences(
         // If the object looks like a standard library module that we missed, or a variable we missed.
       } else {
         // Standalone function call
-        // Check if function exists in symbol table
-        if (!symbolTable.functions.includes(call.name)) {
+        // Check if function exists in symbol table OR if it's a class instantiation
+        if (!symbolTable.functions.includes(call.name) && !symbolTable.classes.includes(call.name)) {
           // Check if it's a standard library function or built-in
           if (!isStandardLibrary(call.name, language) && !isBuiltInFunction(call.name, language)) {
             // Check if it might be from an imported module
             const module = getStandardLibraryModule(call.name, language);
-            if (!module) {
+            if (!module && !isBuiltInClass(call.name, language)) {
               issues.push({
                 type: 'nonExistentFunction',
                 severity: 'high',
@@ -358,6 +358,11 @@ function extractClassReferences(code: string, language: string): Array<{
   column: number;
   code: string;
 }> {
+  // This logic is only for JS/TS. Python class instantiation looks like a function call.
+  if (language !== 'javascript' && language !== 'typescript') {
+    return [];
+  }
+
   const refs: Array<{ name: string; line: number; column: number; code: string }> = [];
   const lines = code.split('\n');
 
@@ -466,7 +471,7 @@ function isBuiltInClass(name: string, language: string): boolean {
   const builtIns: Record<string, string[]> = {
     javascript: ['Array', 'Object', 'String', 'Number', 'Boolean', 'Date', 'RegExp', 'Error', 'Promise', 'Map', 'Set'],
     typescript: ['Array', 'Object', 'String', 'Number', 'Boolean', 'Date', 'RegExp', 'Error', 'Promise', 'Map', 'Set'],
-    python: ['list', 'dict', 'set', 'tuple', 'str', 'int', 'float', 'bool', 'Exception', 'ValueError', 'TypeError', 'JSONDecodeError'],
+    python: ['list', 'dict', 'set', 'tuple', 'str', 'int', 'float', 'bool', 'Exception', 'ValueError', 'TypeError', 'JSONDecodeError', 'TimeoutError'],
     go: [],
   };
 

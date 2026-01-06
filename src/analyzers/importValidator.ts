@@ -168,6 +168,7 @@ function removeComments(code: string, language: string): string {
   if (language === 'python') {
     return code.replace(/#.*/g, '');
   } else {
-    return code.replace(/\/\/.*/g, '').replace(/\/[\s\S]*?\//g, '');
+    // This regex handles both single-line (//) and multi-line (/* ... */) comments
+    return code.replace(/\/\/.*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
   }
 }

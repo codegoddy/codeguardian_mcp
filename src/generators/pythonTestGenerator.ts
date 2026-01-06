@@ -331,7 +331,8 @@ export function formatTestFile(
   lines.push('');
 
   // Import the module being tested
-  const moduleName = sourceFileName.replace(/\.py$/, '');
+  // Convert file path to a Python module path
+  const moduleName = sourceFileName.replace(/\.py$/, '').replace(/\//g, '.');
   lines.push(`from ${moduleName} import *`);
   lines.push('');
 
