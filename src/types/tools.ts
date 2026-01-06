@@ -22,6 +22,7 @@ export interface SymbolTable {
   variables: string[];
   imports: string[];
   dependencies?: string[];
+  classFields?: Record<string, string[]>;
 }
 
 export interface Issue {

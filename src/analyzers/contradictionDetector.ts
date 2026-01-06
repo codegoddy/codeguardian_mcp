@@ -71,6 +71,22 @@ export async function detectContradictions(
       }
     }
 
+    // Check for tautology conditions
+    for (const cond of newPatterns.conditions) {
+      if (isTautology(cond.condition, language)) {
+        issues.push({
+          type: 'tautologyCondition',
+          severity: 'medium',
+          message: 'Condition is always true, potential logic error or AI hallucination',
+          line: cond.line,
+          column: 0,
+          code: cond.code,
+          suggestion: 'Verify if this always-true condition is intentional',
+          confidence: 90,
+        });
+      }
+    }
+
     logger.debug(`Found ${issues.length} logic contradictions`);
   } catch (error) {
     logger.error('Error detecting contradictions:', error);
@@ -128,5 +144,35 @@ function extractLogicPatterns(code: string, language: string) {
     }
   });
 
+  // Extract conditions
+  let conditionPattern;
+  if (language === 'python') {
+    conditionPattern = /if\s+([^:]+):/g;
+  } else {
+    conditionPattern = /if\s*\(([^)]+)\)/g;
+  }
+  let condMatch;
+  lines.forEach((line, index) => {
+    while ((condMatch = conditionPattern.exec(line)) !== null) {
+      patterns.conditions.push({
+        condition: condMatch[1].trim(),
+        line: index + 1,
+        code: line.trim(),
+      });
+    }
+  });
+
   return patterns;
+}
+
+/**
+ * Check if a condition is a tautology (always true)
+ */
+function isTautology(condition: string, language: string): boolean {
+  const lower = condition.toLowerCase();
+  const tautologies = [
+    'true', '1 == 1', '1 === 1', 'true == true', 'true === true',
+    '0 != 1', '0 !== 1', 'false != true', 'false !== true'
+  ];
+  return tautologies.some(t => lower.includes(t));
 }

@@ -216,7 +216,25 @@ function extractFunctionCalls(code: string, language: string): Array<{
   code: string;
 }> {
   const calls: Array<{ name: string; object?: string; line: number; column: number; code: string }> = [];
-  const lines = code.split('\n');
+  
+  // Remove docstrings and multi-line strings before processing
+  let cleanedCode = code;
+  if (language === 'python') {
+    // Remove triple-quoted strings (docstrings)
+    cleanedCode = cleanedCode.replace(/"""[\s\S]*?"""/g, '');
+    cleanedCode = cleanedCode.replace(/'''[\s\S]*?'''/g, '');
+  }
+  if (language === 'javascript' || language === 'typescript') {
+    // Remove multi-line comments
+    cleanedCode = cleanedCode.replace(/\/\*[\s\S]*?\*\//g, '');
+    // Remove template literals (backticks)
+    cleanedCode = cleanedCode.replace(/`[\s\S]*?`/g, '');
+  }
+  
+  const lines = cleanedCode.split('\n');
+  
+  // Extract all function parameters to avoid false positives
+  const functionParameters = extractFunctionParameters(cleanedCode, language);
 
   lines.forEach((line, index) => {
     const trimmedLine = line.trim();
@@ -229,8 +247,11 @@ function extractFunctionCalls(code: string, language: string): Array<{
       return;
     }
     
-    // Remove inline comments before processing
-    const codeWithoutComments = line.split('//')[0].split('#')[0];
+    // Remove inline comments and strings before processing
+    let codeWithoutComments = line.split('//')[0].split('#')[0];
+    // Remove string literals to avoid false positives
+    codeWithoutComments = codeWithoutComments.replace(/"[^"]*"/g, '""');
+    codeWithoutComments = codeWithoutComments.replace(/'[^']*'/g, "''");
     
     // Pattern 1: Extract method calls: object.method(...) or obj.nested.method(...)
     // Captures (object).(method)(
@@ -255,13 +276,14 @@ function extractFunctionCalls(code: string, language: string): Array<{
     const standaloneFuncPattern = /(?:^|[^\w.])(\w+)\s*\(/g;
     while ((match = standaloneFuncPattern.exec(codeWithoutComments)) !== null) {
       const funcName = match[1];
-      // Filter out keywords, function definitions, and class definitions
+      // Filter out keywords, function definitions, class definitions, and function parameters
       if (!isKeyword(funcName, language) && 
           !trimmedLine.startsWith('function') &&
           !trimmedLine.startsWith('def') &&
           !trimmedLine.startsWith('async def') &&
           !trimmedLine.startsWith('class') &&
-          !codeWithoutComments.includes('function ' + funcName)) {
+          !codeWithoutComments.includes('function ' + funcName) &&
+          !functionParameters.has(funcName)) {
         calls.push({
           name: funcName,
           line: index + 1,
@@ -273,6 +295,58 @@ function extractFunctionCalls(code: string, language: string): Array<{
   });
 
   return calls;
+}
+
+/**
+ * Extract all function parameters from code to avoid false positives
+ */
+function extractFunctionParameters(code: string, language: string): Set<string> {
+  const parameters = new Set<string>();
+  
+  if (language === 'python') {
+    // Match: def function_name(param1, param2, param3: Type, ...)
+    const defPattern = /def\s+\w+\s*\(([^)]*)\)/g;
+    let match;
+    while ((match = defPattern.exec(code)) !== null) {
+      const paramsStr = match[1];
+      // Split by comma and extract parameter names
+      const params = paramsStr.split(',').map(p => {
+        // Remove type hints, default values, and whitespace
+        const paramName = p.trim().split(':')[0].split('=')[0].trim();
+        // Remove * and ** for *args and **kwargs
+        return paramName.replace(/^\*+/, '');
+      }).filter(p => p && p !== 'self' && p !== 'cls');
+      params.forEach(p => parameters.add(p));
+    }
+  }
+  
+  if (language === 'javascript' || language === 'typescript') {
+    // Match: function name(param1, param2) or (param1, param2) => or async (param1, param2) =>
+    const funcPatterns = [
+      /function\s+\w+\s*\(([^)]*)\)/g,
+      /(?:async\s+)?\(([^)]*)\)\s*=>/g,
+      /(?:async\s+)?(\w+)\s*=>/g, // Single param arrow function
+    ];
+    
+    for (const pattern of funcPatterns) {
+      let match;
+      while ((match = pattern.exec(code)) !== null) {
+        const paramsStr = match[1];
+        if (paramsStr) {
+          // Split by comma and extract parameter names
+          const params = paramsStr.split(',').map(p => {
+            // Remove type annotations, default values, and whitespace
+            const paramName = p.trim().split(':')[0].split('=')[0].trim();
+            // Remove destructuring and rest operators
+            return paramName.replace(/^\.\.\.|[{}\[\]]/g, '').trim();
+          }).filter(p => p && !p.includes(' '));
+          params.forEach(p => parameters.add(p));
+        }
+      }
+    }
+  }
+  
+  return parameters;
 }
 
 /**
