@@ -46,22 +46,26 @@ export class TreeSitterParser {
   }
 
   private initializeParsers(): void {
-    // TypeScript parser
-    const tsParser = new Parser();
-    tsParser.setLanguage(TypeScript.typescript);
-    this.parsers.set('typescript', tsParser);
+    try {
+      // TypeScript parser
+      const tsParser = new Parser();
+      tsParser.setLanguage(TypeScript);
+      this.parsers.set('typescript', tsParser);
 
-    // JavaScript parser
-    const jsParser = new Parser();
-    jsParser.setLanguage(JavaScript);
-    this.parsers.set('javascript', jsParser);
+      // JavaScript parser
+      const jsParser = new Parser();
+      jsParser.setLanguage(JavaScript);
+      this.parsers.set('javascript', jsParser);
 
-    // Python parser
-    const pyParser = new Parser();
-    pyParser.setLanguage(Python);
-    this.parsers.set('python', pyParser);
+      // Python parser
+      const pyParser = new Parser();
+      pyParser.setLanguage(Python);
+      this.parsers.set('python', pyParser);
 
-    logger.debug('Tree-sitter parsers initialized');
+      logger.debug('Tree-sitter parsers initialized');
+    } catch (e) {
+      logger.error('Failed to initialize tree-sitter parsers', e);
+    }
   }
 
   /**

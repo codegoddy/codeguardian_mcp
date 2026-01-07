@@ -9,6 +9,21 @@ import { SymbolTable, Issue } from '../types/tools.js';
 import { logger } from '../utils/logger.js';
 import { isStandardLibrary, getStandardLibraryModule } from './standardLibrary.js';
 
+const PY_DOCSTRING_TRIPLE_DOUBLE_QUOTES_REGEX = /"""[\s\S]*?"""/g;
+const PY_DOCSTRING_TRIPLE_SINGLE_QUOTES_REGEX = /'''[\s\S]*?'''/g;
+const JS_TS_BLOCK_COMMENT_REGEX = /\/\*[\s\S]*?\*\//g;
+const JS_TS_TEMPLATE_LITERAL_REGEX = /`[\s\S]*?`/g;
+const METHOD_CALL_REGEX = /(\w+)\.(\w+)\s*\(/g;
+const STANDALONE_FUNC_REGEX = /(?:^|[^\w.])(\w+)\s*\(/g;
+const PY_DEF_REGEX = /def\s+\w+\s*\(([^)]*)\)/g;
+const JS_TS_FUNC_PATTERNS = [
+  /function\s+\w+\s*\(([^)]*)\)/g,
+  /(?:async\s+)?\(([^)]*)\)\s*=>/g,
+  /(?:async\s+)?(\w+)\s*=>/g,
+];
+const NEW_PATTERN_REGEX = /new\s+(\w+)\s*\(/g;
+const ATTRIBUTE_ACCESS_REGEX = /(\w+)\.(\w+)(?!\s*\()/g;
+
 /**
  * Validate all references in new code against symbol table
  */
@@ -221,14 +236,14 @@ function extractFunctionCalls(code: string, language: string): Array<{
   let cleanedCode = code;
   if (language === 'python') {
     // Remove triple-quoted strings (docstrings)
-    cleanedCode = cleanedCode.replace(/"""[\s\S]*?"""/g, '');
-    cleanedCode = cleanedCode.replace(/'''[\s\S]*?'''/g, '');
+    cleanedCode = cleanedCode.replace(PY_DOCSTRING_TRIPLE_DOUBLE_QUOTES_REGEX, '');
+    cleanedCode = cleanedCode.replace(PY_DOCSTRING_TRIPLE_SINGLE_QUOTES_REGEX, '');
   }
   if (language === 'javascript' || language === 'typescript') {
     // Remove multi-line comments
-    cleanedCode = cleanedCode.replace(/\/\*[\s\S]*?\*\//g, '');
+    cleanedCode = cleanedCode.replace(JS_TS_BLOCK_COMMENT_REGEX, '');
     // Remove template literals (backticks)
-    cleanedCode = cleanedCode.replace(/`[\s\S]*?`/g, '');
+    cleanedCode = cleanedCode.replace(JS_TS_TEMPLATE_LITERAL_REGEX, '');
   }
   
   const lines = cleanedCode.split('\n');
@@ -255,9 +270,8 @@ function extractFunctionCalls(code: string, language: string): Array<{
     
     // Pattern 1: Extract method calls: object.method(...) or obj.nested.method(...)
     // Captures (object).(method)(
-    const methodCallPattern = /(\w+)\.(\w+)\s*\(/g;
     let match;
-    while ((match = methodCallPattern.exec(codeWithoutComments)) !== null) {
+    while ((match = METHOD_CALL_REGEX.exec(codeWithoutComments)) !== null) {
       const objectName = match[1];
       const methodName = match[2];
       if (!isKeyword(methodName, language)) {
@@ -273,8 +287,7 @@ function extractFunctionCalls(code: string, language: string): Array<{
 
     // Pattern 2: Extract standalone function calls: functionName(...)
     // Match function calls that are NOT preceded by a dot
-    const standaloneFuncPattern = /(?:^|[^\w.])(\w+)\s*\(/g;
-    while ((match = standaloneFuncPattern.exec(codeWithoutComments)) !== null) {
+    while ((match = STANDALONE_FUNC_REGEX.exec(codeWithoutComments)) !== null) {
       const funcName = match[1];
       // Filter out keywords, function definitions, class definitions, and function parameters
       if (!isKeyword(funcName, language) && 
@@ -305,9 +318,8 @@ function extractFunctionParameters(code: string, language: string): Set<string> 
   
   if (language === 'python') {
     // Match: def function_name(param1, param2, param3: Type, ...)
-    const defPattern = /def\s+\w+\s*\(([^)]*)\)/g;
     let match;
-    while ((match = defPattern.exec(code)) !== null) {
+    while ((match = PY_DEF_REGEX.exec(code)) !== null) {
       const paramsStr = match[1];
       // Split by comma and extract parameter names
       const params = paramsStr.split(',').map(p => {
@@ -322,13 +334,7 @@ function extractFunctionParameters(code: string, language: string): Set<string> 
   
   if (language === 'javascript' || language === 'typescript') {
     // Match: function name(param1, param2) or (param1, param2) => or async (param1, param2) =>
-    const funcPatterns = [
-      /function\s+\w+\s*\(([^)]*)\)/g,
-      /(?:async\s+)?\(([^)]*)\)\s*=>/g,
-      /(?:async\s+)?(\w+)\s*=>/g, // Single param arrow function
-    ];
-    
-    for (const pattern of funcPatterns) {
+    for (const pattern of JS_TS_FUNC_PATTERNS) {
       let match;
       while ((match = pattern.exec(code)) !== null) {
         const paramsStr = match[1];
@@ -367,8 +373,6 @@ function extractClassReferences(code: string, language: string): Array<{
   const lines = code.split('\n');
 
   // Pattern for class instantiation: new ClassName(...)
-  const newPattern = /new\s+(\w+)\s*\(/g;
-
   lines.forEach((line, index) => {
     const trimmedLine = line.trim();
     
@@ -384,7 +388,7 @@ function extractClassReferences(code: string, language: string): Array<{
     const codeWithoutComments = line.split('//')[0];
     
     let match;
-    while ((match = newPattern.exec(codeWithoutComments)) !== null) {
+    while ((match = NEW_PATTERN_REGEX.exec(codeWithoutComments)) !== null) {
       refs.push({
         name: match[1],
         line: index + 1,
@@ -532,14 +536,13 @@ function extractAttributeAccesses(code: string, language: string): Array<{
 }> {
   const accesses: Array<{ base: string; attribute: string; line: number; column: number; code: string }> = [];
   const lines = code.split('\n');
-  const pattern = /(\w+)\.(\w+)(?!\s*\()/g; // base.attribute not followed by (
 
   lines.forEach((line, index) => {
     const trimmedLine = line.trim();
     if (trimmedLine.startsWith('//') || trimmedLine.startsWith('#')) return;
     const codeWithoutComments = line.split('//')[0];
     let match;
-    while ((match = pattern.exec(codeWithoutComments)) !== null) {
+    while ((match = ATTRIBUTE_ACCESS_REGEX.exec(codeWithoutComments)) !== null) {
       accesses.push({
         base: match[1],
         attribute: match[2],

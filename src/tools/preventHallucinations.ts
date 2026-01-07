@@ -58,6 +58,7 @@ export const preventHallucinationsTool: ToolDefinition = {
             checkLogicContradictions: { type: 'boolean' },
             checkParameterMismatches: { type: 'boolean' },
             checkReturnValueConsistency: { type: 'boolean' },
+            runExternalTools: { type: 'boolean' },
           },
         },
       },
@@ -85,6 +86,7 @@ export const preventHallucinationsTool: ToolDefinition = {
       checkLogicContradictions: true,
       checkParameterMismatches: true,
       checkReturnValueConsistency: true,
+      runExternalTools: false, // NEW: default to false
       ...options,
     };
 
@@ -142,7 +144,7 @@ export const preventHallucinationsTool: ToolDefinition = {
       ];
 
       // Additional static analysis for Python
-      if (language === 'python') {
+      if (language === 'python' && opts.runExternalTools) {
         let tempPath;
         try {
           tempPath = `/tmp/halluc_${Date.now()}.py`;
