@@ -48,30 +48,44 @@ export async function buildSymbolTable(
 /**
  * Build symbol table for JavaScript/TypeScript
  */
+const FUNCTION_PATTERNS = [
+  /function\s+(\w+)\s*\(/g,                    // function name()
+  /const\s+(\w+)\s*=\s*\([^)]*\)\s*=>/g,      // const name = () =>
+  /const\s+(\w+)\s*=\s*function/g,            // const name = function
+  /(\w+)\s*:\s*function\s*\(/g,               // name: function()
+];
+
+const CLASS_METHOD_PATTERN = /(?:async\s+)?(\w+)\s*\([^)]*\)\s*(?::[^\{]+)?\s*{/g;
+const CLASS_PATTERN = /class\s+(\w+)/g;
+const INTERFACE_PATTERN = /interface\s+(\w+)/g;
+const TYPE_ALIAS_PATTERN = /type\s+(\w+)\s*=/g;
+const IMPORT_PATTERNS = [
+  // import { name1, name2 } from 'module'
+  { pattern: /import\s*{([^}]+)}\s*from\s*['"]([^'"]+)['"]/g, type: 'named' },
+  // import name from 'module'
+  { pattern: /import\s+(\w+)\s+from\s+['"]([^'"]+)['"]/g, type: 'default' },
+  // import * as name from 'module'
+  { pattern: /import\s*\*\s*as\s+(\w+)\s+from\s+['"]([^'"]+)['"]/g, type: 'namespace' },
+  // require('module')
+  { pattern: /require\s*\(\s*['"]([^'"]+)['"]\s*\)/g, type: 'require' },
+];
+const VAR_PATTERN = /(?:const|let|var)\s+(\w+)/g;
+const INTERFACE_FIELD_PATTERN = /interface\s+(\w+)\s*{([^}]*)}/g;
+
+
 async function buildJavaScriptSymbolTable(code: string): Promise<SymbolTable> {
-  const symbolTable: SymbolTable = {
-    functions: [],
-    classes: [],
-    interfaces: [],
-    variables: [],
-    imports: [],
-    dependencies: [],
-  };
+  const functions = new Set<string>();
+  const classes = new Set<string>();
+  const interfaces = new Set<string>();
+  const variables = new Set<string>();
+  const imports = new Set<string>();
 
-  // Extract functions (various patterns)
-  const functionPatterns = [
-    /function\s+(\w+)\s*\(/g,                    // function name()
-    /const\s+(\w+)\s*=\s*\([^)]*\)\s*=>/g,      // const name = () =>
-    /const\s+(\w+)\s*=\s*function/g,            // const name = function
-    /(\w+)\s*:\s*function\s*\(/g,               // name: function()
-  ];
-
-  for (const pattern of functionPatterns) {
+  for (const pattern of FUNCTION_PATTERNS) {
     let match;
     while ((match = pattern.exec(code)) !== null) {
       const funcName = match[1];
-      if (funcName && !symbolTable.functions.includes(funcName)) {
-        symbolTable.functions.push(funcName);
+      if (funcName) {
+        functions.add(funcName);
       }
     }
   }
@@ -79,9 +93,8 @@ async function buildJavaScriptSymbolTable(code: string): Promise<SymbolTable> {
   // Extract class methods (async method() or method())
   // Modified to handle complex return types (generics like Promise<T>, unions, etc.)
   // Matches: [async] name (...) [: returnType] {
-  const classMethodPattern = /(?:async\s+)?(\w+)\s*\([^)]*\)\s*(?::[^\{]+)?\s*{/g;
   let match;
-  while ((match = classMethodPattern.exec(code)) !== null) {
+  while ((match = CLASS_METHOD_PATTERN.exec(code)) !== null) {
     const methodName = match[1];
     // Filter out keywords and constructors
     if (methodName && 
@@ -91,109 +104,91 @@ async function buildJavaScriptSymbolTable(code: string): Promise<SymbolTable> {
         methodName !== 'switch' && 
         methodName !== 'catch' &&
         methodName !== 'function' &&
-        methodName !== 'constructor' &&
-        !symbolTable.functions.includes(methodName)) {
-      symbolTable.functions.push(methodName);
+        methodName !== 'constructor') {
+      functions.add(methodName);
     }
   }
 
   // Extract classes
-  const classPattern = /class\s+(\w+)/g;
-  while ((match = classPattern.exec(code)) !== null) {
-    symbolTable.classes.push(match[1]);
+  while ((match = CLASS_PATTERN.exec(code)) !== null) {
+    classes.add(match[1]);
   }
 
   // Extract TypeScript interfaces
-  const interfacePattern = /interface\s+(\w+)/g;
-  while ((match = interfacePattern.exec(code)) !== null) {
-    if (symbolTable.interfaces) {
-      symbolTable.interfaces.push(match[1]);
-    }
+  while ((match = INTERFACE_PATTERN.exec(code)) !== null) {
+    interfaces.add(match[1]);
   }
 
   // Extract TypeScript type aliases
-  const typeAliasPattern = /type\s+(\w+)\s*=/g;
-  while ((match = typeAliasPattern.exec(code)) !== null) {
-    if (symbolTable.interfaces) {
-      symbolTable.interfaces.push(match[1]);
-    }
+  while ((match = TYPE_ALIAS_PATTERN.exec(code)) !== null) {
+    interfaces.add(match[1]);
   }
 
   // Extract imports and imported names
-  const importPatterns = [
-    // import { name1, name2 } from 'module'
-    { pattern: /import\s*{([^}]+)}\s*from\s*['"]([^'"]+)['"]/g, type: 'named' },
-    // import name from 'module'
-    { pattern: /import\s+(\w+)\s+from\s+['"]([^'"]+)['"]/g, type: 'default' },
-    // import * as name from 'module'
-    { pattern: /import\s*\*\s*as\s+(\w+)\s+from\s+['"]([^'"]+)['"]/g, type: 'namespace' },
-    // require('module')
-    { pattern: /require\s*\(\s*['"]([^'"]+)['"]\s*\)/g, type: 'require' },
-  ];
-
-  for (const { pattern, type } of importPatterns) {
+  for (const { pattern, type } of IMPORT_PATTERNS) {
     let match;
     while ((match = pattern.exec(code)) !== null) {
       if (type === 'named') {
         // Extract individual named imports
         const names = match[1].split(',').map(n => n.trim().split(' as ')[0].trim());
-        symbolTable.functions.push(...names);
-        symbolTable.imports.push(match[2]);
+        names.forEach(n => functions.add(n));
+        imports.add(match[2]);
       } else if (type === 'default' || type === 'namespace') {
-        symbolTable.functions.push(match[1]);
-        symbolTable.imports.push(match[2]);
+        functions.add(match[1]);
+        imports.add(match[2]);
       } else if (type === 'require') {
-        symbolTable.imports.push(match[1]);
+        imports.add(match[1]);
       }
     }
   }
 
   // Extract const/let/var declarations
-  const varPattern = /(?:const|let|var)\s+(\w+)/g;
-  while ((match = varPattern.exec(code)) !== null) {
-    symbolTable.variables.push(match[1]);
+  while ((match = VAR_PATTERN.exec(code)) !== null) {
+    variables.add(match[1]);
   }
 
-  logger.debug(`Found ${symbolTable.functions.length} functions, ${symbolTable.classes.length} classes, ${symbolTable.interfaces?.length || 0} interfaces`);
+  logger.debug(`Found ${functions.size} functions, ${classes.size} classes, ${interfaces.size} interfaces`);
 
-  symbolTable.classFields = {};
-  const interfaceFieldPattern = /interface\s+(\w+)\s*{([^}]*)}/g;
+  const classFields: Record<string, string[]> = {};
   let fieldMatch;
-  while ((fieldMatch = interfaceFieldPattern.exec(code)) !== null) {
+  while ((fieldMatch = INTERFACE_FIELD_PATTERN.exec(code)) !== null) {
     const className = fieldMatch[1];
     const body = fieldMatch[2];
     const fieldsMatch = body.match(/(\w+):/g) || [];
-    symbolTable.classFields[className] = fieldsMatch.map(f => f.replace(':', '').trim());
+    classFields[className] = fieldsMatch.map(f => f.replace(':', '').trim());
   }
 
-  return symbolTable;
+  return {
+    functions: Array.from(functions),
+    classes: Array.from(classes),
+    interfaces: Array.from(interfaces),
+    variables: Array.from(variables),
+    imports: Array.from(imports),
+    dependencies: [],
+    classFields,
+  };
 }
 
 /**
  * Build symbol table for Python - ENHANCED
  */
 async function buildPythonSymbolTable(code: string): Promise<SymbolTable> {
-  const symbolTable: SymbolTable = {
-    functions: [],
-    classes: [],
-    variables: [],
-    imports: [],
-    dependencies: [],
-  };
+  const functions = new Set<string>();
+  const classes = new Set<string>();
+  const variables = new Set<string>();
+  const imports = new Set<string>();
 
   // Extract functions (including async and decorated)
   const functionPatterns = [
-    /def\s+(\w+)\s*\(/g,                        // def name()
-    /async\s+def\s+(\w+)\s*\(/g,                // async def name()
+    /^\s*def\s+(\w+)\s*\(/gm,                        // def name()
+    /^\s*async\s+def\s+(\w+)\s*\(/gm,                // async def name()
   ];
 
   for (const pattern of functionPatterns) {
     let match;
     while ((match = pattern.exec(code)) !== null) {
       const funcName = match[1];
-      if (!symbolTable.functions.includes(funcName)) {
-        symbolTable.functions.push(funcName);
-      }
+      functions.add(funcName);
     }
   }
 
@@ -221,9 +216,9 @@ async function buildPythonSymbolTable(code: string): Promise<SymbolTable> {
     // Extract methods inside class
     if (inClass && (trimmed.startsWith('def ') || trimmed.startsWith('async def '))) {
       const methodMatch = trimmed.match(/def\s+(\w+)\s*\(/);
-      if (methodMatch && !symbolTable.functions.includes(methodMatch[1])) {
+      if (methodMatch) {
         // We track methods as functions for now to allow loose matching
-        symbolTable.functions.push(methodMatch[1]);
+        functions.add(methodMatch[1]);
       }
     }
   }
@@ -232,7 +227,7 @@ async function buildPythonSymbolTable(code: string): Promise<SymbolTable> {
   const classPattern = /class\s+(\w+)/g;
   let match;
   while ((match = classPattern.exec(code)) !== null) {
-    symbolTable.classes.push(match[1]);
+    classes.add(match[1]);
   }
 
   // Extract imports and imported names (enhanced)
@@ -243,9 +238,7 @@ async function buildPythonSymbolTable(code: string): Promise<SymbolTable> {
       const fromMatch = trimmed.match(/from\s+([\w.]+)\s+import\s+(.+)/);
       if (fromMatch) {
         const module = fromMatch[1];
-        if (!symbolTable.imports.includes(module)) {
-          symbolTable.imports.push(module);
-        }
+        imports.add(module);
         
         // Handle "import (a, b, c)" syntax or simple "import a, b"
         let namesPart = fromMatch[2];
@@ -254,17 +247,12 @@ async function buildPythonSymbolTable(code: string): Promise<SymbolTable> {
         // Remove parentheses if present (simple handling)
         namesPart = namesPart.replace(/[()]/g, '');
         
-        const names = namesPart.split(',').map(n => {
-          const parts = n.trim().split(/\s+as\s+/);
-          return parts[0].trim(); // Get original name
-        }).filter(n => n);
-
         const aliases = namesPart.split(',').map(n => {
             const parts = n.trim().split(/\s+as\s+/);
             return parts.length > 1 ? parts[1].trim() : parts[0].trim(); // Get alias or original name
         }).filter(n => n);
 
-        symbolTable.functions.push(...aliases.filter(n => !symbolTable.functions.includes(n)));
+        aliases.forEach(n => functions.add(n));
         
         // Also add aliases to imports list so we know they are valid modules/objects
         // Actually, let's add them to variables if they are objects, but we put them in functions
@@ -281,13 +269,13 @@ async function buildPythonSymbolTable(code: string): Promise<SymbolTable> {
             const importDef = part.trim();
             if (importDef.includes(' as ')) {
                 const [module, alias] = importDef.split(' as ').map(s => s.trim());
-                if (!symbolTable.imports.includes(module)) symbolTable.imports.push(module);
-                if (!symbolTable.imports.includes(alias)) symbolTable.imports.push(alias);
+                imports.add(module);
+                imports.add(alias);
                 // Also treat alias as a known symbol
-                if (!symbolTable.variables.includes(alias)) symbolTable.variables.push(alias);
+                variables.add(alias);
             } else {
-                if (!symbolTable.imports.includes(importDef)) symbolTable.imports.push(importDef);
-                if (!symbolTable.variables.includes(importDef)) symbolTable.variables.push(importDef);
+                imports.add(importDef);
+                variables.add(importDef);
             }
         }
       }
@@ -297,34 +285,37 @@ async function buildPythonSymbolTable(code: string): Promise<SymbolTable> {
   // Extract variable assignments (enhanced)
   const varPattern = /^(\w+)\s*=/gm;
   while ((match = varPattern.exec(code)) !== null) {
-    if (!symbolTable.variables.includes(match[1])) {
-      symbolTable.variables.push(match[1]);
-    }
+    variables.add(match[1]);
   }
 
   // Extract decorated functions (Django/Flask routes)
   const decoratedFuncPattern = /@\w+.*?\n\s*def\s+(\w+)\s*\(/g;
   while ((match = decoratedFuncPattern.exec(code)) !== null) {
-    if (!symbolTable.functions.includes(match[1])) {
-      symbolTable.functions.push(match[1]);
-    }
+    functions.add(match[1]);
   }
 
-  logger.debug(`Found ${symbolTable.functions.length} functions, ${symbolTable.classes.length} classes`);
+  logger.debug(`Found ${functions.size} functions, ${classes.size} classes`);
 
-  symbolTable.classFields = {};
+  const classFields: Record<string, string[]> = {};
   const fieldPattern = /class\s+(\w+):.*?(?:^|\n)\s+self\.(\w+)\s*=/gs;
   let fieldMatch;
   while ((fieldMatch = fieldPattern.exec(code)) !== null) {
     const className = fieldMatch[1];
     const field = fieldMatch[2];
-    if (!symbolTable.classFields[className]) {
-      symbolTable.classFields[className] = [];
+    if (!classFields[className]) {
+      classFields[className] = [];
     }
-    symbolTable.classFields[className].push(field);
+    classFields[className].push(field);
   }
 
-  return symbolTable;
+  return {
+    functions: Array.from(functions),
+    classes: Array.from(classes),
+    variables: Array.from(variables),
+    imports: Array.from(imports),
+    dependencies: [],
+    classFields,
+  };
 }
 
 /**

@@ -34,9 +34,11 @@ describe('TreeSitterParser', () => {
     `;
     
     const result = await parser.parse(code, 'test.ts', 'typescript');
+    const fileScope = result.graph.scopes.get('test.ts');
     
-    expect(result.graph.symbols.has('UserService')).toBeTruthy();
-    const userService = Array.from(result.graph.symbols.values()).find(s => s.name === 'UserService');
+    expect(fileScope).toBeDefined();
+    expect(fileScope!.symbols.has('UserService')).toBeTruthy();
+    const userService = fileScope!.symbols.get('UserService');
     expect(userService?.type).toBe('class');
   });
 
@@ -198,8 +200,9 @@ describe('ScopeResolver', () => {
     const result = await parser.parse(code, 'test.js', 'javascript');
     const resolver = new ScopeResolver(result.graph);
     
-    const globalScope = result.graph.globalScope;
-    const resolved = resolver.resolveSymbol('globalVar', globalScope);
+    const fileScope = result.graph.scopes.get('test.js');
+    expect(fileScope).toBeDefined();
+    const resolved = resolver.resolveSymbol('myFunc', fileScope!);
     expect(resolved).not.toBeNull();
   });
 
