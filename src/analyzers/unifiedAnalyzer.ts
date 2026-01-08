@@ -1,16 +1,26 @@
 /**
  * Unified Analysis Orchestrator
- * 
+ *
  * Combines all analyzers into a single, unified interface
  * Provides comprehensive code analysis in one call
+ *
+ * @format
  */
 
-import { buildSymbolTable } from './symbolTable.js';
-import { validateReferences } from './referenceValidator.js';
-import { scanForVulnerabilities, calculateSecurityScore, getVulnerabilitySummary } from './security/securityScanner.js';
-import { detectAntiPatterns, calculateQualityScore, getAntiPatternSummary } from './antiPatternDetector.js';
-import { detectLanguage } from './languageDetector.js';
-import { logger } from '../utils/logger.js';
+import { buildSymbolTable } from "./symbolTable.js";
+import { validateReferences } from "./referenceValidator.js";
+import {
+  scanForVulnerabilities,
+  calculateSecurityScore,
+  getVulnerabilitySummary,
+} from "./security/securityScanner.js";
+import {
+  detectAntiPatterns,
+  calculateQualityScore,
+  getAntiPatternSummary,
+} from "./antiPatternDetector.js";
+import { detectLanguage } from "./languageDetector.js";
+import { logger } from "../utils/logger.js";
 
 export interface UnifiedAnalysisOptions {
   // What to analyze
@@ -18,14 +28,14 @@ export interface UnifiedAnalysisOptions {
   checkSecurity?: boolean;
   checkAntiPatterns?: boolean;
   checkComplexity?: boolean;
-  
+
   // Analysis options
   language?: string;
   filePath?: string;
   existingCodebase?: string;
-  
+
   // Filtering
-  severityLevel?: 'high' | 'medium' | 'low';
+  severityLevel?: "high" | "medium" | "low";
   categories?: string[];
 }
 
@@ -34,24 +44,24 @@ export interface UnifiedAnalysisResult {
   language: string;
   languageConfidence: number;
   framework?: string;
-  
+
   // Overall scores
   overallScore: number;
   securityScore: number;
   qualityScore: number;
-  
+
   // Issue counts
   totalIssues: number;
   criticalIssues: number;
   highIssues: number;
   mediumIssues: number;
   lowIssues: number;
-  
+
   // Detailed results
   hallucinations: any[];
   securityVulnerabilities: any[];
   antiPatterns: any[];
-  
+
   // Summaries
   summary: {
     hallucinations: number;
@@ -70,7 +80,7 @@ export interface UnifiedAnalysisResult {
       byCategory: Record<string, number>;
     };
   };
-  
+
   // Metadata
   analysisTime: number;
   timestamp: string;
@@ -84,7 +94,7 @@ export async function runUnifiedAnalysis(
   options: UnifiedAnalysisOptions = {}
 ): Promise<UnifiedAnalysisResult> {
   const startTime = Date.now();
-  logger.info('Starting unified analysis...');
+  logger.info("Starting unified analysis...");
 
   // Default options
   const opts = {
@@ -92,7 +102,7 @@ export async function runUnifiedAnalysis(
     checkSecurity: true,
     checkAntiPatterns: true,
     checkComplexity: false,
-    severityLevel: 'low' as const,
+    severityLevel: "low" as const,
     ...options,
   };
 
@@ -107,7 +117,9 @@ export async function runUnifiedAnalysis(
       language = detection.language;
       languageConfidence = detection.confidence;
       framework = detection.framework;
-      logger.debug(`Auto-detected language: ${language} (${languageConfidence}% confidence)`);
+      logger.debug(
+        `Auto-detected language: ${language} (${languageConfidence}% confidence)`
+      );
     }
 
     // Initialize results
@@ -117,22 +129,37 @@ export async function runUnifiedAnalysis(
 
     // Step 2: Check for hallucinations
     if (opts.checkHallucinations) {
-      logger.debug('Checking for hallucinations...');
-      
+      logger.debug("Checking for hallucinations...");
+
       // Build symbol table from existing codebase
-      const existingSymbols = opts.existingCodebase
-        ? await buildSymbolTable(opts.existingCodebase, language)
-        : { functions: [], classes: [], variables: [], imports: [], dependencies: [] };
+      const existingSymbols =
+        opts.existingCodebase ?
+          await buildSymbolTable(opts.existingCodebase, language)
+        : {
+            functions: [],
+            classes: [],
+            variables: [],
+            imports: [],
+            dependencies: [],
+          };
 
       // Build symbol table from new code
       const newSymbols = await buildSymbolTable(code, language);
 
       // Combine symbol tables
       const combinedSymbols = {
-        functions: [...new Set([...existingSymbols.functions, ...newSymbols.functions])],
-        classes: [...new Set([...existingSymbols.classes, ...newSymbols.classes])],
-        variables: [...new Set([...existingSymbols.variables, ...newSymbols.variables])],
-        imports: [...new Set([...existingSymbols.imports, ...newSymbols.imports])],
+        functions: [
+          ...new Set([...existingSymbols.functions, ...newSymbols.functions]),
+        ],
+        classes: [
+          ...new Set([...existingSymbols.classes, ...newSymbols.classes]),
+        ],
+        variables: [
+          ...new Set([...existingSymbols.variables, ...newSymbols.variables]),
+        ],
+        imports: [
+          ...new Set([...existingSymbols.imports, ...newSymbols.imports]),
+        ],
         dependencies: [],
       };
 
@@ -143,7 +170,7 @@ export async function runUnifiedAnalysis(
 
     // Step 3: Security scanning
     if (opts.checkSecurity) {
-      logger.debug('Running security scan...');
+      logger.debug("Running security scan...");
       const vulnerabilities = await scanForVulnerabilities(code, language, {
         severityLevel: opts.severityLevel,
         categories: opts.categories,
@@ -153,7 +180,7 @@ export async function runUnifiedAnalysis(
 
     // Step 4: Anti-pattern detection
     if (opts.checkAntiPatterns) {
-      logger.debug('Detecting anti-patterns...');
+      logger.debug("Detecting anti-patterns...");
       const patterns = await detectAntiPatterns(code, language, {
         severityLevel: opts.severityLevel,
         categories: opts.categories,
@@ -164,28 +191,33 @@ export async function runUnifiedAnalysis(
     // Calculate scores
     const securityScore = calculateSecurityScore(securityVulnerabilities);
     const qualityScore = calculateQualityScore(antiPatterns);
-    
+
     // Calculate overall score (weighted average)
     const overallScore = Math.round(
-      (securityScore * 0.4) + 
-      (qualityScore * 0.3) + 
-      (hallucinations.length === 0 ? 100 : 70) * 0.3
+      securityScore * 0.4 +
+        qualityScore * 0.3 +
+        (hallucinations.length === 0 ? 100 : 70) * 0.3
     );
 
     // Count issues by severity
-    const criticalIssues = securityVulnerabilities.filter(v => v.severity === 'critical').length;
-    const highIssues = 
-      securityVulnerabilities.filter(v => v.severity === 'high').length +
-      antiPatterns.filter(p => p.severity === 'high').length +
-      hallucinations.filter(h => h.severity === 'high').length;
-    const mediumIssues = 
-      securityVulnerabilities.filter(v => v.severity === 'medium').length +
-      antiPatterns.filter(p => p.severity === 'medium').length;
-    const lowIssues = 
-      securityVulnerabilities.filter(v => v.severity === 'low').length +
-      antiPatterns.filter(p => p.severity === 'low').length;
+    const criticalIssues = securityVulnerabilities.filter(
+      (v) => v.severity === "critical"
+    ).length;
+    const highIssues =
+      securityVulnerabilities.filter((v) => v.severity === "high").length +
+      antiPatterns.filter((p) => p.severity === "high").length +
+      hallucinations.filter((h) => h.severity === "high").length;
+    const mediumIssues =
+      securityVulnerabilities.filter((v) => v.severity === "medium").length +
+      antiPatterns.filter((p) => p.severity === "medium").length;
+    const lowIssues =
+      securityVulnerabilities.filter((v) => v.severity === "low").length +
+      antiPatterns.filter((p) => p.severity === "low").length;
 
-    const totalIssues = hallucinations.length + securityVulnerabilities.length + antiPatterns.length;
+    const totalIssues =
+      hallucinations.length +
+      securityVulnerabilities.length +
+      antiPatterns.length;
 
     // Get summaries
     const securitySummary = getVulnerabilitySummary(securityVulnerabilities);
@@ -199,33 +231,32 @@ export async function runUnifiedAnalysis(
       language,
       languageConfidence,
       framework,
-      
+
       overallScore,
       securityScore,
       qualityScore,
-      
+
       totalIssues,
       criticalIssues,
       highIssues,
       mediumIssues,
       lowIssues,
-      
+
       hallucinations,
       securityVulnerabilities,
       antiPatterns,
-      
+
       summary: {
         hallucinations: hallucinations.length,
         security: securitySummary,
         antiPatterns: antiPatternSummary,
       },
-      
+
       analysisTime,
       timestamp: new Date().toISOString(),
     };
-
   } catch (error) {
-    logger.error('Error in unified analysis:', error);
+    logger.error("Error in unified analysis:", error);
     throw error;
   }
 }
@@ -259,7 +290,7 @@ export async function securityAnalysis(
     checkSecurity: true,
     checkAntiPatterns: false,
     language,
-    severityLevel: 'low',
+    severityLevel: "low",
   });
 }
 

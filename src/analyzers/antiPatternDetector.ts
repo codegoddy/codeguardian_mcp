@@ -1,23 +1,25 @@
 /**
  * AI Anti-Pattern Detector
- * 
+ *
  * Detects common anti-patterns in AI-generated code
  * Helps improve code quality and maintainability
+ *
+ * @format
  */
 
-import { readFileSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
-import { logger } from '../utils/logger.js';
+import { readFileSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
+import { logger } from "../utils/logger.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const currentFilePath = fileURLToPath(import.meta.url);
+const currentDirPath = dirname(currentFilePath);
 
 export interface AntiPattern {
   id: string;
   name: string;
   category: string;
-  severity: 'high' | 'medium' | 'low';
+  severity: "high" | "medium" | "low";
   description: string;
   line: number;
   column: number;
@@ -31,7 +33,7 @@ interface AntiPatternRule {
   id: string;
   name: string;
   category: string;
-  severity: 'high' | 'medium' | 'low';
+  severity: "high" | "medium" | "low";
   description: string;
   pattern: string;
   languages: string[];
@@ -46,25 +48,27 @@ interface AntiPatternRule {
 function loadAntiPatternRules(): AntiPatternRule[] {
   try {
     const possiblePaths = [
-      join(__dirname, '../../../rules/anti-patterns/ai-anti-patterns.json'),
-      join(process.cwd(), 'rules/anti-patterns/ai-anti-patterns.json'),
+      join(currentDirPath, "../../../rules/anti-patterns/ai-anti-patterns.json"),
+      join(process.cwd(), "rules/anti-patterns/ai-anti-patterns.json"),
     ];
 
     for (const rulesPath of possiblePaths) {
       try {
-        const rulesData = readFileSync(rulesPath, 'utf-8');
+        const rulesData = readFileSync(rulesPath, "utf-8");
         const parsed = JSON.parse(rulesData);
-        logger.debug(`Loaded ${parsed.patterns?.length || 0} anti-pattern rules from ${rulesPath}`);
+        logger.debug(
+          `Loaded ${parsed.patterns?.length || 0} anti-pattern rules from ${rulesPath}`
+        );
         return parsed.patterns || [];
       } catch (err) {
         continue;
       }
     }
 
-    logger.error('Could not find anti-pattern rules file');
+    logger.error("Could not find anti-pattern rules file");
     return [];
   } catch (error) {
-    logger.error('Error loading anti-pattern rules:', error);
+    logger.error("Error loading anti-pattern rules:", error);
     return [];
   }
 }
@@ -76,7 +80,7 @@ export async function detectAntiPatterns(
   code: string,
   language: string,
   options: {
-    severityLevel?: 'high' | 'medium' | 'low';
+    severityLevel?: "high" | "medium" | "low";
     categories?: string[];
   } = {}
 ): Promise<AntiPattern[]> {
@@ -86,7 +90,7 @@ export async function detectAntiPatterns(
   const rules = loadAntiPatternRules();
 
   // Filter rules by language and options
-  const filteredRules = rules.filter(rule => {
+  const filteredRules = rules.filter((rule) => {
     // Check language support
     if (!rule.languages.includes(language)) return false;
 
@@ -106,27 +110,29 @@ export async function detectAntiPatterns(
     return true;
   });
 
-  const lines = code.split('\n');
+  const lines = code.split("\n");
 
   // Scan each rule
   for (const rule of filteredRules) {
     try {
-      const pattern = new RegExp(rule.pattern, 'gm');
-      
+      const pattern = new RegExp(rule.pattern, "gm");
+
       lines.forEach((line, index) => {
         const trimmed = line.trim();
-        
+
         // Skip comment lines
-        if (trimmed.startsWith('//') || 
-            trimmed.startsWith('/*') || 
-            trimmed.startsWith('*') ||
-            trimmed.startsWith('#')) {
+        if (
+          trimmed.startsWith("//") ||
+          trimmed.startsWith("/*") ||
+          trimmed.startsWith("*") ||
+          trimmed.startsWith("#")
+        ) {
           return;
         }
 
         // Remove inline comments
-        const codeWithoutComments = line.split('//')[0].split('#')[0];
-        
+        const codeWithoutComments = line.split("//")[0].split("#")[0];
+
         let match;
         pattern.lastIndex = 0;
         while ((match = pattern.exec(codeWithoutComments)) !== null) {
@@ -157,21 +163,24 @@ export async function detectAntiPatterns(
 /**
  * Calculate confidence score for an anti-pattern detection
  */
-function calculateConfidence(rule: AntiPatternRule, matchedText: string): number {
+function calculateConfidence(
+  rule: AntiPatternRule,
+  matchedText: string
+): number {
   let confidence = 75; // Base confidence
 
   // Increase confidence for high severity patterns
-  if (rule.severity === 'high') {
+  if (rule.severity === "high") {
     confidence += 10;
   }
 
   // Increase confidence for specific patterns
-  if (rule.category === 'error-handling' || rule.category === 'safety') {
+  if (rule.category === "error-handling" || rule.category === "safety") {
     confidence += 5;
   }
 
   // Decrease confidence for style-related patterns
-  if (rule.category === 'style') {
+  if (rule.category === "style") {
     confidence -= 10;
   }
 
@@ -201,7 +210,9 @@ export function calculateQualityScore(antiPatterns: AntiPattern[]): number {
 /**
  * Group anti-patterns by category
  */
-export function groupByCategory(antiPatterns: AntiPattern[]): Record<string, AntiPattern[]> {
+export function groupByCategory(
+  antiPatterns: AntiPattern[]
+): Record<string, AntiPattern[]> {
   const grouped: Record<string, AntiPattern[]> = {};
 
   for (const pattern of antiPatterns) {
@@ -231,9 +242,9 @@ export function getAntiPatternSummary(antiPatterns: AntiPattern[]): {
   }
 
   return {
-    high: antiPatterns.filter(p => p.severity === 'high').length,
-    medium: antiPatterns.filter(p => p.severity === 'medium').length,
-    low: antiPatterns.filter(p => p.severity === 'low').length,
+    high: antiPatterns.filter((p) => p.severity === "high").length,
+    medium: antiPatterns.filter((p) => p.severity === "medium").length,
+    low: antiPatterns.filter((p) => p.severity === "low").length,
     total: antiPatterns.length,
     byCategory,
   };
@@ -242,7 +253,10 @@ export function getAntiPatternSummary(antiPatterns: AntiPattern[]): {
 /**
  * Get top anti-patterns by frequency
  */
-export function getTopAntiPatterns(antiPatterns: AntiPattern[], limit: number = 5): Array<{
+export function getTopAntiPatterns(
+  antiPatterns: AntiPattern[],
+  limit: number = 5
+): Array<{
   name: string;
   count: number;
   severity: string;

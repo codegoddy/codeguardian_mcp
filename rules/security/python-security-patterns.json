@@ -20,13 +20,11 @@
       "category": "injection",
       "severity": "critical",
       "description": "SQL query using string formatting (injection risk)",
-      "pattern": "(execute|executemany|raw)\\s*\\([^)]*%s[^)]*\\)",
+      "pattern": "(?:cursor|conn|connection|db|session)\\.(?:execute|executemany)\\s*\\([^)]*%[^)]*\\)",
       "cwe": "CWE-89",
       "owasp": "A03:2021 - Injection",
       "fix": "Use parameterized queries with placeholders",
-      "references": [
-        "https://owasp.org/Top10/A03_2021-Injection/"
-      ]
+      "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
     },
     {
       "id": "PY-SEC-003",
@@ -34,13 +32,11 @@
       "category": "injection",
       "severity": "critical",
       "description": "SQL query using f-string (injection risk)",
-      "pattern": "f['\"].*?(SELECT|INSERT|UPDATE|DELETE).*?\\{.*?\\}",
+      "pattern": "(?:execute|executemany)\\s*\\(\\s*f['\"]\\s*(?:SELECT|INSERT|UPDATE|DELETE)\\b",
       "cwe": "CWE-89",
       "owasp": "A03:2021 - Injection",
       "fix": "Use parameterized queries instead of f-strings",
-      "references": [
-        "https://owasp.org/Top10/A03_2021-Injection/"
-      ]
+      "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
     },
     {
       "id": "PY-SEC-004",
@@ -80,9 +76,7 @@
       "cwe": "CWE-78",
       "owasp": "A03:2021 - Injection",
       "fix": "Use subprocess with list arguments instead",
-      "references": [
-        "https://owasp.org/Top10/A03_2021-Injection/"
-      ]
+      "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
     },
     {
       "id": "PY-SEC-007",
@@ -94,9 +88,7 @@
       "cwe": "CWE-78",
       "owasp": "A03:2021 - Injection",
       "fix": "Use shell=False and pass command as list",
-      "references": [
-        "https://owasp.org/Top10/A03_2021-Injection/"
-      ]
+      "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
     },
     {
       "id": "PY-SEC-008",
@@ -108,9 +100,7 @@
       "cwe": "CWE-22",
       "owasp": "A01:2021 - Broken Access Control",
       "fix": "Validate and sanitize file paths",
-      "references": [
-        "https://owasp.org/Top10/A01_2021-Broken_Access_Control/"
-      ]
+      "references": ["https://owasp.org/Top10/A01_2021-Broken_Access_Control/"]
     },
     {
       "id": "PY-SEC-009",
@@ -136,9 +126,7 @@
       "cwe": "CWE-489",
       "owasp": "A05:2021 - Security Misconfiguration",
       "fix": "Set debug=False in production",
-      "references": [
-        "https://flask.palletsprojects.com/en/stable/config/"
-      ]
+      "references": ["https://flask.palletsprojects.com/en/stable/config/"]
     },
     {
       "id": "PY-SEC-011",
@@ -150,9 +138,7 @@
       "cwe": "CWE-327",
       "owasp": "A02:2021 - Cryptographic Failures",
       "fix": "Use hashlib.sha256() or stronger",
-      "references": [
-        "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"
-      ]
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
     },
     {
       "id": "PY-SEC-012",
@@ -164,9 +150,7 @@
       "cwe": "CWE-338",
       "owasp": "A02:2021 - Cryptographic Failures",
       "fix": "Use secrets module for security-sensitive operations",
-      "references": [
-        "https://docs.python.org/3/library/secrets.html"
-      ]
+      "references": ["https://docs.python.org/3/library/secrets.html"]
     },
     {
       "id": "PY-SEC-013",
@@ -174,7 +158,7 @@
       "category": "injection",
       "severity": "critical",
       "description": "Django raw() query with string formatting",
-      "pattern": "\\.raw\\s*\\([^)]*%[^)]*\\)",
+      "pattern": "(?:objects|queryset|qs|manager)\\.raw\\s*\\(\\s*f?['\"][^'\"]*(?:\\{|%)",
       "cwe": "CWE-89",
       "owasp": "A03:2021 - Injection",
       "fix": "Use Django ORM or parameterized raw queries",
@@ -206,9 +190,7 @@
       "cwe": "CWE-352",
       "owasp": "A01:2021 - Broken Access Control",
       "fix": "Only disable CSRF for specific API endpoints, not views",
-      "references": [
-        "https://docs.djangoproject.com/en/stable/ref/csrf/"
-      ]
+      "references": ["https://docs.djangoproject.com/en/stable/ref/csrf/"]
     },
     {
       "id": "PY-SEC-016",
@@ -220,9 +202,7 @@
       "cwe": "CWE-295",
       "owasp": "A02:2021 - Cryptographic Failures",
       "fix": "Always verify SSL certificates in production",
-      "references": [
-        "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"
-      ]
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
     },
     {
       "id": "PY-SEC-017",
@@ -234,9 +214,7 @@
       "cwe": "CWE-798",
       "owasp": "A02:2021 - Cryptographic Failures",
       "fix": "Use environment variables for database credentials",
-      "references": [
-        "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"
-      ]
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
     },
     {
       "id": "PY-SEC-018",
@@ -248,9 +226,7 @@
       "cwe": "CWE-79",
       "owasp": "A03:2021 - Injection",
       "fix": "Enable autoescape in templates",
-      "references": [
-        "https://owasp.org/Top10/A03_2021-Injection/"
-      ]
+      "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
     },
     {
       "id": "PY-SEC-019",
@@ -262,9 +238,7 @@
       "cwe": "CWE-915",
       "owasp": "A01:2021 - Broken Access Control",
       "fix": "Explicitly define allowed fields for mass assignment",
-      "references": [
-        "https://owasp.org/Top10/A01_2021-Broken_Access_Control/"
-      ]
+      "references": ["https://owasp.org/Top10/A01_2021-Broken_Access_Control/"]
     },
     {
       "id": "PY-SEC-020",
@@ -276,9 +250,7 @@
       "cwe": "CWE-601",
       "owasp": "A01:2021 - Broken Access Control",
       "fix": "Validate redirect URLs against whitelist",
-      "references": [
-        "https://owasp.org/Top10/A01_2021-Broken_Access_Control/"
-      ]
+      "references": ["https://owasp.org/Top10/A01_2021-Broken_Access_Control/"]
     }
   ]
 }

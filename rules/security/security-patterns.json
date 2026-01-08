@@ -10,9 +10,7 @@
       "cwe": "CWE-798",
       "owasp": "A02:2021 - Cryptographic Failures",
       "fix": "Store API keys in environment variables or secure key management systems",
-      "references": [
-        "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"
-      ]
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
     },
     {
       "id": "SEC-002",
@@ -24,9 +22,7 @@
       "cwe": "CWE-798",
       "owasp": "A02:2021 - Cryptographic Failures",
       "fix": "Never hardcode passwords. Use environment variables or secure vaults",
-      "references": [
-        "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"
-      ]
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
     },
     {
       "id": "SEC-003",
@@ -38,9 +34,7 @@
       "cwe": "CWE-798",
       "owasp": "A02:2021 - Cryptographic Failures",
       "fix": "Store secrets in environment variables or secret management systems",
-      "references": [
-        "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"
-      ]
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
     },
     {
       "id": "SEC-004",
@@ -48,13 +42,11 @@
       "category": "injection",
       "severity": "critical",
       "description": "Potential SQL injection vulnerability detected",
-      "pattern": "(execute|query|exec)\\s*\\([^)]*\\+[^)]*\\)",
+      "pattern": "(?:cursor|conn|connection|db)\\.(?:execute|query|exec)\\s*\\([^)]*\\+[^)]*\\)",
       "cwe": "CWE-89",
       "owasp": "A03:2021 - Injection",
       "fix": "Use parameterized queries or prepared statements instead of string concatenation",
-      "references": [
-        "https://owasp.org/Top10/A03_2021-Injection/"
-      ]
+      "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
     },
     {
       "id": "SEC-005",
@@ -62,13 +54,11 @@
       "category": "injection",
       "severity": "critical",
       "description": "SQL query using string formatting (injection risk)",
-      "pattern": "\\b(SELECT|INSERT|UPDATE|DELETE)\\b[\\s\\S]*?(\\%s|\\?|format\\()",
+      "pattern": "(?:execute|query|raw)\\s*\\(\\s*f?['\"]\\s*(?:SELECT|INSERT|UPDATE|DELETE)\\b[^'\"]*(?:\\{|\\%|\\$)",
       "cwe": "CWE-89",
       "owasp": "A03:2021 - Injection",
       "fix": "Use parameterized queries with placeholders",
-      "references": [
-        "https://owasp.org/Top10/A03_2021-Injection/"
-      ]
+      "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
     },
     {
       "id": "SEC-006",
@@ -80,9 +70,7 @@
       "cwe": "CWE-79",
       "owasp": "A03:2021 - Injection",
       "fix": "Use textContent or sanitize HTML input before assignment",
-      "references": [
-        "https://owasp.org/Top10/A03_2021-Injection/"
-      ]
+      "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
     },
     {
       "id": "SEC-007",
@@ -94,9 +82,7 @@
       "cwe": "CWE-79",
       "owasp": "A03:2021 - Injection",
       "fix": "Sanitize HTML content or use safe React rendering",
-      "references": [
-        "https://owasp.org/Top10/A03_2021-Injection/"
-      ]
+      "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
     },
     {
       "id": "SEC-008",
@@ -108,9 +94,7 @@
       "cwe": "CWE-95",
       "owasp": "A03:2021 - Injection",
       "fix": "Avoid eval(). Use JSON.parse() for JSON or safer alternatives",
-      "references": [
-        "https://owasp.org/Top10/A03_2021-Injection/"
-      ]
+      "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
     },
     {
       "id": "SEC-009",
@@ -118,13 +102,12 @@
       "category": "code-injection",
       "severity": "critical",
       "description": "exec() can execute arbitrary Python code",
-      "pattern": "\\bexec\\s*\\(",
+      "pattern": "(?<![.])\\bexec\\s*\\(",
+      "languages": ["python"],
       "cwe": "CWE-95",
       "owasp": "A03:2021 - Injection",
       "fix": "Avoid exec(). Use safer alternatives or validate input strictly",
-      "references": [
-        "https://owasp.org/Top10/A03_2021-Injection/"
-      ]
+      "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
     },
     {
       "id": "SEC-010",
@@ -136,9 +119,7 @@
       "cwe": "CWE-78",
       "owasp": "A03:2021 - Injection",
       "fix": "Use parameterized commands or validate input strictly",
-      "references": [
-        "https://owasp.org/Top10/A03_2021-Injection/"
-      ]
+      "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
     },
     {
       "id": "SEC-011",
@@ -150,9 +131,7 @@
       "cwe": "CWE-327",
       "owasp": "A02:2021 - Cryptographic Failures",
       "fix": "Use SHA-256 or stronger algorithms",
-      "references": [
-        "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"
-      ]
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
     },
     {
       "id": "SEC-012",
@@ -164,9 +143,7 @@
       "cwe": "CWE-327",
       "owasp": "A02:2021 - Cryptographic Failures",
       "fix": "Use SHA-256 or stronger algorithms",
-      "references": [
-        "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"
-      ]
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
     },
     {
       "id": "SEC-013",
@@ -178,9 +155,7 @@
       "cwe": "CWE-338",
       "owasp": "A02:2021 - Cryptographic Failures",
       "fix": "Use crypto.randomBytes() or crypto.getRandomValues()",
-      "references": [
-        "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"
-      ]
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
     },
     {
       "id": "SEC-014",
@@ -192,9 +167,7 @@
       "cwe": "CWE-22",
       "owasp": "A01:2021 - Broken Access Control",
       "fix": "Validate and sanitize file paths, use path.resolve()",
-      "references": [
-        "https://owasp.org/Top10/A01_2021-Broken_Access_Control/"
-      ]
+      "references": ["https://owasp.org/Top10/A01_2021-Broken_Access_Control/"]
     },
     {
       "id": "SEC-015",
@@ -206,9 +179,7 @@
       "cwe": "CWE-319",
       "owasp": "A02:2021 - Cryptographic Failures",
       "fix": "Use HTTPS for all external communications",
-      "references": [
-        "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"
-      ]
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
     },
     {
       "id": "SEC-016",
@@ -220,9 +191,7 @@
       "cwe": "CWE-295",
       "owasp": "A02:2021 - Cryptographic Failures",
       "fix": "Never disable SSL/TLS verification in production",
-      "references": [
-        "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"
-      ]
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
     },
     {
       "id": "SEC-017",
@@ -279,6 +248,506 @@
       "references": [
         "https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures/"
       ]
+    },
+    {
+      "id": "SEC-021",
+      "name": "Token Storage in localStorage",
+      "category": "sensitive-data",
+      "severity": "high",
+      "description": "Storing authentication tokens in localStorage is vulnerable to XSS attacks",
+      "pattern": "localStorage\\.setItem\\s*\\([^)]*(?:token|auth|jwt|session|credential|secret)[^)]*\\)",
+      "cwe": "CWE-922",
+      "owasp": "A01:2021 - Broken Access Control",
+      "fix": "Use httpOnly cookies for token storage, or sessionStorage with short-lived tokens",
+      "references": ["https://owasp.org/Top10/A01_2021-Broken_Access_Control/"]
+    },
+    {
+      "id": "SEC-022",
+      "name": "Sensitive Data in sessionStorage",
+      "category": "sensitive-data",
+      "severity": "medium",
+      "description": "Storing sensitive data in sessionStorage - ensure tokens are short-lived and validated server-side",
+      "pattern": "sessionStorage\\.setItem\\s*\\([^)]*(?:token|auth|jwt|credential|secret)[^)]*\\)",
+      "cwe": "CWE-922",
+      "owasp": "A01:2021 - Broken Access Control",
+      "fix": "Prefer httpOnly cookies. If using sessionStorage, ensure tokens are short-lived and validated server-side",
+      "references": ["https://owasp.org/Top10/A01_2021-Broken_Access_Control/"]
+    },
+    {
+      "id": "SEC-023",
+      "name": "Exposed AWS Credentials",
+      "category": "secrets",
+      "severity": "critical",
+      "description": "AWS credentials detected in source code",
+      "pattern": "(AKIA|ASIA)[A-Z0-9]{16}",
+      "cwe": "CWE-798",
+      "owasp": "A02:2021 - Cryptographic Failures",
+      "fix": "Use IAM roles, environment variables, or AWS Secrets Manager",
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
+    },
+    {
+      "id": "SEC-024",
+      "name": "Private Key in Code",
+      "category": "secrets",
+      "severity": "critical",
+      "description": "Private key detected in source code",
+      "pattern": "-----BEGIN\\s+(?:RSA\\s+)?PRIVATE\\s+KEY-----",
+      "cwe": "CWE-798",
+      "owasp": "A02:2021 - Cryptographic Failures",
+      "fix": "Store private keys in secure key management systems, never in code",
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
+    },
+    {
+      "id": "SEC-025",
+      "name": "JWT Secret Hardcoded",
+      "category": "secrets",
+      "severity": "critical",
+      "description": "JWT secret appears to be hardcoded",
+      "pattern": "(jwt[_-]?secret|JWT_SECRET)\\s*[=:]\\s*['\"][^'\"]{8,}['\"]",
+      "cwe": "CWE-798",
+      "owasp": "A02:2021 - Cryptographic Failures",
+      "fix": "Store JWT secrets in environment variables or secret management systems",
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
+    },
+    {
+      "id": "SEC-026",
+      "name": "CORS Allow All Origins",
+      "category": "configuration",
+      "severity": "high",
+      "description": "CORS configured to allow all origins (*)",
+      "pattern": "(?:Access-Control-Allow-Origin|cors).*['\"]\\*['\"]",
+      "cwe": "CWE-942",
+      "owasp": "A05:2021 - Security Misconfiguration",
+      "fix": "Restrict CORS to specific trusted origins",
+      "references": [
+        "https://owasp.org/Top10/A05_2021-Security_Misconfiguration/"
+      ]
+    },
+    {
+      "id": "SEC-027",
+      "name": "Sensitive Data in URL",
+      "category": "sensitive-data",
+      "severity": "high",
+      "description": "Sensitive data passed in URL query parameters",
+      "pattern": "\\?[^\\s]*(?:password|token|secret|api[_-]?key|auth)=[^&\\s]+",
+      "cwe": "CWE-598",
+      "owasp": "A01:2021 - Broken Access Control",
+      "fix": "Pass sensitive data in request body or headers, not URL parameters",
+      "references": ["https://owasp.org/Top10/A01_2021-Broken_Access_Control/"]
+    },
+    {
+      "id": "SEC-028",
+      "name": "Console Log Sensitive Data",
+      "category": "sensitive-data",
+      "severity": "medium",
+      "description": "Potentially logging sensitive data to console",
+      "pattern": "console\\.log\\s*\\([^)]*(?:password|token|secret|credential|auth)[^)]*\\)",
+      "cwe": "CWE-532",
+      "owasp": "A09:2021 - Security Logging and Monitoring Failures",
+      "fix": "Remove sensitive data from console logs, especially in production",
+      "references": [
+        "https://owasp.org/Top10/A09_2021-Security_Logging_and_Monitoring_Failures/"
+      ]
+    },
+    {
+      "id": "SEC-029",
+      "name": "Prototype Pollution Risk",
+      "category": "injection",
+      "severity": "high",
+      "description": "Object property assignment that could lead to prototype pollution",
+      "pattern": "\\[\\s*['\"]__proto__['\"]\\s*\\]|Object\\.assign\\s*\\([^)]*,\\s*(?:req\\.body|req\\.query|input)",
+      "cwe": "CWE-1321",
+      "owasp": "A03:2021 - Injection",
+      "fix": "Validate and sanitize object keys, use Object.create(null) for dictionaries",
+      "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
+    },
+    {
+      "id": "SEC-030",
+      "name": "Open Redirect Vulnerability",
+      "category": "redirect",
+      "severity": "medium",
+      "description": "Potential open redirect vulnerability",
+      "pattern": "(?:redirect|location\\.href|window\\.location)\\s*=\\s*(?:req\\.|request\\.|params\\.|query\\.)",
+      "cwe": "CWE-601",
+      "owasp": "A01:2021 - Broken Access Control",
+      "fix": "Validate redirect URLs against a whitelist of allowed destinations",
+      "references": ["https://owasp.org/Top10/A01_2021-Broken_Access_Control/"]
+    },
+    {
+      "id": "SEC-031",
+      "name": "Hardcoded Database Connection String",
+      "category": "secrets",
+      "severity": "critical",
+      "description": "Database connection string with credentials hardcoded",
+      "pattern": "(?:mongodb|mysql|postgres|postgresql|redis)://[^:]+:[^@]+@",
+      "cwe": "CWE-798",
+      "owasp": "A02:2021 - Cryptographic Failures",
+      "fix": "Store database credentials in environment variables or secret management",
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
+    },
+    {
+      "id": "SEC-032",
+      "name": "XSS - document.write",
+      "category": "xss",
+      "severity": "high",
+      "description": "document.write can lead to XSS vulnerabilities",
+      "pattern": "document\\.write\\s*\\(",
+      "cwe": "CWE-79",
+      "owasp": "A03:2021 - Injection",
+      "fix": "Use DOM manipulation methods like createElement and appendChild instead",
+      "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
+    },
+    {
+      "id": "SEC-033",
+      "name": "Insecure Cookie Settings",
+      "category": "configuration",
+      "severity": "high",
+      "description": "Cookie missing secure or httpOnly flags",
+      "pattern": "(?:document\\.cookie|Set-Cookie).*(?!.*(?:secure|httpOnly|HttpOnly))",
+      "cwe": "CWE-614",
+      "owasp": "A05:2021 - Security Misconfiguration",
+      "fix": "Set Secure, HttpOnly, and SameSite flags on sensitive cookies",
+      "references": [
+        "https://owasp.org/Top10/A05_2021-Security_Misconfiguration/"
+      ]
+    },
+    {
+      "id": "SEC-034",
+      "name": "NoSQL Injection Risk",
+      "category": "injection",
+      "severity": "critical",
+      "description": "Potential NoSQL injection vulnerability",
+      "pattern": "\\.(find|findOne|update|delete)\\s*\\(\\s*\\{[^}]*\\$(?:where|regex|gt|lt|ne|in|nin|or|and)",
+      "cwe": "CWE-943",
+      "owasp": "A03:2021 - Injection",
+      "fix": "Sanitize user input and avoid using $where operator with user data",
+      "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
+    },
+    {
+      "id": "SEC-035",
+      "name": "Exposed GraphQL Introspection",
+      "category": "configuration",
+      "severity": "medium",
+      "description": "GraphQL introspection should be disabled in production",
+      "pattern": "introspection\\s*:\\s*true",
+      "cwe": "CWE-200",
+      "owasp": "A05:2021 - Security Misconfiguration",
+      "fix": "Disable GraphQL introspection in production environments",
+      "references": [
+        "https://owasp.org/Top10/A05_2021-Security_Misconfiguration/"
+      ]
+    },
+    {
+      "id": "SEC-036",
+      "name": "Exposed Stack Trace in Error Handler",
+      "category": "information-disclosure",
+      "severity": "high",
+      "description": "Error handler exposes stack trace to client",
+      "pattern": "(?:res\\.(?:json|send)|return)\\s*\\([^)]*(?:err\\.stack|error\\.stack|e\\.stack)",
+      "cwe": "CWE-209",
+      "owasp": "A05:2021 - Security Misconfiguration",
+      "fix": "Log stack traces server-side only, return generic error messages to clients",
+      "references": [
+        "https://owasp.org/Top10/A05_2021-Security_Misconfiguration/"
+      ]
+    },
+    {
+      "id": "SEC-037",
+      "name": "Missing CSRF Token in Form",
+      "category": "csrf",
+      "severity": "high",
+      "description": "Form submission without CSRF token protection",
+      "pattern": "<form[^>]*method\\s*=\\s*['\"]post['\"][^>]*>(?:(?!csrf|_token|csrfToken|xsrf).)*</form>",
+      "cwe": "CWE-352",
+      "owasp": "A01:2021 - Broken Access Control",
+      "fix": "Include CSRF token in all state-changing forms",
+      "references": ["https://owasp.org/Top10/A01_2021-Broken_Access_Control/"]
+    },
+    {
+      "id": "SEC-038",
+      "name": "Fetch/Axios Without Error Handling",
+      "category": "error-handling",
+      "severity": "medium",
+      "description": "HTTP request without proper error handling may leak sensitive info",
+      "pattern": "(?:fetch|axios\\.(?:get|post|put|delete|patch))\\s*\\([^)]+\\)(?!\\s*\\.catch|\\s*\\.then\\([^)]+\\)\\s*\\.catch)",
+      "cwe": "CWE-755",
+      "owasp": "A09:2021 - Security Logging and Monitoring Failures",
+      "fix": "Always handle errors from HTTP requests to prevent information leakage",
+      "references": [
+        "https://owasp.org/Top10/A09_2021-Security_Logging_and_Monitoring_Failures/"
+      ]
+    },
+    {
+      "id": "SEC-039",
+      "name": "Unvalidated Redirect URL",
+      "category": "redirect",
+      "severity": "high",
+      "description": "Redirect using user-controlled URL without validation",
+      "pattern": "(?:router\\.push|navigate|redirect|window\\.location)\\s*\\(\\s*(?:params|query|searchParams|req\\.(?:body|query))",
+      "cwe": "CWE-601",
+      "owasp": "A01:2021 - Broken Access Control",
+      "fix": "Validate redirect URLs against allowlist before redirecting",
+      "references": ["https://owasp.org/Top10/A01_2021-Broken_Access_Control/"]
+    },
+    {
+      "id": "SEC-040",
+      "name": "Stripe Secret Key Exposed",
+      "category": "secrets",
+      "severity": "critical",
+      "description": "Stripe secret key detected in source code",
+      "pattern": "sk_(?:live|test)_[a-zA-Z0-9]{24,}",
+      "cwe": "CWE-798",
+      "owasp": "A02:2021 - Cryptographic Failures",
+      "fix": "Store Stripe keys in environment variables, never in source code",
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
+    },
+    {
+      "id": "SEC-041",
+      "name": "GitHub Token Exposed",
+      "category": "secrets",
+      "severity": "critical",
+      "description": "GitHub personal access token detected",
+      "pattern": "ghp_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59}",
+      "cwe": "CWE-798",
+      "owasp": "A02:2021 - Cryptographic Failures",
+      "fix": "Use GitHub Apps or environment variables for authentication",
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
+    },
+    {
+      "id": "SEC-042",
+      "name": "Slack Token Exposed",
+      "category": "secrets",
+      "severity": "critical",
+      "description": "Slack bot or user token detected",
+      "pattern": "xox[baprs]-[0-9]{10,13}-[0-9]{10,13}-[a-zA-Z0-9]{24}",
+      "cwe": "CWE-798",
+      "owasp": "A02:2021 - Cryptographic Failures",
+      "fix": "Store Slack tokens in environment variables or secret management",
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
+    },
+    {
+      "id": "SEC-043",
+      "name": "Google API Key Exposed",
+      "category": "secrets",
+      "severity": "critical",
+      "description": "Google API key detected in source code",
+      "pattern": "AIza[0-9A-Za-z\\-_]{35}",
+      "cwe": "CWE-798",
+      "owasp": "A02:2021 - Cryptographic Failures",
+      "fix": "Restrict API key usage and store in environment variables",
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
+    },
+    {
+      "id": "SEC-044",
+      "name": "Firebase Config Exposed",
+      "category": "secrets",
+      "severity": "high",
+      "description": "Firebase configuration with sensitive data exposed",
+      "pattern": "(?:apiKey|authDomain|databaseURL|storageBucket)\\s*:\\s*['\"][^'\"]+\\.firebaseapp\\.com",
+      "cwe": "CWE-798",
+      "owasp": "A02:2021 - Cryptographic Failures",
+      "fix": "Use environment variables and restrict Firebase security rules",
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
+    },
+    {
+      "id": "SEC-045",
+      "name": "Twilio Credentials Exposed",
+      "category": "secrets",
+      "severity": "critical",
+      "description": "Twilio account SID or auth token detected",
+      "pattern": "(?:AC[a-f0-9]{32}|SK[a-f0-9]{32})",
+      "cwe": "CWE-798",
+      "owasp": "A02:2021 - Cryptographic Failures",
+      "fix": "Store Twilio credentials in environment variables",
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
+    },
+    {
+      "id": "SEC-046",
+      "name": "SendGrid API Key Exposed",
+      "category": "secrets",
+      "severity": "critical",
+      "description": "SendGrid API key detected in source code",
+      "pattern": "SG\\.[a-zA-Z0-9]{22}\\.[a-zA-Z0-9]{43}",
+      "cwe": "CWE-798",
+      "owasp": "A02:2021 - Cryptographic Failures",
+      "fix": "Store SendGrid API keys in environment variables",
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
+    },
+    {
+      "id": "SEC-047",
+      "name": "Mailchimp API Key Exposed",
+      "category": "secrets",
+      "severity": "critical",
+      "description": "Mailchimp API key detected in source code",
+      "pattern": "[a-f0-9]{32}-us[0-9]{1,2}",
+      "cwe": "CWE-798",
+      "owasp": "A02:2021 - Cryptographic Failures",
+      "fix": "Store Mailchimp API keys in environment variables",
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
+    },
+    {
+      "id": "SEC-048",
+      "name": "Unsafe Object Spread from User Input",
+      "category": "injection",
+      "severity": "high",
+      "description": "Spreading user input into objects can lead to prototype pollution or mass assignment",
+      "pattern": "\\{\\s*\\.\\.\\.(?:req\\.body|req\\.query|props|params|input|data)\\s*[,}]",
+      "cwe": "CWE-915",
+      "owasp": "A03:2021 - Injection",
+      "fix": "Explicitly pick allowed properties instead of spreading user input",
+      "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
+    },
+    {
+      "id": "SEC-049",
+      "name": "Regex DoS (ReDoS) Risk",
+      "category": "dos",
+      "severity": "medium",
+      "description": "Complex regex pattern that may be vulnerable to ReDoS attacks",
+      "pattern": "new\\s+RegExp\\s*\\([^)]*(?:\\+|\\$\\{|req\\.|params\\.|query\\.)",
+      "cwe": "CWE-1333",
+      "owasp": "A03:2021 - Injection",
+      "fix": "Validate and sanitize user input before using in regex, use timeout for regex execution",
+      "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
+    },
+    {
+      "id": "SEC-050",
+      "name": "Unsafe File Upload",
+      "category": "file-upload",
+      "severity": "high",
+      "description": "File upload without proper validation",
+      "pattern": "(?:multer|formidable|busboy)\\s*\\([^)]*\\)(?!.*(?:fileFilter|limits|allowedTypes))",
+      "cwe": "CWE-434",
+      "owasp": "A04:2021 - Insecure Design",
+      "fix": "Validate file type, size, and content; store outside webroot",
+      "references": ["https://owasp.org/Top10/A04_2021-Insecure_Design/"]
+    },
+    {
+      "id": "SEC-051",
+      "name": "Helmet.js Not Configured",
+      "category": "configuration",
+      "severity": "medium",
+      "description": "Express app without Helmet.js security headers",
+      "pattern": "express\\s*\\(\\s*\\)(?!.*helmet)",
+      "cwe": "CWE-693",
+      "owasp": "A05:2021 - Security Misconfiguration",
+      "fix": "Use Helmet.js to set security headers (CSP, X-Frame-Options, etc.)",
+      "references": [
+        "https://owasp.org/Top10/A05_2021-Security_Misconfiguration/"
+      ]
+    },
+    {
+      "id": "SEC-052",
+      "name": "Rate Limiting Not Implemented",
+      "category": "dos",
+      "severity": "medium",
+      "description": "API endpoint without rate limiting",
+      "pattern": "(?:app|router)\\.(?:post|put|patch|delete)\\s*\\([^)]+(?:login|register|password|reset|auth)",
+      "cwe": "CWE-770",
+      "owasp": "A04:2021 - Insecure Design",
+      "fix": "Implement rate limiting on authentication and sensitive endpoints",
+      "references": ["https://owasp.org/Top10/A04_2021-Insecure_Design/"]
+    },
+    {
+      "id": "SEC-053",
+      "name": "Timing Attack Vulnerability",
+      "category": "crypto",
+      "severity": "high",
+      "description": "String comparison vulnerable to timing attacks",
+      "pattern": "(?:password|token|secret|hash)\\s*(?:===|==|!==|!=)\\s*(?:req\\.|params\\.|input)",
+      "cwe": "CWE-208",
+      "owasp": "A02:2021 - Cryptographic Failures",
+      "fix": "Use constant-time comparison (crypto.timingSafeEqual) for secrets",
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
+    },
+    {
+      "id": "SEC-054",
+      "name": "Insecure JWT Verification",
+      "category": "authentication",
+      "severity": "critical",
+      "description": "JWT verification without algorithm specification allows algorithm confusion attacks",
+      "pattern": "jwt\\.verify\\s*\\([^)]+\\)(?!.*algorithms)",
+      "cwe": "CWE-327",
+      "owasp": "A07:2021 - Identification and Authentication Failures",
+      "fix": "Always specify allowed algorithms in JWT verification options",
+      "references": [
+        "https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures/"
+      ]
+    },
+    {
+      "id": "SEC-055",
+      "name": "Bcrypt Low Cost Factor",
+      "category": "crypto",
+      "severity": "medium",
+      "description": "Bcrypt with low cost factor (< 10) is vulnerable to brute force",
+      "pattern": "bcrypt\\.(?:hash|hashSync)\\s*\\([^,]+,\\s*[1-9]\\s*[,)]",
+      "cwe": "CWE-916",
+      "owasp": "A02:2021 - Cryptographic Failures",
+      "fix": "Use bcrypt cost factor of at least 10 (12+ recommended)",
+      "references": ["https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"]
+    },
+    {
+      "id": "SEC-056",
+      "name": "Supabase Anon Key in Client Code",
+      "category": "secrets",
+      "severity": "medium",
+      "description": "Supabase anon key exposed - ensure RLS policies are properly configured",
+      "pattern": "(?:SUPABASE|supabase).*(?:anon|ANON).*['\"][a-zA-Z0-9._-]{30,}['\"]",
+      "cwe": "CWE-284",
+      "owasp": "A01:2021 - Broken Access Control",
+      "fix": "Ensure Row Level Security (RLS) policies are enabled and properly configured",
+      "references": ["https://owasp.org/Top10/A01_2021-Broken_Access_Control/"]
+    },
+    {
+      "id": "SEC-057",
+      "name": "Prisma Raw Query Injection",
+      "category": "injection",
+      "severity": "critical",
+      "description": "Prisma raw query with string interpolation is vulnerable to SQL injection",
+      "pattern": "prisma\\.\\$(?:queryRaw|executeRaw)\\s*\\(\\s*`[^`]*\\$\\{",
+      "cwe": "CWE-89",
+      "owasp": "A03:2021 - Injection",
+      "fix": "Use Prisma.sql tagged template or parameterized queries",
+      "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
+    },
+    {
+      "id": "SEC-058",
+      "name": "Next.js API Route Without Auth",
+      "category": "authentication",
+      "severity": "high",
+      "description": "Next.js API route without authentication check",
+      "pattern": "export\\s+(?:default\\s+)?(?:async\\s+)?function\\s+(?:handler|GET|POST|PUT|DELETE|PATCH)\\s*\\([^)]*\\)\\s*\\{(?!.*(?:getSession|getServerSession|auth|verify|token))",
+      "cwe": "CWE-306",
+      "owasp": "A07:2021 - Identification and Authentication Failures",
+      "fix": "Add authentication middleware or session check to API routes",
+      "references": [
+        "https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures/"
+      ]
+    },
+    {
+      "id": "SEC-059",
+      "name": "Exposed Error Details in Production",
+      "category": "information-disclosure",
+      "severity": "high",
+      "description": "Detailed error information exposed that should be hidden in production",
+      "pattern": "(?:res\\.(?:json|send)|return\\s+(?:Response\\.json|NextResponse\\.json))\\s*\\([^)]*(?:message:\\s*(?:err|error|e)\\.message|error:\\s*(?:err|error|e))",
+      "cwe": "CWE-209",
+      "owasp": "A05:2021 - Security Misconfiguration",
+      "fix": "Return generic error messages in production, log details server-side",
+      "references": [
+        "https://owasp.org/Top10/A05_2021-Security_Misconfiguration/"
+      ]
+    },
+    {
+      "id": "SEC-060",
+      "name": "Unsafe Dynamic Import",
+      "category": "code-injection",
+      "severity": "high",
+      "description": "Dynamic import with user-controlled path can lead to code injection",
+      "pattern": "import\\s*\\(\\s*(?:req\\.|params\\.|query\\.|`[^`]*\\$\\{)",
+      "cwe": "CWE-94",
+      "owasp": "A03:2021 - Injection",
+      "fix": "Validate and whitelist allowed module paths before dynamic import",
+      "references": ["https://owasp.org/Top10/A03_2021-Injection/"]
     }
   ]
 }

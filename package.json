@@ -41,6 +41,7 @@
     "tree-sitter-typescript": "^0.21.2"
   },
   "devDependencies": {
+    "@swc/core": "^1.15.8",
     "@swc/jest": "^0.2.39",
     "@types/eslint": "^8.56.10",
     "@types/jest": "^29.5.12",

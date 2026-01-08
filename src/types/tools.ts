@@ -1,5 +1,7 @@
 /**
  * Type definitions for CodeGuardian tools
+ *
+ * @format
  */
 
 export interface ToolDefinition {
@@ -8,10 +10,12 @@ export interface ToolDefinition {
     description: string;
     inputSchema: {
       type: string;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       properties: Record<string, any>;
       required?: string[];
     };
   };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   handler: (args: any) => Promise<any>;
 }
 
@@ -27,7 +31,7 @@ export interface SymbolTable {
 
 export interface Issue {
   type: string;
-  severity: 'critical' | 'high' | 'medium' | 'low';
+  severity: "critical" | "high" | "medium" | "low";
   message: string;
   line: number;
   column: number;
