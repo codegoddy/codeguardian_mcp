@@ -1,16 +1,15 @@
 /**
  * Validate Code Tool
  *
- * THE REAL HALLUCINATION DETECTOR
+ * THE UNIFIED AI CODE VALIDATOR
  *
- * This replaces the broken/fragmented hallucination tools with one that:
- * 1. Automatically discovers relevant files (no manual codebase passing)
- * 2. Reads files from disk
- * 3. Builds symbol table from real project files
- * 4. Validates AI-generated code against actual codebase
+ * Catches TWO types of AI mistakes:
+ * 1. HALLUCINATIONS - References to things that don't exist
+ * 2. DEAD CODE - Code that nothing uses (AI over-generation)
  *
  * Usage:
  *   validate_code({ projectPath: ".", newCode: "...", language: "typescript" })
+ *   validate_code({ projectPath: ".", language: "typescript", checkDeadCode: true }) // scan only
  *
  * @format
  */
@@ -73,14 +72,32 @@ interface ValidationIssue {
   suggestion: string;
 }
 
+interface DeadCodeIssue {
+  type: "unusedExport" | "orphanedFile" | "unusedFunction";
+  severity: "medium" | "low";
+  name: string;
+  file: string;
+  message: string;
+}
+
 export const validateCodeTool: ToolDefinition = {
   definition: {
     name: "validate_code",
-    description: `Validate AI-generated code against your actual project files.
-Automatically discovers relevant files - no need to pass your codebase manually.
-Catches: non-existent functions, wrong method calls, bad imports, undefined variables.
+    description: `Validate AI-generated code against your project. Catches hallucinations AND dead code.
 
-Example: validate_code({ projectPath: "src", newCode: "const x = myFunc()", language: "typescript" })`,
+HALLUCINATIONS (code references non-existent things):
+- Functions that don't exist
+- Classes not defined
+- Wrong method calls
+
+DEAD CODE (AI over-generation):
+- Functions nothing calls  
+- Files nothing imports
+- Exports nothing uses
+
+Examples:
+- validate_code({ projectPath: ".", newCode: "const x = myFunc()", language: "typescript" })
+- validate_code({ projectPath: ".", language: "typescript", checkDeadCode: true }) // dead code scan only`,
     inputSchema: {
       type: "object",
       properties: {
@@ -90,26 +107,38 @@ Example: validate_code({ projectPath: "src", newCode: "const x = myFunc()", lang
         },
         newCode: {
           type: "string",
-          description: "The AI-generated code to validate",
+          description:
+            "The AI-generated code to validate (optional - omit for dead code scan only)",
         },
         language: {
           type: "string",
           enum: ["javascript", "typescript", "python", "go"],
           description: "Programming language",
         },
+        checkDeadCode: {
+          type: "boolean",
+          description:
+            "Also scan for unused exports and orphaned files (default: false)",
+        },
         strictMode: {
           type: "boolean",
           description:
-            "If true, flags all unresolved symbols. If false, only flags likely hallucinations (default: false)",
+            "Flag all unresolved symbols, not just likely hallucinations (default: false)",
         },
       },
-      required: ["projectPath", "newCode", "language"],
+      required: ["projectPath", "language"],
     },
   },
 
   async handler(args: any) {
     const startTime = Date.now();
-    const { projectPath, newCode, language, strictMode = false } = args;
+    const {
+      projectPath,
+      newCode,
+      language,
+      strictMode = false,
+      checkDeadCode = false,
+    } = args;
 
     logger.info(`Validating code against project: ${projectPath}`);
 
@@ -118,9 +147,10 @@ Example: validate_code({ projectPath: "src", newCode: "const x = myFunc()", lang
       let symbolTable: Symbol[];
       let filesScanned: number;
       let usedSharedContext = false;
+      let context: ProjectContext | null = null;
 
       try {
-        const context = await getProjectContext(projectPath, {
+        context = await getProjectContext(projectPath, {
           language: language === "javascript" ? "typescript" : language,
           forceRebuild: false,
         });
@@ -189,21 +219,37 @@ Example: validate_code({ projectPath: "src", newCode: "const x = myFunc()", lang
         filesScanned = files.length;
       }
 
-      // Step 3: Extract symbols used in new code
-      const usedSymbols = extractUsedSymbols(newCode, language);
+      // Step 3: Validate hallucinations if new code provided
+      let issues: ValidationIssue[] = [];
+      let usedSymbols: any[] = [];
 
-      // Step 4: Validate each used symbol
-      const issues = validateSymbols(
-        usedSymbols,
-        symbolTable,
-        newCode,
-        language,
-        strictMode
-      );
+      if (newCode) {
+        // Extract symbols used in new code
+        usedSymbols = extractUsedSymbols(newCode, language);
+
+        // Validate each used symbol
+        issues = validateSymbols(
+          usedSymbols,
+          symbolTable,
+          newCode,
+          language,
+          strictMode
+        );
+      }
+
+      // Step 4: Check for dead code if requested
+      let deadCodeIssues: DeadCodeIssue[] = [];
+      if (checkDeadCode && context) {
+        deadCodeIssues = detectDeadCode(context, newCode);
+      }
 
       // Step 5: Calculate score and recommendation
-      const score = calculateScore(issues);
-      const recommendation = generateRecommendation(score, issues);
+      const score = calculateScore(issues, deadCodeIssues);
+      const recommendation = generateRecommendation(
+        score,
+        issues,
+        deadCodeIssues
+      );
 
       const elapsed = Date.now() - startTime;
 
@@ -212,13 +258,16 @@ Example: validate_code({ projectPath: "src", newCode: "const x = myFunc()", lang
         validated: true,
         score,
         hallucinationDetected: issues.length > 0,
-        issues,
+        deadCodeDetected: deadCodeIssues.length > 0,
+        hallucinations: issues,
+        deadCode: deadCodeIssues,
         recommendation,
         stats: {
           filesScanned,
           symbolsInProject: symbolTable.length,
           symbolsChecked: usedSymbols.length,
-          issuesFound: issues.length,
+          hallucinationsFound: issues.length,
+          deadCodeFound: deadCodeIssues.length,
           analysisTime: `${elapsed}ms`,
           usedSharedContext,
         },
@@ -701,6 +750,21 @@ function validateSymbols(
         // Check if it might be a method being called on an implicit object
         const method = methodMap.get(used.name);
         if (!method) {
+          // Before flagging, check if this looks like a NEW function being created
+          // Pattern: if the code contains "function X" or "const X = " where X is the called name
+          // then it's likely the AI is creating this function, not hallucinating
+          const isBeingDefined =
+            newCode.includes(`function ${used.name}`) ||
+            newCode.includes(`const ${used.name} =`) ||
+            newCode.includes(`let ${used.name} =`) ||
+            newCode.includes(`def ${used.name}(`) ||
+            newCode.includes(`class ${used.name}`);
+
+          if (isBeingDefined) {
+            // Skip - this is new code being created, not a hallucination
+            continue;
+          }
+
           issues.push({
             type: "nonExistentFunction",
             severity: "critical",
@@ -731,23 +795,33 @@ function validateSymbols(
         }
       }
     } else if (used.type === "methodCall") {
-      // For method calls, we check if the method exists anywhere
-      // (We can't do full type inference without a type system)
+      // For method calls, we need to be VERY careful about false positives
+      // Without full type inference, we can only flag obvious issues
+
+      // SKIP validation for method calls in non-strict mode
+      // Reason: We can't know if `user.getFullName()` is valid without knowing user's type
+      // This is a conscious trade-off: fewer false positives > catching all hallucinations
+      if (!strictMode) {
+        continue;
+      }
+
+      // In strict mode, only flag if:
+      // 1. The object is a known class AND
+      // 2. We can verify the class doesn't have this method
       const method = methodMap.get(used.name);
-      const func = functionMap.get(used.name); // Could be a function on an object
+      const func = functionMap.get(used.name);
 
       if (!method && !func) {
-        // Check if object is a known variable/class
-        const objIsKnown =
-          variableMap.has(used.object!) ||
-          classMap.has(used.object!) ||
-          isBuiltIn(used.object!, language);
+        // Only flag if object is a known class (not just any variable)
+        const objClass = classMap.get(used.object!);
 
-        if (objIsKnown || strictMode) {
+        if (objClass) {
+          // Object is a known class - this MIGHT be a hallucination
+          // But we still can't be 100% sure without full type analysis
           issues.push({
             type: "nonExistentMethod",
-            severity: "high",
-            message: `Method '${used.name}' not found (called on '${used.object}')`,
+            severity: "medium", // Downgraded from high - we're not certain
+            message: `Method '${used.name}' not found on '${used.object}' (verify manually)`,
             line: used.line,
             code: used.code,
             suggestion: suggestSimilar(used.name, Array.from(methodMap.keys())),
@@ -757,6 +831,17 @@ function validateSymbols(
     } else if (used.type === "instantiation") {
       // Check if class exists
       if (!classMap.has(used.name)) {
+        // Check if this class is being defined in the new code
+        const isBeingDefined =
+          newCode.includes(`class ${used.name}`) ||
+          newCode.includes(`interface ${used.name}`) ||
+          newCode.includes(`type ${used.name}`);
+
+        if (isBeingDefined) {
+          // Skip - this is new code being created
+          continue;
+        }
+
         issues.push({
           type: "nonExistentClass",
           severity: "critical",
@@ -1193,10 +1278,116 @@ function isKeyword(name: string, language: string): boolean {
 }
 
 /**
+ * Detect dead code - unused exports and orphaned files
+ */
+function detectDeadCode(
+  context: ProjectContext,
+  newCode?: string
+): DeadCodeIssue[] {
+  const issues: DeadCodeIssue[] = [];
+
+  // Find unused exports
+  for (const [filePath, fileInfo] of context.files) {
+    // Skip test files, config files, and entry points
+    if (fileInfo.isTest || fileInfo.isConfig || fileInfo.isEntryPoint) {
+      continue;
+    }
+
+    // Check if file is imported by anything
+    const importers = context.reverseImportGraph.get(filePath) || [];
+
+    // Check each export
+    for (const exp of fileInfo.exports) {
+      if (!exp.isDefault && importers.length === 0) {
+        issues.push({
+          type: "unusedExport",
+          severity: "medium",
+          name: exp.name,
+          file: fileInfo.relativePath,
+          message: `Export '${exp.name}' is never imported by any file`,
+        });
+      }
+    }
+  }
+
+  // Find orphaned files (nothing imports them, but they have exports)
+  for (const [filePath, fileInfo] of context.files) {
+    if (fileInfo.isTest || fileInfo.isConfig || fileInfo.isEntryPoint) {
+      continue;
+    }
+
+    const importers = context.reverseImportGraph.get(filePath) || [];
+
+    // File has exports but nothing imports it
+    if (importers.length === 0 && fileInfo.exports.length > 0) {
+      // Don't double-report if we already flagged individual exports
+      const alreadyFlagged = issues.some(
+        (i) => i.file === fileInfo.relativePath
+      );
+      if (!alreadyFlagged) {
+        issues.push({
+          type: "orphanedFile",
+          severity: "low",
+          name: fileInfo.relativePath,
+          file: fileInfo.relativePath,
+          message: `File has exports but is never imported`,
+        });
+      }
+    }
+  }
+
+  // If new code provided, check for unused functions within it
+  if (newCode) {
+    const definedFunctions = new Set<string>();
+    const calledFunctions = new Set<string>();
+
+    // Find function definitions
+    const defPatterns = [
+      /function\s+(\w+)\s*\(/g,
+      /(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\(/g,
+      /def\s+(\w+)\s*\(/g,
+    ];
+
+    for (const pattern of defPatterns) {
+      let match;
+      while ((match = pattern.exec(newCode)) !== null) {
+        definedFunctions.add(match[1]);
+      }
+    }
+
+    // Find function calls
+    const callPattern = /(?:^|[^\w.])(\w+)\s*\(/g;
+    let match;
+    while ((match = callPattern.exec(newCode)) !== null) {
+      calledFunctions.add(match[1]);
+    }
+
+    // Find functions defined but never called
+    for (const func of definedFunctions) {
+      if (!calledFunctions.has(func)) {
+        issues.push({
+          type: "unusedFunction",
+          severity: "medium",
+          name: func,
+          file: "(new code)",
+          message: `Function '${func}' is defined but never called in this code`,
+        });
+      }
+    }
+  }
+
+  // Limit results to avoid noise
+  return issues.slice(0, 20);
+}
+
+/**
  * Calculate validation score (0-100, higher is better)
  */
-function calculateScore(issues: ValidationIssue[]): number {
-  if (issues.length === 0) return 100;
+function calculateScore(
+  issues: ValidationIssue[],
+  deadCode: DeadCodeIssue[] = []
+): number {
+  if (issues.length === 0 && deadCode.length === 0) return 100;
 
   const weights = { critical: 25, high: 15, medium: 8, low: 3 };
   let deductions = 0;
@@ -1205,13 +1396,22 @@ function calculateScore(issues: ValidationIssue[]): number {
     deductions += weights[issue.severity] || 5;
   }
 
+  // Dead code is less severe
+  for (const dc of deadCode) {
+    deductions += dc.severity === "medium" ? 5 : 2;
+  }
+
   return Math.max(0, 100 - deductions);
 }
 
 /**
  * Generate recommendation based on validation results
  */
-function generateRecommendation(score: number, issues: ValidationIssue[]) {
+function generateRecommendation(
+  score: number,
+  issues: ValidationIssue[],
+  deadCode: DeadCodeIssue[] = []
+) {
   const critical = issues.filter((i) => i.severity === "critical");
   const high = issues.filter((i) => i.severity === "high");
 
@@ -1219,16 +1419,16 @@ function generateRecommendation(score: number, issues: ValidationIssue[]) {
     return {
       verdict: "REJECT",
       riskLevel: "critical",
-      message: `❌ DO NOT USE - ${critical.length} critical issue(s): references to non-existent code`,
+      message: `❌ DO NOT USE - ${critical.length} hallucination(s): references to non-existent code`,
       action: "Fix all critical issues before using this code",
     };
   }
 
-  if (score < 50 || high.length > 2) {
+  if (high.length > 2) {
     return {
       verdict: "REVIEW",
       riskLevel: "high",
-      message: `⚠️ HIGH RISK - ${issues.length} issue(s) found that need attention`,
+      message: `⚠️ HIGH RISK - ${issues.length} hallucination(s) found`,
       action: "Manually verify each flagged symbol exists in your codebase",
     };
   }
@@ -1237,15 +1437,24 @@ function generateRecommendation(score: number, issues: ValidationIssue[]) {
     return {
       verdict: "CAUTION",
       riskLevel: "medium",
-      message: `⚡ REVIEW RECOMMENDED - ${issues.length} potential issue(s)`,
-      action: "Code is likely usable but verify flagged items",
+      message: `⚡ ${issues.length} potential hallucination(s) detected`,
+      action: "Verify flagged symbols exist in your codebase",
+    };
+  }
+
+  if (deadCode.length > 0) {
+    return {
+      verdict: "CLEAN_UP",
+      riskLevel: "low",
+      message: `🧹 ${deadCode.length} dead code issue(s) - unused exports/files`,
+      action: "Consider removing unused code to reduce maintenance burden",
     };
   }
 
   return {
     verdict: "ACCEPT",
     riskLevel: "low",
-    message: "✅ LOOKS GOOD - All symbols validated against your codebase",
+    message: "✅ LOOKS GOOD - No hallucinations or dead code detected",
     action: "Code appears consistent with your project",
   };
 }

@@ -24,24 +24,14 @@ import {
 export const buildContextTool: ToolDefinition = {
   definition: {
     name: "build_context",
-    description: `Build a shared project context that accelerates all other CodeGuardian tools.
+    description: `Build/rebuild project context for faster validation.
 
-NOTE: Context is now AUTO-BUILT by other tools when needed. You only need to call this explicitly if you want to:
-- Force a rebuild after major changes
-- Pre-warm the cache before running multiple tools
-- Get detailed stats about the project structure
+Usually auto-called by validate_code. Call explicitly to:
+- Force rebuild after major changes (use forceRebuild: true)
+- Pre-warm cache before multiple validations
+- Get project structure stats
 
-The context is cached and automatically used by:
-- validate_code: Knows what symbols exist, reduces false positives
-- discover_context: Instant results from cached index
-- find_dead_code: Uses dependency graph for accurate detection
-- get_dependency_graph: Pre-computed graph available
-- scan_directory: Smarter issue prioritization
-- get_test_coverage_gaps: Knows which functions are tested
-
-Smart invalidation: Context auto-refreshes when files change (checks modification times).
-
-Returns a summary of the project structure and what was indexed.`,
+Returns: file count, symbols indexed, framework detected.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -63,7 +53,7 @@ Returns a summary of the project structure and what was indexed.`,
         forceRebuild: {
           type: "boolean",
           description:
-            "Force rebuild even if cached context exists (default: false)",
+            "Force rebuild even if cached (replaces invalidate_context)",
           default: false,
         },
         maxFiles: {

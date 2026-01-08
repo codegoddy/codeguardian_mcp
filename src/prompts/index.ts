@@ -1,44 +1,32 @@
 /**
  * Prompt registration for CodeGuardian MCP
- * 
- * Prompts provide pre-configured templates for common code review tasks.
+ *
+ * Simple prompts focused on hallucination detection.
+ *
+ * @format
  */
 
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { ListPromptsRequestSchema, GetPromptRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { logger } from '../utils/logger.js';
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import {
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
+import { logger } from "../utils/logger.js";
 
 /**
  * Register all prompts with the MCP server
  */
 export function registerPrompts(server: Server) {
-  // List all available prompts
   server.setRequestHandler(ListPromptsRequestSchema, async () => {
     return {
       prompts: [
         {
-          name: 'review-code',
-          description: 'Review AI-generated code for production readiness',
+          name: "validate",
+          description: "Validate AI-generated code for hallucinations",
           arguments: [
             {
-              name: 'code',
-              description: 'The code to review',
-              required: true,
-            },
-            {
-              name: 'language',
-              description: 'Programming language',
-              required: false,
-            },
-          ],
-        },
-        {
-          name: 'check-hallucinations',
-          description: 'Check for AI hallucinations in code',
-          arguments: [
-            {
-              name: 'newCode',
-              description: 'The new code to check',
+              name: "code",
+              description: "The code to validate",
               required: true,
             },
           ],
@@ -47,7 +35,6 @@ export function registerPrompts(server: Server) {
     };
   });
 
-  // Handle prompt retrieval
   server.setRequestHandler(GetPromptRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
 
@@ -55,27 +42,14 @@ export function registerPrompts(server: Server) {
 
     try {
       switch (name) {
-        case 'review-code':
+        case "validate":
           return {
             messages: [
               {
-                role: 'user',
+                role: "user",
                 content: {
-                  type: 'text',
-                  text: `Review this code for production readiness:\n\n${args?.code || ''}`,
-                },
-              },
-            ],
-          };
-
-        case 'check-hallucinations':
-          return {
-            messages: [
-              {
-                role: 'user',
-                content: {
-                  type: 'text',
-                  text: `Check this code for AI hallucinations:\n\n${args?.newCode || ''}`,
+                  type: "text",
+                  text: `Use validate_code to check this code for hallucinations (non-existent functions, wrong methods, etc.):\n\n${args?.code || ""}`,
                 },
               },
             ],
