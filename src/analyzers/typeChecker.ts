@@ -1,11 +1,13 @@
 /**
  * Type Consistency Checker
- * 
+ *
  * Validates type consistency in AI-generated code
+ *
+ * @format
  */
 
-import { SymbolTable, Issue } from '../types/tools.js';
-import { logger } from '../utils/logger.js';
+import { SymbolTable, Issue } from "../types/tools.js";
+import { logger } from "../utils/logger.js";
 
 /**
  * Check type consistency in new code
@@ -13,52 +15,53 @@ import { logger } from '../utils/logger.js';
 export async function checkTypeConsistency(
   newCode: string,
   symbolTable: SymbolTable,
-  language: string
+  language: string,
 ): Promise<Issue[]> {
-  logger.debug('Checking type consistency...');
+  logger.debug("Checking type consistency...");
 
   const issues: Issue[] = [];
 
   // Only perform detailed type checking for TypeScript
-  if (language !== 'typescript') {
-    logger.debug('Type checking only fully supported for TypeScript');
+  if (language !== "typescript") {
+    logger.debug("Type checking only fully supported for TypeScript");
     return issues;
   }
 
   try {
     // Check for common type issues in TypeScript
-    
+
     // 1. Check for 'any' type usage (AI often uses this)
     const anyPattern = /:\s*any\b/g;
-    const lines = newCode.split('\n');
-    
+    const lines = newCode.split("\n");
+
     lines.forEach((line, index) => {
       if (anyPattern.test(line)) {
         issues.push({
-          type: 'typeMismatch',
-          severity: 'medium',
+          type: "typeMismatch",
+          severity: "medium",
           message: "Usage of 'any' type defeats TypeScript's type safety",
           line: index + 1,
-          column: line.indexOf('any'),
+          column: line.indexOf("any"),
           code: line.trim(),
-          suggestion: 'Use a specific type instead of any',
+          suggestion: "Use a specific type instead of any",
           confidence: 100,
         });
       }
     });
 
     // 2. Check for missing return types on functions
-    const funcWithoutReturnType = /function\s+\w+\([^)]*\)\s*{|const\s+\w+\s*=\s*\([^)]*\)\s*=>/g;
+    const funcWithoutReturnType =
+      /function\s+\w+\([^)]*\)\s*{|const\s+\w+\s*=\s*\([^)]*\)\s*=>/g;
     lines.forEach((line, index) => {
-      if (funcWithoutReturnType.test(line) && !line.includes(':')) {
+      if (funcWithoutReturnType.test(line) && !line.includes(":")) {
         issues.push({
-          type: 'missingReturnType',
-          severity: 'low',
-          message: 'Function missing explicit return type',
+          type: "missingReturnType",
+          severity: "low",
+          message: "Function missing explicit return type",
           line: index + 1,
           column: 0,
           code: line.trim(),
-          suggestion: 'Add explicit return type annotation',
+          suggestion: "Add explicit return type annotation",
           confidence: 80,
         });
       }
@@ -69,15 +72,15 @@ export async function checkTypeConsistency(
     lines.forEach((line, index) => {
       const matches = line.matchAll(implicitAnyParam);
       for (const match of matches) {
-        if (line.includes('=>') || line.includes('function')) {
+        if (line.includes("=>") || line.includes("function")) {
           issues.push({
-            type: 'implicitAny',
-            severity: 'medium',
-            message: 'Parameter has implicit any type',
+            type: "implicitAny",
+            severity: "medium",
+            message: "Parameter has implicit any type",
             line: index + 1,
             column: match.index || 0,
             code: line.trim(),
-            suggestion: 'Add type annotation to parameter',
+            suggestion: "Add type annotation to parameter",
             confidence: 75,
           });
         }
@@ -87,20 +90,20 @@ export async function checkTypeConsistency(
     // 4. Check for non-existent type references (Scenario 3 fix)
     const typeReferences = extractTypeReferences(newCode);
     for (const typeRef of typeReferences) {
-      const existsInSymbolTable = 
+      const existsInSymbolTable =
         symbolTable.classes.includes(typeRef.name) ||
         symbolTable.interfaces?.includes(typeRef.name) ||
         isBuiltInType(typeRef.name);
-      
+
       if (!existsInSymbolTable) {
         issues.push({
-          type: 'nonExistentType',
-          severity: 'high',
+          type: "nonExistentType",
+          severity: "high",
           message: `Type '${typeRef.name}' does not exist in codebase`,
           line: typeRef.line,
           column: typeRef.column,
           code: typeRef.code,
-          suggestion: `Available types: ${getAvailableTypes(symbolTable).join(', ') || 'none found'}`,
+          suggestion: `Available types: ${getAvailableTypes(symbolTable).join(", ") || "none found"}`,
           confidence: 85,
         });
       }
@@ -110,8 +113,8 @@ export async function checkTypeConsistency(
     const propertyAccesses = extractPropertyAccesses(newCode, symbolTable);
     for (const access of propertyAccesses) {
       issues.push({
-        type: 'nonExistentProperty',
-        severity: 'high',
+        type: "nonExistentProperty",
+        severity: "high",
         message: `Property '${access.property}' does not exist on '${access.object}'`,
         line: access.line,
         column: access.column,
@@ -123,7 +126,7 @@ export async function checkTypeConsistency(
 
     logger.debug(`Found ${issues.length} type consistency issues`);
   } catch (error) {
-    logger.error('Error checking type consistency:', error);
+    logger.error("Error checking type consistency:", error);
   }
 
   return issues;
@@ -138,12 +141,21 @@ function extractTypeReferences(code: string): Array<{
   column: number;
   code: string;
 }> {
-  const refs: Array<{ name: string; line: number; column: number; code: string }> = [];
-  const lines = code.split('\n');
+  const refs: Array<{
+    name: string;
+    line: number;
+    column: number;
+    code: string;
+  }> = [];
+  const lines = code.split("\n");
 
   lines.forEach((line, index) => {
     // Skip comments and strings
-    if (line.trim().startsWith('//') || line.trim().startsWith('*') || line.trim().startsWith('/*')) {
+    if (
+      line.trim().startsWith("//") ||
+      line.trim().startsWith("*") ||
+      line.trim().startsWith("/*")
+    ) {
       return;
     }
 
@@ -152,7 +164,7 @@ function extractTypeReferences(code: string): Array<{
     let match;
     while ((match = typeAnnotationPattern.exec(line)) !== null) {
       const typeName = match[1];
-      if (!isKeyword(typeName, 'typescript') && typeName.length > 1) {
+      if (!isKeyword(typeName, "typescript") && typeName.length > 1) {
         refs.push({
           name: typeName,
           line: index + 1,
@@ -166,7 +178,7 @@ function extractTypeReferences(code: string): Array<{
     const returnTypePattern = /\)\s*:\s*([A-Z]\w+)/g;
     while ((match = returnTypePattern.exec(line)) !== null) {
       const typeName = match[1];
-      if (!isKeyword(typeName, 'typescript') && typeName.length > 1) {
+      if (!isKeyword(typeName, "typescript") && typeName.length > 1) {
         refs.push({
           name: typeName,
           line: index + 1,
@@ -180,7 +192,7 @@ function extractTypeReferences(code: string): Array<{
     const interfaceDefPattern = /interface\s+(\w+)/g;
     while ((match = interfaceDefPattern.exec(line)) !== null) {
       // Skip if it's just defining the interface, not using it
-      if (!line.includes('extends')) {
+      if (!line.includes("extends")) {
         continue;
       }
     }
@@ -194,7 +206,7 @@ function extractTypeReferences(code: string): Array<{
  */
 function extractPropertyAccesses(
   code: string,
-  symbolTable: SymbolTable
+  symbolTable: SymbolTable,
 ): Array<{
   object: string;
   property: string;
@@ -209,11 +221,15 @@ function extractPropertyAccesses(
     column: number;
     code: string;
   }> = [];
-  const lines = code.split('\n');
+  const lines = code.split("\n");
 
   lines.forEach((line, index) => {
     // Skip comments
-    if (line.trim().startsWith('//') || line.trim().startsWith('*') || line.trim().startsWith('/*')) {
+    if (
+      line.trim().startsWith("//") ||
+      line.trim().startsWith("*") ||
+      line.trim().startsWith("/*")
+    ) {
       return;
     }
 
@@ -290,8 +306,17 @@ function extractPropertyAccesses(
  */
 function isReturnObject(name: string): boolean {
   const returnNames = [
-    'result', 'data', 'response', 'res', 'output', 'value', 'item', 'obj',
-    'profile', 'session', 'token'
+    "result",
+    "data",
+    "response",
+    "res",
+    "output",
+    "value",
+    "item",
+    "obj",
+    "profile",
+    "session",
+    "token",
   ];
   return returnNames.includes(name.toLowerCase());
 }
@@ -301,12 +326,43 @@ function isReturnObject(name: string): boolean {
  */
 function isBuiltInType(name: string): boolean {
   const builtInTypes = [
-    'string', 'number', 'boolean', 'void', 'null', 'undefined', 'any',
-    'unknown', 'never', 'object', 'Array', 'Function', 'Promise',
-    'Date', 'RegExp', 'Error', 'Map', 'Set', 'WeakMap', 'WeakSet',
-    'JSON', 'Math', 'URL', 'URLSearchParams', 'FormData', 'Blob',
-    'Response', 'Request', 'Headers', 'ReadonlyArray', 'Partial',
-    'Required', 'Pick', 'Omit', 'Record', 'Exclude', 'Extract'
+    "string",
+    "number",
+    "boolean",
+    "void",
+    "null",
+    "undefined",
+    "any",
+    "unknown",
+    "never",
+    "object",
+    "Array",
+    "Function",
+    "Promise",
+    "Date",
+    "RegExp",
+    "Error",
+    "Map",
+    "Set",
+    "WeakMap",
+    "WeakSet",
+    "JSON",
+    "Math",
+    "URL",
+    "URLSearchParams",
+    "FormData",
+    "Blob",
+    "Response",
+    "Request",
+    "Headers",
+    "ReadonlyArray",
+    "Partial",
+    "Required",
+    "Pick",
+    "Omit",
+    "Record",
+    "Exclude",
+    "Extract",
   ];
   return builtInTypes.includes(name);
 }
@@ -316,10 +372,29 @@ function isBuiltInType(name: string): boolean {
  */
 function isBuiltInObject(name: string): boolean {
   const builtInObjects = [
-    'console', 'Math', 'JSON', 'Date', 'Array', 'Object', 'String',
-    'Number', 'Boolean', 'Promise', 'Map', 'Set', 'WeakMap', 'WeakSet',
-    'URL', 'URLSearchParams', 'FormData', 'Blob', 'localStorage',
-    'sessionStorage', 'document', 'window', 'navigator'
+    "console",
+    "Math",
+    "JSON",
+    "Date",
+    "Array",
+    "Object",
+    "String",
+    "Number",
+    "Boolean",
+    "Promise",
+    "Map",
+    "Set",
+    "WeakMap",
+    "WeakSet",
+    "URL",
+    "URLSearchParams",
+    "FormData",
+    "Blob",
+    "localStorage",
+    "sessionStorage",
+    "document",
+    "window",
+    "navigator",
   ];
   return builtInObjects.includes(name);
 }
@@ -330,15 +405,15 @@ function isBuiltInObject(name: string): boolean {
 function isKnownProperty(
   object: string,
   property: string,
-  symbolTable: SymbolTable
+  _symbolTable: SymbolTable,
 ): boolean {
   // This is a simplified check. In a full implementation, we would
   // track type definitions and their properties
   const knownProperties: Record<string, string[]> = {
-    user: ['id', 'name', 'email'],
-    config: ['port', 'host', 'environment'],
-    request: ['headers', 'body', 'method', 'url'],
-    response: ['status', 'data', 'headers'],
+    user: ["id", "name", "email"],
+    config: ["port", "host", "environment"],
+    request: ["headers", "body", "method", "url"],
+    response: ["status", "data", "headers"],
   };
 
   const lowerObject = object.toLowerCase();
@@ -358,7 +433,13 @@ function getAvailableTypes(symbolTable: SymbolTable): string[] {
   return [
     ...symbolTable.classes,
     ...(symbolTable.interfaces || []),
-    'string', 'number', 'boolean', 'void', 'Array', 'Object', 'Promise'
+    "string",
+    "number",
+    "boolean",
+    "void",
+    "Array",
+    "Object",
+    "Promise",
   ];
 }
 
@@ -367,10 +448,71 @@ function getAvailableTypes(symbolTable: SymbolTable): string[] {
  */
 function isKeyword(name: string, language: string): boolean {
   const keywords: Record<string, string[]> = {
-    javascript: ['if', 'else', 'for', 'while', 'return', 'function', 'const', 'let', 'var', 'class', 'new', 'this', 'typeof', 'instanceof'],
-    typescript: ['if', 'else', 'for', 'while', 'return', 'function', 'const', 'let', 'var', 'class', 'new', 'this', 'typeof', 'instanceof', 'interface', 'type'],
-    python: ['if', 'elif', 'else', 'for', 'while', 'return', 'def', 'class', 'import', 'from', 'as', 'with', 'lambda', 'yield'],
-    go: ['if', 'else', 'for', 'return', 'func', 'type', 'struct', 'interface', 'go', 'defer', 'range', 'var', 'const'],
+    javascript: [
+      "if",
+      "else",
+      "for",
+      "while",
+      "return",
+      "function",
+      "const",
+      "let",
+      "var",
+      "class",
+      "new",
+      "this",
+      "typeof",
+      "instanceof",
+    ],
+    typescript: [
+      "if",
+      "else",
+      "for",
+      "while",
+      "return",
+      "function",
+      "const",
+      "let",
+      "var",
+      "class",
+      "new",
+      "this",
+      "typeof",
+      "instanceof",
+      "interface",
+      "type",
+    ],
+    python: [
+      "if",
+      "elif",
+      "else",
+      "for",
+      "while",
+      "return",
+      "def",
+      "class",
+      "import",
+      "from",
+      "as",
+      "with",
+      "lambda",
+      "yield",
+    ],
+    go: [
+      "if",
+      "else",
+      "for",
+      "return",
+      "func",
+      "type",
+      "struct",
+      "interface",
+      "go",
+      "defer",
+      "range",
+      "var",
+      "const",
+    ],
   };
 
   return keywords[language]?.includes(name) || false;

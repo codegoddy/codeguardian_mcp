@@ -1,16 +1,18 @@
 /**
  * Incremental Parser with Change Detection
- * 
+ *
  * Tracks file changes and re-parses only modified code.
  * 10-50x faster for large codebases.
+ *
+ * @format
  */
 
-import { TreeSitterParser } from './treeSitterParser.js';
-import { SemanticIndexBuilder, SemanticQuery } from './semanticIndex.js';
-import { CodeGraph, SemanticIndex, ParseResult } from '../../types/codeGraph.js';
-import { logger } from '../../utils/logger.js';
-import * as crypto from 'crypto';
-import * as fs from 'fs/promises';
+import { TreeSitterParser } from "./treeSitterParser.js";
+import { SemanticIndexBuilder, SemanticQuery } from "./semanticIndex.js";
+import { CodeGraph, SemanticIndex } from "../../types/codeGraph.js";
+import { logger } from "../../utils/logger.js";
+import * as crypto from "crypto";
+import * as fs from "fs/promises";
 
 interface CachedParse {
   graph: CodeGraph;
@@ -25,7 +27,7 @@ export class IncrementalParser {
   constructor() {
     this.parser = new TreeSitterParser({
       enableIncremental: true,
-      cacheResults: true
+      cacheResults: true,
     });
   }
 
@@ -34,7 +36,7 @@ export class IncrementalParser {
    */
   async parseFiles(
     files: string[],
-    language: string
+    language: string,
   ): Promise<{ graph: CodeGraph; index: SemanticIndex; query: SemanticQuery }> {
     const changedFiles: string[] = [];
     const unchangedFiles: string[] = [];
@@ -49,19 +51,21 @@ export class IncrementalParser {
       }
     }
 
-    logger.debug(`Incremental parse: ${changedFiles.length} changed, ${unchangedFiles.length} cached`);
+    logger.debug(
+      `Incremental parse: ${changedFiles.length} changed, ${unchangedFiles.length} cached`,
+    );
 
     // Get cached graph or create new
     const baseGraph = this.getMergedCachedGraph(unchangedFiles);
-    
+
     // Parse only changed files
     for (const file of changedFiles) {
-      const content = await fs.readFile(file, 'utf-8');
+      const content = await fs.readFile(file, "utf-8");
       const result = await this.parser.parse(content, file, language);
-      
+
       // Merge into base graph
       this.mergeGraph(baseGraph, result.graph);
-      
+
       // Update cache
       this.updateCache(file, result.graph);
     }
@@ -78,12 +82,12 @@ export class IncrementalParser {
    */
   private async hasFileChanged(file: string): Promise<boolean> {
     try {
-      const content = await fs.readFile(file, 'utf-8');
+      const content = await fs.readFile(file, "utf-8");
       const currentHash = this.computeHash(content);
-      
+
       const cached = this.cache.get(file);
       if (!cached) return true;
-      
+
       const cachedHash = cached.graph.fileHashes.get(file);
       return currentHash !== cachedHash;
     } catch (error) {
@@ -101,7 +105,7 @@ export class IncrementalParser {
     }
 
     const baseGraph = this.createEmptyGraph();
-    
+
     for (const file of files) {
       const cached = this.cache.get(file);
       if (cached) {
@@ -174,7 +178,7 @@ export class IncrementalParser {
     this.cache.set(file, {
       graph,
       index: SemanticIndexBuilder.buildIndex(graph),
-      timestamp: Date.now()
+      timestamp: Date.now(),
     });
   }
 
@@ -183,7 +187,7 @@ export class IncrementalParser {
    */
   clearCache(): void {
     this.cache.clear();
-    logger.debug('Parse cache cleared');
+    logger.debug("Parse cache cleared");
   }
 
   /**
@@ -191,7 +195,7 @@ export class IncrementalParser {
    */
   getCacheStats(): { size: number; oldestEntry: number | null } {
     let oldestTimestamp: number | null = null;
-    
+
     for (const cached of this.cache.values()) {
       if (oldestTimestamp === null || cached.timestamp < oldestTimestamp) {
         oldestTimestamp = cached.timestamp;
@@ -200,7 +204,7 @@ export class IncrementalParser {
 
     return {
       size: this.cache.size,
-      oldestEntry: oldestTimestamp
+      oldestEntry: oldestTimestamp,
     };
   }
 
@@ -214,20 +218,20 @@ export class IncrementalParser {
       typeGraph: new Map(),
       scopes: new Map(),
       globalScope: {
-        name: 'global',
-        type: 'global',
+        name: "global",
+        type: "global",
         symbols: new Map(),
-        children: []
+        children: [],
       },
       dependencies: [],
       fileSymbols: new Map(),
       fileHashes: new Map(),
       lastUpdated: new Date(),
-      version: '1.0.0'
+      version: "1.0.0",
     };
   }
 
   private computeHash(content: string): string {
-    return crypto.createHash('sha256').update(content).digest('hex');
+    return crypto.createHash("sha256").update(content).digest("hex");
   }
 }

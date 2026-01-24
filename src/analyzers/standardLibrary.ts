@@ -216,37 +216,4 @@ export function getStandardLibraryModule(name: string, language: string): string
   return null;
 }
 
-/**
- * Check if an import statement is valid
- */
-export function isValidImport(importPath: string, name: string, language: string): boolean {
-  if (language === 'python') {
-    // Check if importing from known libraries
-    const knownModules = [
-      ...Object.keys(PYTHON_STDLIB),
-      ...Object.keys(PYTHON_THIRD_PARTY),
-    ];
-    
-    for (const module of knownModules) {
-      if (importPath.startsWith(module)) {
-        const funcs = PYTHON_STDLIB[module] || PYTHON_THIRD_PARTY[module] || [];
-        if (funcs.includes(name)) return true;
-      }
-    }
-  } else if (language === 'javascript' || language === 'typescript') {
-    // Check if importing from known libraries
-    const knownModules = [
-      ...Object.keys(JS_STDLIB),
-      ...Object.keys(JS_THIRD_PARTY),
-    ];
-    
-    for (const module of knownModules) {
-      if (importPath === module || importPath.startsWith(module + '/')) {
-        const funcs = JS_STDLIB[module] || JS_THIRD_PARTY[module] || [];
-        if (funcs.includes(name)) return true;
-      }
-    }
-  }
-  
-  return false;
-}
+

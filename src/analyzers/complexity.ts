@@ -12,20 +12,14 @@ import { logger } from "../utils/logger.js";
 import * as acorn from "acorn";
 import * as walk from "acorn-walk";
 
-// AST node types from acorn - using any for compatibility with acorn-walk
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type AcornNode = any;
-
 /**
  * Analyze code complexity using AST
  */
 export async function analyzeComplexity(
   code: string,
-  language: string
+  language: string,
 ): Promise<Issue[]> {
   logger.debug("Analyzing complexity with AST...");
-
-  const issues: Issue[] = [];
 
   try {
     if (language === "javascript" || language === "typescript") {
@@ -39,7 +33,7 @@ export async function analyzeComplexity(
   } catch (error) {
     logger.error(
       "Error in AST-based complexity analysis, falling back:",
-      error
+      error,
     );
     return await analyzeComplexityFallback(code, language);
   }
@@ -151,7 +145,7 @@ async function analyzeJavaScriptComplexity(code: string): Promise<Issue[]> {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function analyzeFunctionNode(
   node: any,
-  ancestors: any[]
+  _ancestors: any[],
 ): {
   name: string;
   line: number;
@@ -275,7 +269,6 @@ async function analyzePythonComplexity(code: string): Promise<Issue[]> {
     // since we can't easily parse Python AST in Node.js
     // In production, you'd want to use a Python subprocess or service
 
-    const lines = code.split("\n");
     const functions = extractPythonFunctions(code);
 
     for (const func of functions) {
@@ -483,12 +476,11 @@ function calculatePythonNesting(code: string): number {
  */
 async function analyzeComplexityFallback(
   code: string,
-  language: string
+  language: string,
 ): Promise<Issue[]> {
   const issues: Issue[] = [];
 
   // Simple line-based analysis as fallback
-  const lines = code.split("\n");
   const functions = extractFunctions(code, language);
 
   for (const func of functions) {
@@ -532,7 +524,7 @@ async function analyzeComplexityFallback(
  */
 function extractFunctions(
   code: string,
-  language: string
+  language: string,
 ): Array<{
   name: string;
   signature: string;
@@ -557,7 +549,7 @@ function extractFunctions(
   lines.forEach((line, index) => {
     if (language === "javascript" || language === "typescript") {
       const funcMatch = line.match(
-        /function\s+(\w+)\s*\(|const\s+(\w+)\s*=.*=>/
+        /function\s+(\w+)\s*\(|const\s+(\w+)\s*=.*=>/,
       );
       if (funcMatch) {
         currentFunction = {

@@ -6,11 +6,17 @@
  */
 
 import { validateCodeTool } from "../../src/tools/validateCode.js";
+import { clearContextCache } from "../../src/context/projectContext.js";
 import * as fs from "fs/promises";
 import * as path from "path";
 
 describe("validate_code", () => {
   const testProjectPath = "tests/fixtures/sample-project";
+
+  beforeEach(() => {
+    // Clear context cache between tests to avoid stale data
+    clearContextCache();
+  });
 
   beforeAll(async () => {
     // Create test fixture project
@@ -103,9 +109,9 @@ export const MAX_RETRIES = 3;
 
       expect(data.success).toBe(true);
       expect(data.hallucinationDetected).toBe(true);
-      expect(data.issues.length).toBeGreaterThanOrEqual(2);
+      expect(data.hallucinations.length).toBeGreaterThanOrEqual(2);
 
-      const functionIssues = data.issues.filter(
+      const functionIssues = data.hallucinations.filter(
         (i: any) => i.type === "nonExistentFunction"
       );
       expect(
@@ -130,7 +136,7 @@ export const MAX_RETRIES = 3;
       const data = JSON.parse(result.content[0].text);
 
       expect(data.hallucinationDetected).toBe(true);
-      const classIssues = data.issues.filter(
+      const classIssues = data.hallucinations.filter(
         (i: any) => i.type === "nonExistentClass"
       );
       expect(
@@ -156,7 +162,7 @@ export const MAX_RETRIES = 3;
       const data = JSON.parse(result.content[0].text);
 
       expect(data.score).toBeGreaterThanOrEqual(80);
-      const criticalIssues = data.issues.filter(
+      const criticalIssues = data.hallucinations.filter(
         (i: any) => i.severity === "critical"
       );
       expect(criticalIssues.length).toBe(0);
@@ -174,7 +180,7 @@ export const MAX_RETRIES = 3;
 
       const data = JSON.parse(result.content[0].text);
 
-      const classIssues = data.issues.filter(
+      const classIssues = data.hallucinations.filter(
         (i: any) => i.type === "nonExistentClass"
       );
       expect(classIssues.length).toBe(0);
@@ -197,7 +203,7 @@ export const MAX_RETRIES = 3;
       const data = JSON.parse(result.content[0].text);
 
       expect(data.score).toBe(100);
-      expect(data.issues.length).toBe(0);
+      expect(data.hallucinations.length).toBe(0);
     });
 
     test("should NOT flag functions defined in the new code itself", async () => {
@@ -217,7 +223,7 @@ export const MAX_RETRIES = 3;
       const data = JSON.parse(result.content[0].text);
 
       expect(data.score).toBe(100);
-      const funcIssues = data.issues.filter((i: any) =>
+      const funcIssues = data.hallucinations.filter((i: any) =>
         i.message.includes("myNewHelper")
       );
       expect(funcIssues.length).toBe(0);
@@ -236,7 +242,9 @@ export const MAX_RETRIES = 3;
 
       const data = JSON.parse(result.content[0].text);
 
-      const issue = data.issues.find((i: any) => i.message.includes("getUser"));
+      const issue = data.hallucinations.find((i: any) =>
+        i.message.includes("getUser")
+      );
       expect(issue).toBeDefined();
       expect(issue.suggestion).toContain("getUserById");
     });
@@ -340,7 +348,9 @@ export const MAX_RETRIES = 3;
 
       const data = JSON.parse(result.content[0].text);
       expect(data.success).toBe(true);
-      expect(data.validated).toBe(false);
+      // With no files found, it still validates but against empty symbol table
+      // This means all function calls will be flagged as hallucinations
+      expect(data.stats.filesScanned).toBe(0);
     });
 
     test("should ignore function calls in strings", async () => {

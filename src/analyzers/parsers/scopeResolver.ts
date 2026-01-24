@@ -1,8 +1,10 @@
 /**
  * Context-Aware Scope Resolution
- * 
+ *
  * Accurately resolves symbols considering scope hierarchy, imports, and context.
  * Critical for detecting hallucinations in AI-generated code.
+ *
+ * @format
  */
 
 import {
@@ -10,15 +12,14 @@ import {
   SymbolNode,
   Reference,
   Scope,
-  ImportNode,
-  SemanticIndex
-} from '../../types/codeGraph.js';
-import { logger } from '../../utils/logger.js';
+  SemanticIndex,
+} from "../../types/codeGraph.js";
+import { logger } from "../../utils/logger.js";
 
 export class ScopeResolver {
   constructor(
     private graph: CodeGraph,
-    private index?: SemanticIndex
+    private index?: SemanticIndex,
   ) {}
 
   /**
@@ -62,7 +63,7 @@ export class ScopeResolver {
   resolveMethodCall(
     objectName: string,
     methodName: string,
-    scope: Scope
+    scope: Scope,
   ): SymbolNode | null {
     // 1. Resolve the object
     const objectSymbol = this.resolveSymbol(objectName, scope);
@@ -86,13 +87,15 @@ export class ScopeResolver {
     }
 
     // 4. Check class definition for methods
-    if (objectSymbol.type === 'class') {
+    if (objectSymbol.type === "class") {
       // Look for method in class scope
       const classScope = this.findScopeByName(objectSymbol.name);
       if (classScope) {
         const method = classScope.symbols.get(methodName);
-        if (method && method.type === 'method') {
-          logger.debug(`Resolved method '${methodName}' in class '${objectName}'`);
+        if (method && method.type === "method") {
+          logger.debug(
+            `Resolved method '${methodName}' in class '${objectName}'`,
+          );
           return method;
         }
       }
@@ -108,7 +111,7 @@ export class ScopeResolver {
   resolvePropertyAccess(
     objectName: string,
     propertyName: string,
-    scope: Scope
+    scope: Scope,
   ): SymbolNode | null {
     const objectSymbol = this.resolveSymbol(objectName, scope);
     if (!objectSymbol) return null;
@@ -119,11 +122,11 @@ export class ScopeResolver {
     }
 
     // Check class fields
-    if (objectSymbol.type === 'class') {
+    if (objectSymbol.type === "class") {
       const classScope = this.findScopeByName(objectSymbol.name);
       if (classScope) {
         const property = classScope.symbols.get(propertyName);
-        if (property && property.type === 'property') {
+        if (property && property.type === "property") {
           return property;
         }
       }
@@ -145,11 +148,11 @@ export class ScopeResolver {
         // Create symbol for imported name
         return {
           name: imported.local,
-          type: 'variable', // Could be function, class, etc.
+          type: "variable", // Could be function, class, etc.
           location: importNode.location,
           usages: [],
-          definedIn: 'external',
-          documentation: `Imported from ${importNode.module}`
+          definedIn: "external",
+          documentation: `Imported from ${importNode.module}`,
         };
       }
     }
@@ -174,7 +177,7 @@ export class ScopeResolver {
    * Find scope by name
    */
   private findScopeByName(name: string): Scope | null {
-    for (const [_, scope] of this.graph.scopes) {
+    for (const scope of this.graph.scopes.values()) {
       if (scope.name === name) {
         return scope;
       }
@@ -187,13 +190,8 @@ export class ScopeResolver {
    */
   resolveAllReferences(scope: Scope): Map<Reference, SymbolNode | null> {
     const resolutions = new Map<Reference, SymbolNode | null>();
-    
-    // Get all references in this scope
-    const scopeKey = scope.location 
-      ? `${scope.location.file}:${scope.location.line}`
-      : scope.name;
-    
-    for (const [_, refs] of this.graph.references) {
+
+    for (const refs of this.graph.references.values()) {
       for (const ref of refs) {
         if (ref.scope === scope.name) {
           const resolved = this.resolveSymbol(ref.name, scope);
@@ -218,8 +216,8 @@ export class ScopeResolver {
    */
   findUnresolvedReferences(scope: Scope): Reference[] {
     const unresolved: Reference[] = [];
-    
-    for (const [_, refs] of this.graph.references) {
+
+    for (const refs of this.graph.references.values()) {
       for (const ref of refs) {
         if (ref.scope === scope.name) {
           const resolved = this.resolveSymbol(ref.name, scope);
@@ -239,7 +237,7 @@ export class ScopeResolver {
   getScopeChain(scope: Scope): string[] {
     const chain: string[] = [];
     let current: Scope | undefined = scope;
-    
+
     while (current) {
       chain.unshift(current.name);
       current = current.parent;
@@ -252,8 +250,8 @@ export class ScopeResolver {
    * Find symbol with full qualification
    */
   resolveQualifiedName(qualifiedName: string, scope: Scope): SymbolNode | null {
-    const parts = qualifiedName.split('.');
-    
+    const parts = qualifiedName.split(".");
+
     if (parts.length === 1) {
       return this.resolveSymbol(qualifiedName, scope);
     }
@@ -265,7 +263,7 @@ export class ScopeResolver {
     // Resolve remaining parts
     for (let i = 1; i < parts.length; i++) {
       const part = parts[i];
-      
+
       // Check if it's a method
       if (current.methods && current.methods.has(part)) {
         current = current.methods.get(part) || null;
@@ -277,7 +275,7 @@ export class ScopeResolver {
         if (!current) return null;
       }
       // Try to find in class scope
-      else if (current.type === 'class') {
+      else if (current.type === "class") {
         const classScope = this.findScopeByName(current.name);
         if (classScope) {
           current = classScope.symbols.get(part) || null;
@@ -321,7 +319,7 @@ export class ScopeAnalyzer {
   private static getScopeDepth(scope: Scope): number {
     let depth = 0;
     let current: Scope | undefined = scope;
-    
+
     while (current.parent) {
       depth++;
       current = current.parent;
@@ -335,7 +333,7 @@ export class ScopeAnalyzer {
    */
   private static countDescendants(scope: Scope): number {
     let count = scope.children.length;
-    
+
     for (const child of scope.children) {
       count += this.countDescendants(child);
     }
@@ -348,7 +346,7 @@ export class ScopeAnalyzer {
    */
   static getAllSymbols(scope: Scope): SymbolNode[] {
     const symbols: SymbolNode[] = Array.from(scope.symbols.values());
-    
+
     for (const child of scope.children) {
       symbols.push(...this.getAllSymbols(child));
     }
@@ -364,7 +362,7 @@ export class ScopeAnalyzer {
     shadowedBy: SymbolNode;
   }> {
     const shadowed: Array<{ symbol: SymbolNode; shadowedBy: SymbolNode }> = [];
-    
+
     // Check each symbol in this scope
     for (const [name, symbol] of scope.symbols) {
       // Check if parent scopes have same name
@@ -374,7 +372,7 @@ export class ScopeAnalyzer {
         if (parentSymbol) {
           shadowed.push({
             symbol: parentSymbol,
-            shadowedBy: symbol
+            shadowedBy: symbol,
           });
           break;
         }

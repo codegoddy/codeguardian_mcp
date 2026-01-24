@@ -1,8 +1,10 @@
 /**
  * Semantic Index for O(1) Symbol Lookups
- * 
+ *
  * Pre-computed indexes for fast symbol resolution and queries.
  * Enables instant lookups without traversing the entire graph.
+ *
+ * @format
  */
 
 import {
@@ -11,10 +13,9 @@ import {
   SymbolNode,
   SymbolType,
   Reference,
-  TypeInfo,
-  Scope
-} from '../../types/codeGraph.js';
-import { logger } from '../../utils/logger.js';
+  Scope,
+} from "../../types/codeGraph.js";
+import { logger } from "../../utils/logger.js";
 
 export class SemanticIndexBuilder {
   /**
@@ -32,7 +33,7 @@ export class SemanticIndexBuilder {
       unusedSymbols: new Set(),
       unresolvedReferences: [],
       typeIndex: new Map(graph.typeGraph),
-      scopeIndex: new Map(graph.scopes)
+      scopeIndex: new Map(graph.scopes),
     };
 
     // Index symbols by name
@@ -86,7 +87,9 @@ export class SemanticIndexBuilder {
     logger.debug(`Built semantic index in ${buildTime}ms`);
     logger.debug(`  - ${index.symbolsByName.size} unique symbol names`);
     logger.debug(`  - ${index.unusedSymbols.size} unused symbols`);
-    logger.debug(`  - ${index.unresolvedReferences.length} unresolved references`);
+    logger.debug(
+      `  - ${index.unresolvedReferences.length} unresolved references`,
+    );
 
     return index;
   }
@@ -97,18 +100,18 @@ export class SemanticIndexBuilder {
   static updateIndex(
     index: SemanticIndex,
     graph: CodeGraph,
-    changedFiles: string[]
+    changedFiles: string[],
   ): SemanticIndex {
     const startTime = Date.now();
 
     // Remove symbols from changed files
     for (const file of changedFiles) {
       const fileSymbols = index.symbolsByFile.get(file) || [];
-      
+
       for (const symbol of fileSymbols) {
         // Remove from name index
         const nameSymbols = index.symbolsByName.get(symbol.name) || [];
-        const filtered = nameSymbols.filter(s => s.location.file !== file);
+        const filtered = nameSymbols.filter((s) => s.location.file !== file);
         if (filtered.length > 0) {
           index.symbolsByName.set(symbol.name, filtered);
         } else {
@@ -117,7 +120,9 @@ export class SemanticIndexBuilder {
 
         // Remove from type index
         const typeSymbols = index.symbolsByType.get(symbol.type) || [];
-        const filteredType = typeSymbols.filter(s => s.location.file !== file);
+        const filteredType = typeSymbols.filter(
+          (s) => s.location.file !== file,
+        );
         if (filteredType.length > 0) {
           index.symbolsByType.set(symbol.type, filteredType);
         } else {
@@ -163,7 +168,7 @@ export class SemanticIndexBuilder {
 
     // Update unresolved references
     index.unresolvedReferences = [];
-    for (const [_, references] of graph.references) {
+    for (const references of graph.references.values()) {
       for (const ref of references) {
         const resolved = this.resolveReference(ref, graph);
         if (!resolved) {
@@ -173,7 +178,9 @@ export class SemanticIndexBuilder {
     }
 
     const updateTime = Date.now() - startTime;
-    logger.debug(`Updated semantic index in ${updateTime}ms for ${changedFiles.length} files`);
+    logger.debug(
+      `Updated semantic index in ${updateTime}ms for ${changedFiles.length} files`,
+    );
 
     return index;
   }
@@ -185,7 +192,7 @@ export class SemanticIndexBuilder {
     name: string,
     index: SemanticIndex,
     scope?: string,
-    file?: string
+    file?: string,
   ): SymbolNode | null {
     const candidates = index.symbolsByName.get(name);
     if (!candidates || candidates.length === 0) return null;
@@ -195,12 +202,12 @@ export class SemanticIndexBuilder {
 
     // Filter by file if provided
     if (file) {
-      const inFile = candidates.filter(s => s.location.file === file);
+      const inFile = candidates.filter((s) => s.location.file === file);
       if (inFile.length === 1) return inFile[0];
       if (inFile.length > 1) {
         // Prefer closer scope
         if (scope) {
-          const inScope = inFile.find(s => s.definedIn === scope);
+          const inScope = inFile.find((s) => s.definedIn === scope);
           if (inScope) return inScope;
         }
         return inFile[0]; // Return first match
@@ -209,7 +216,7 @@ export class SemanticIndexBuilder {
 
     // Filter by scope if provided
     if (scope) {
-      const inScope = candidates.find(s => s.definedIn === scope);
+      const inScope = candidates.find((s) => s.definedIn === scope);
       if (inScope) return inScope;
     }
 
@@ -229,8 +236,8 @@ export class SemanticIndexBuilder {
    */
   static findUnusedSymbols(index: SemanticIndex): SymbolNode[] {
     const unused: SymbolNode[] = [];
-    
-    for (const [_, symbols] of index.symbolsByName) {
+
+    for (const symbols of index.symbolsByName.values()) {
       for (const symbol of symbols) {
         const qualifiedName = `${symbol.definedIn}.${symbol.name}`;
         if (index.unusedSymbols.has(qualifiedName)) {
@@ -245,7 +252,10 @@ export class SemanticIndexBuilder {
   /**
    * Find symbols by type
    */
-  static findSymbolsByType(type: SymbolType, index: SemanticIndex): SymbolNode[] {
+  static findSymbolsByType(
+    type: SymbolType,
+    index: SemanticIndex,
+  ): SymbolNode[] {
     return index.symbolsByType.get(type) || [];
   }
 
@@ -260,7 +270,10 @@ export class SemanticIndexBuilder {
    * Check if symbol exists
    */
   static symbolExists(name: string, index: SemanticIndex): boolean {
-    return index.symbolsByName.has(name) && (index.symbolsByName.get(name)?.length || 0) > 0;
+    return (
+      index.symbolsByName.has(name) &&
+      (index.symbolsByName.get(name)?.length || 0) > 0
+    );
   }
 
   /**
@@ -284,14 +297,17 @@ export class SemanticIndexBuilder {
       totalSymbols,
       symbolsByType: symbolsByType as Record<SymbolType, number>,
       unusedCount: index.unusedSymbols.size,
-      unresolvedCount: index.unresolvedReferences.length
+      unresolvedCount: index.unresolvedReferences.length,
     };
   }
 
   /**
    * Resolve reference to its symbol definition
    */
-  private static resolveReference(ref: Reference, graph: CodeGraph): SymbolNode | null {
+  private static resolveReference(
+    ref: Reference,
+    graph: CodeGraph,
+  ): SymbolNode | null {
     // Try exact match first
     if (graph.symbols.has(ref.name)) {
       return graph.symbols.get(ref.name) || null;
@@ -320,10 +336,10 @@ export class SemanticIndexBuilder {
           // Symbol is imported, consider it resolved
           return {
             name: ref.name,
-            type: 'variable', // We don't know the exact type
+            type: "variable", // We don't know the exact type
             location: imports.location,
             usages: [],
-            definedIn: 'external'
+            definedIn: "external",
           };
         }
       }
@@ -335,7 +351,11 @@ export class SemanticIndexBuilder {
   /**
    * Resolve symbol in scope hierarchy
    */
-  private static resolveInScope(name: string, scope: Scope, graph: CodeGraph): SymbolNode | null {
+  private static resolveInScope(
+    name: string,
+    scope: Scope,
+    graph: CodeGraph,
+  ): SymbolNode | null {
     // Check current scope
     if (scope.symbols.has(name)) {
       return scope.symbols.get(name) || null;
@@ -354,13 +374,24 @@ export class SemanticIndexBuilder {
  * Query helper for semantic index
  */
 export class SemanticQuery {
-  constructor(private index: SemanticIndex, private graph: CodeGraph) {}
+  constructor(
+    private index: SemanticIndex,
+    private graph: CodeGraph,
+  ) {}
 
   /**
    * Find symbol with context
    */
-  findSymbol(name: string, context?: { file?: string; scope?: string }): SymbolNode | null {
-    return SemanticIndexBuilder.findSymbol(name, this.index, context?.scope, context?.file);
+  findSymbol(
+    name: string,
+    context?: { file?: string; scope?: string },
+  ): SymbolNode | null {
+    return SemanticIndexBuilder.findSymbol(
+      name,
+      this.index,
+      context?.scope,
+      context?.file,
+    );
   }
 
   /**
@@ -378,7 +409,7 @@ export class SemanticQuery {
       ref.name,
       this.index,
       ref.scope,
-      ref.location.file
+      ref.location.file,
     );
     return resolved !== null;
   }
@@ -395,7 +426,7 @@ export class SemanticQuery {
    */
   findCallers(functionName: string): string[] {
     const callers: string[] = [];
-    
+
     for (const [caller, callees] of this.graph.callGraph) {
       if (callees.includes(functionName)) {
         callers.push(caller);
@@ -417,8 +448,9 @@ export class SemanticQuery {
    */
   findByPattern(pattern: RegExp, type?: SymbolType): SymbolNode[] {
     const results: SymbolNode[] = [];
-    const symbols = type 
-      ? (this.index.symbolsByType.get(type) || [])
+    const symbols =
+      type ?
+        this.index.symbolsByType.get(type) || []
       : Array.from(this.index.symbolsByName.values()).flat();
 
     for (const symbol of symbols) {
@@ -441,13 +473,18 @@ export class SemanticQuery {
     scope: Scope | null;
   } {
     const symbol = this.findSymbol(name);
-    
+
     return {
       symbol,
       usages: symbol ? this.findUsages(name) : [],
-      callers: symbol && symbol.type === 'function' ? this.findCallers(name) : [],
-      callees: symbol && symbol.type === 'function' ? this.findCallees(name) : [],
-      scope: symbol?.definedIn ? this.graph.scopes.get(symbol.definedIn) || null : null
+      callers:
+        symbol && symbol.type === "function" ? this.findCallers(name) : [],
+      callees:
+        symbol && symbol.type === "function" ? this.findCallees(name) : [],
+      scope:
+        symbol?.definedIn ?
+          this.graph.scopes.get(symbol.definedIn) || null
+        : null,
     };
   }
 
@@ -456,7 +493,7 @@ export class SemanticQuery {
    */
   findSimilar(name: string, maxDistance: number = 3): SymbolNode[] {
     const results: SymbolNode[] = [];
-    
+
     for (const [symbolName, symbols] of this.index.symbolsByName) {
       const distance = this.levenshteinDistance(name, symbolName);
       if (distance <= maxDistance) {
@@ -480,7 +517,9 @@ export class SemanticQuery {
   private levenshteinDistance(str1: string, str2: string): number {
     const m = str1.length;
     const n = str2.length;
-    const dp: number[][] = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
+    const dp: number[][] = Array(m + 1)
+      .fill(null)
+      .map(() => Array(n + 1).fill(0));
 
     for (let i = 0; i <= m; i++) dp[i][0] = i;
     for (let j = 0; j <= n; j++) dp[0][j] = j;
@@ -491,9 +530,9 @@ export class SemanticQuery {
           dp[i][j] = dp[i - 1][j - 1];
         } else {
           dp[i][j] = Math.min(
-            dp[i - 1][j] + 1,    // deletion
-            dp[i][j - 1] + 1,    // insertion
-            dp[i - 1][j - 1] + 1 // substitution
+            dp[i - 1][j] + 1, // deletion
+            dp[i][j - 1] + 1, // insertion
+            dp[i - 1][j - 1] + 1, // substitution
           );
         }
       }

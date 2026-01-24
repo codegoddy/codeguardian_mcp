@@ -1,0 +1,186 @@
+/**
+ * Context Orchestrator
+ *
+ * Coordinates all context features to work together seamlessly.
+ * Inspired by Augment Code's invisible, harmonious integration.
+ *
+ * @format
+ */
+
+import { getProjectContext, type ProjectContext } from "./projectContext.js";
+import { intentTracker } from "./intentTracker.js";
+import { contextLineage, type LineageContext } from "./contextLineage.js";
+import { getRelevantSymbolsForValidation } from "../analyzers/relevanceScorer.js";
+import { logger } from "../utils/logger.js";
+
+export interface OrchestrationContext {
+  projectContext: ProjectContext;
+  lineageContext: LineageContext | null;
+  relevantSymbols: string[];
+  useIncremental: boolean;
+  contextQuality: "excellent" | "good" | "fair" | "poor";
+  recommendations: string[];
+}
+
+/**
+ * Orchestrate all context features to work together
+ */
+export async function orchestrateContext(options: {
+  projectPath: string;
+  language: string;
+  newCode?: string;
+  imports?: string[];
+  sessionId?: string;
+  currentFile?: string;
+  recentlyEditedFiles?: string[];
+}): Promise<OrchestrationContext> {
+  const {
+    projectPath,
+    language,
+    newCode,
+    imports = [],
+    sessionId,
+    currentFile,
+    recentlyEditedFiles = [],
+  } = options;
+
+  const recommendations: string[] = [];
+  let contextQuality: "excellent" | "good" | "fair" | "poor" = "good";
+
+  // 1. Get project context (with branch-aware caching)
+  const projectContext = await getProjectContext(projectPath, {
+    language, // Use the requested language without overriding
+    forceRebuild: false,
+  });
+
+  // 2. Get git lineage context (if available)
+  let lineageContext: LineageContext | null = null;
+  try {
+    lineageContext = await contextLineage.getLineageContext(projectPath, {
+      commitDepth: 20,
+    });
+    if (lineageContext) {
+      logger.debug(
+        `Git lineage: ${lineageContext.recentlyModifiedFiles.length} recent files, ${lineageContext.hotspotFiles.length} hotspots`,
+      );
+    }
+  } catch (error) {
+    logger.debug("Git lineage not available");
+  }
+
+  // 3. Get developer intent
+  const intent = intentTracker.getCurrentIntent();
+  if (intent.recentFiles.length > 0) {
+    logger.debug(
+      `Developer intent: ${intent.recentFiles.length} recent files, focus: ${intent.focusArea || "none"}`,
+    );
+  }
+
+  // 4. Determine if we should use smart context
+  const shouldUseSmartContext =
+    projectContext.symbolGraph &&
+    projectContext.symbolIndex.size > 100 &&
+    (imports.length > 0 || intent.recentSymbols.size > 0);
+
+  // 5. Get relevant symbols using all available context
+  let relevantSymbols: string[] = [];
+  if (shouldUseSmartContext) {
+    relevantSymbols = getRelevantSymbolsForValidation(
+      projectContext,
+      {
+        importedSymbols: imports,
+        currentFile,
+        recentFiles: [...new Set([...intent.recentFiles, ...recentlyEditedFiles])],
+        lineageContext,
+      },
+      0.3, // Min relevance score
+      200, // Max symbols
+    );
+
+    const reductionPercent = Math.round(
+      (1 - relevantSymbols.length / projectContext.symbolIndex.size) * 100,
+    );
+    logger.debug(
+      `Smart context: ${relevantSymbols.length}/${projectContext.symbolIndex.size} symbols (${reductionPercent}% reduction)`,
+    );
+
+    if (reductionPercent > 70) {
+      contextQuality = "excellent";
+    } else if (reductionPercent > 50) {
+      contextQuality = "good";
+    } else {
+      contextQuality = "fair";
+    }
+  } else {
+    contextQuality = "fair";
+    if (projectContext.symbolIndex.size > 100) {
+      recommendations.push(
+        "Consider providing imports or using sessionId for better context",
+      );
+    }
+  }
+
+  // 6. Determine if incremental validation is beneficial
+  const useIncremental = Boolean(
+    sessionId && newCode && newCode.split("\n").length > 10,
+  );
+
+  // 7. Quality assessment
+  if (!projectContext.symbolGraph) {
+    contextQuality = "poor";
+    recommendations.push("Symbol graph not available - rebuild context");
+  }
+
+  if (intent.recentFiles.length === 0 && !lineageContext) {
+    recommendations.push(
+      "No session context - provide sessionId for better results",
+    );
+  }
+
+  return {
+    projectContext,
+    lineageContext,
+    relevantSymbols,
+    useIncremental,
+    contextQuality,
+    recommendations,
+  };
+}
+
+/**
+ * Record validation event for future context
+ */
+export function recordValidationEvent(options: {
+  filePath?: string;
+  symbols: string[];
+  language: string;
+}): void {
+  const { filePath, symbols, language } = options;
+
+  if (filePath) {
+    intentTracker.recordEdit({
+      filePath,
+      timestamp: Date.now(),
+      symbols,
+      language,
+    });
+  }
+}
+
+/**
+ * Get context quality explanation
+ */
+export function explainContextQuality(
+  quality: "excellent" | "good" | "fair" | "poor",
+): string {
+  switch (quality) {
+    case "excellent":
+      return "All context features active: smart filtering (>70% reduction), git history, and session tracking";
+    case "good":
+      return "Most context features active: smart filtering (>50% reduction) with some history";
+    case "fair":
+      return "Basic context available: limited filtering or missing session data";
+    case "poor":
+      return "Minimal context: missing symbol graph or project data";
+  }
+}

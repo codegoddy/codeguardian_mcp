@@ -1,0 +1,141 @@
+/**
+ * Tests for async validation tools
+ * @format
+ */
+
+import {
+  startValidationTool,
+  getValidationStatusTool,
+  getValidationResultsTool,
+} from "../../src/tools/asyncValidation.js";
+import { registerValidationJob } from "../../src/queue/validationJob.js";
+import { jobQueue } from "../../src/queue/jobQueue.js";
+import * as path from "path";
+
+// Initialize job queue before tests
+beforeAll(() => {
+  registerValidationJob();
+});
+
+// Cleanup after all tests
+afterAll(() => {
+  jobQueue.shutdown();
+});
+
+describe("Async Validation", () => {
+  const fixtureDir = path.join(__dirname, "../fixtures/react-test");
+
+  it("should start a validation job and return job ID", async () => {
+    const result = await startValidationTool.handler({
+      projectPath: fixtureDir,
+      language: "typescript",
+    });
+
+    expect(result.content).toBeDefined();
+    expect(result.content[0].type).toBe("text");
+
+    const response = JSON.parse(result.content[0].text);
+    expect(response.success).toBe(true);
+    expect(response.jobId).toBeDefined();
+    expect(response.status).toBe("queued");
+    expect(response.jobId).toMatch(/^validation_/);
+  });
+
+  it("should check job status", async () => {
+    // Start a job
+    const startResult = await startValidationTool.handler({
+      projectPath: fixtureDir,
+      language: "typescript",
+    });
+
+    const startResponse = JSON.parse(startResult.content[0].text);
+    const jobId = startResponse.jobId;
+
+    // Check status
+    const statusResult = await getValidationStatusTool.handler({ jobId });
+    const statusResponse = JSON.parse(statusResult.content[0].text);
+
+    expect(statusResponse.success).toBe(true);
+    expect(statusResponse.exists).toBe(true);
+    expect(statusResponse.jobId).toBe(jobId);
+    expect(statusResponse.status).toBeDefined();
+    expect(["queued", "processing", "complete"]).toContain(
+      statusResponse.status,
+    );
+  });
+
+  it("should retrieve job results when complete", async () => {
+    // Start a job
+    const startResult = await startValidationTool.handler({
+      projectPath: fixtureDir,
+      language: "typescript",
+    });
+
+    const startResponse = JSON.parse(startResult.content[0].text);
+    const jobId = startResponse.jobId;
+
+    // Wait for completion (with timeout)
+    let attempts = 0;
+    const maxAttempts = 60; // 30 seconds
+    let complete = false;
+
+    while (attempts < maxAttempts && !complete) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const statusResult = await getValidationStatusTool.handler({ jobId });
+      const statusResponse = JSON.parse(statusResult.content[0].text);
+
+      if (statusResponse.status === "complete") {
+        complete = true;
+      } else if (statusResponse.status === "failed") {
+        throw new Error(`Job failed: ${statusResponse.error}`);
+      }
+
+      attempts++;
+    }
+
+    expect(complete).toBe(true);
+
+    // Get results
+    const resultsResult = await getValidationResultsTool.handler({ jobId });
+    const resultsResponse = JSON.parse(resultsResult.content[0].text);
+
+    expect(resultsResponse.success).toBe(true);
+    expect(resultsResponse.exists).toBe(true);
+    expect(resultsResponse.status).toBe("complete");
+    expect(resultsResponse.result).toBeDefined();
+    expect(resultsResponse.result.validated).toBe(true);
+    expect(resultsResponse.result.stats).toBeDefined();
+  }, 60000); // 60 second timeout
+
+  it("should handle non-existent job ID", async () => {
+    const statusResult = await getValidationStatusTool.handler({
+      jobId: "validation_nonexistent",
+    });
+
+    const statusResponse = JSON.parse(statusResult.content[0].text);
+    expect(statusResponse.success).toBe(false);
+    expect(statusResponse.exists).toBe(false);
+  });
+
+  it("should not return results for incomplete job", async () => {
+    // Start a job
+    const startResult = await startValidationTool.handler({
+      projectPath: fixtureDir,
+      language: "typescript",
+    });
+
+    const startResponse = JSON.parse(startResult.content[0].text);
+    const jobId = startResponse.jobId;
+
+    // Try to get results immediately (should fail)
+    const resultsResult = await getValidationResultsTool.handler({ jobId });
+    const resultsResponse = JSON.parse(resultsResult.content[0].text);
+
+    // Should either be queued or processing, not complete
+    if (resultsResponse.status !== "complete") {
+      expect(resultsResponse.success).toBe(false);
+      expect(["queued", "processing"]).toContain(resultsResponse.status);
+    }
+  });
+});

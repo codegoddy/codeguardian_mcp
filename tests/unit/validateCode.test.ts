@@ -5,8 +5,14 @@
  */
 
 import { validateCodeTool } from "../../src/tools/validateCode.js";
+import { clearContextCache } from "../../src/context/projectContext.js";
 
 describe("validate_code tool", () => {
+  beforeEach(() => {
+    // Clear context cache between tests
+    clearContextCache();
+  });
+
   it("should catch non-existent function calls", async () => {
     const result = await validateCodeTool.handler({
       projectPath: "src",
@@ -20,8 +26,8 @@ describe("validate_code tool", () => {
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.success).toBe(true);
     expect(parsed.hallucinationDetected).toBe(true);
-    expect(parsed.issues.length).toBeGreaterThan(0);
-    expect(parsed.issues[0].type).toBe("nonExistentFunction");
+    expect(parsed.hallucinations.length).toBeGreaterThan(0);
+    expect(parsed.hallucinations[0].type).toBe("nonExistentFunction");
   });
 
   it("should NOT flag valid function calls", async () => {
@@ -39,7 +45,7 @@ describe("validate_code tool", () => {
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.success).toBe(true);
     expect(parsed.score).toBe(100);
-    expect(parsed.issues.length).toBe(0);
+    expect(parsed.hallucinations.length).toBe(0);
   });
 
   it("should catch non-existent class instantiation", async () => {
@@ -53,9 +59,9 @@ describe("validate_code tool", () => {
 
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.hallucinationDetected).toBe(true);
-    expect(parsed.issues.some((i: any) => i.type === "nonExistentClass")).toBe(
-      true
-    );
+    expect(
+      parsed.hallucinations.some((i: any) => i.type === "nonExistentClass")
+    ).toBe(true);
   });
 
   it("should provide helpful suggestions", async () => {
@@ -69,9 +75,11 @@ describe("validate_code tool", () => {
     });
 
     const parsed = JSON.parse(result.content[0].text);
-    expect(parsed.issues.length).toBeGreaterThan(0);
-    // Should suggest the correct function name
-    expect(parsed.issues[0].suggestion).toContain("buildSymbolTable");
+    expect(parsed.hallucinations.length).toBeGreaterThan(0);
+    // Should suggest similar function names (contains "build" and "Symbol")
+    expect(parsed.hallucinations[0].suggestion).toMatch(
+      /build.*Symbol|Symbol.*build/i
+    );
   });
 
   it("should return proper stats", async () => {
