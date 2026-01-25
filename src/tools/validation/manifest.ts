@@ -385,13 +385,60 @@ export async function loadManifestDependencies(
 
 /**
  * Load dependencies from package.json
+ * Searches up the directory tree if not found in projectPath
  */
 export async function loadPackageJson(
   projectPath: string,
   result: ManifestDependencies,
 ): Promise<void> {
   try {
-    const pkgPath = path.join(projectPath, "package.json");
+    // Try to find package.json starting at projectPath and going up
+    let currentPath = projectPath;
+    let pkgPath = path.join(currentPath, "package.json");
+    let found = false;
+    let depth = 0;
+    const MAX_DEPTH = 5; // Don't traverse too far
+
+    while (depth < MAX_DEPTH) {
+      try {
+        await fs.access(pkgPath);
+        found = true;
+        break;
+      } catch {
+        // Not found, go up
+        const parent = path.dirname(currentPath);
+        if (parent === currentPath) break; // Reached root
+        currentPath = parent;
+        pkgPath = path.join(currentPath, "package.json");
+        depth++;
+      }
+    }
+
+    // Also try to find pnpm-workspace.yaml or lerna.json to identify monorepo root
+    // This helps in finding dependencies that might be hoisted or in the root
+    if (depth < MAX_DEPTH) {
+      try {
+        const pnpmWorkspace = path.join(currentPath, "pnpm-workspace.yaml");
+        await fs.access(pnpmWorkspace);
+        logger.debug(`Found pnpm-workspace.yaml at ${currentPath}`);
+        // If we found a workspace, we should probably also look at the root package.json
+        // if we haven't already (though the loop above likely found it)
+      } catch {
+        try {
+          const lernaJson = path.join(currentPath, "lerna.json");
+          await fs.access(lernaJson);
+          logger.debug(`Found lerna.json at ${currentPath}`);
+        } catch {
+          // No workspace config found
+        }
+      }
+    }
+
+    if (!found) {
+      logger.debug(`No package.json found at or above ${projectPath}`);
+      return;
+    }
+
     const content = await fs.readFile(pkgPath, "utf-8");
     const pkg = JSON.parse(content);
 
@@ -413,6 +460,23 @@ export async function loadPackageJson(
       for (const dep of Object.keys(pkg.devDependencies)) {
         result.devDependencies.add(dep);
         result.all.add(dep);
+        
+        // SUPPORT @types PACKAGES:
+        // If "import foo" is used, but only "@types/foo" is installed, we should count it as valid.
+        // This happens often in TS projects where the runtime might be global or implied.
+        if (dep.startsWith("@types/")) {
+          const realPackage = dep.replace("@types/", "");
+          result.all.add(realPackage);
+          
+          // Handle scoped types: @types/babel__core -> @babel/core
+          if (realPackage.includes("__")) {
+             const [scope, name] = realPackage.split("__");
+             if (scope && name) {
+               result.all.add(`@${scope}/${name}`);
+             }
+          }
+        }
+
         if (dep.startsWith("@")) {
           const scope = dep.split("/")[0];
           result.all.add(scope);
@@ -427,9 +491,9 @@ export async function loadPackageJson(
       }
     }
 
-    logger.debug(`Loaded ${result.all.size} packages from package.json`);
+    logger.debug(`Loaded ${result.all.size} packages from package.json at ${pkgPath}`);
   } catch (err) {
-    logger.debug(`No package.json found at ${projectPath}`);
+    logger.debug(`Error loading package.json: ${err}`);
   }
 }
 

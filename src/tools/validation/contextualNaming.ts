@@ -200,7 +200,7 @@ const HTTP_PATTERNS: NamingPattern[] = [
  */
 const ERROR_PATTERNS: NamingPattern[] = [
   {
-    variablePattern: /^(err|error|exception|ex)$/i,
+    variablePattern: /^(e|err|error|exception|ex)$/i,
     allowedMembers: new Set([
       // Standard Error properties
       "message",
@@ -224,7 +224,11 @@ const ERROR_PATTERNS: NamingPattern[] = [
       "isAxiosError",
       "toJSON",
       "toString",
+      // Python Exception methods/properties
+      "with_traceback",
+      "args",
     ]),
+
     description: "Error/exception object (err, error, exception, ex)",
     context: "errorHandler",
   },
@@ -307,6 +311,546 @@ const CONTEXT_PATTERNS: NamingPattern[] = [
 ];
 
 /**
+ * Date/Time patterns - recognizes temporal variable names
+ * This is part of the "Common Sense Standard Library" - Vibe coders use intuitive names!
+ */
+const DATE_PATTERNS: NamingPattern[] = [
+  {
+    // Match: today, tomorrow, yesterday, date, startDate, endDate, createdAt, updatedAt, etc.
+    variablePattern: /^(today|tomorrow|yesterday|now|date|datetime|time|timestamp|(start|end|created|updated|deleted|modified|expires?|birth|due)(Date|Time|At)?|(date|time)(Start|End|From|To|Of|At)?)$/i,
+    allowedMembers: new Set([
+      // Date instance methods - the core ones that caused false positives!
+      "getDate",
+      "getDay",
+      "getFullYear",
+      "getHours",
+      "getMilliseconds",
+      "getMinutes",
+      "getMonth",
+      "getSeconds",
+      "getTime",
+      "getTimezoneOffset",
+      "getUTCDate",
+      "getUTCDay",
+      "getUTCFullYear",
+      "getUTCHours",
+      "getUTCMilliseconds",
+      "getUTCMinutes",
+      "getUTCMonth",
+      "getUTCSeconds",
+      "getYear",
+      "setDate",
+      "setFullYear",
+      "setHours",
+      "setMilliseconds",
+      "setMinutes",
+      "setMonth",
+      "setSeconds",
+      "setTime",
+      "setUTCDate",
+      "setUTCFullYear",
+      "setUTCHours",
+      "setUTCMilliseconds",
+      "setUTCMinutes",
+      "setUTCMonth",
+      "setUTCSeconds",
+      "setYear",
+      "toDateString",
+      "toISOString",
+      "toJSON",
+      "toLocaleDateString",
+      "toLocaleString",
+      "toLocaleTimeString",
+      "toString",
+      "toTimeString",
+      "toUTCString",
+      "valueOf",
+      // Dayjs/Moment.js methods (common in vibe coding)
+      "format",
+      "add",
+      "subtract",
+      "startOf",
+      "endOf",
+      "diff",
+      "isBefore",
+      "isAfter",
+      "isSame",
+      "isValid",
+      "clone",
+      "unix",
+      "utc",
+      "local",
+      "locale",
+      "year",
+      "month",
+      "day",
+      "hour",
+      "minute",
+      "second",
+      "millisecond",
+      "week",
+      "weekday",
+      "dayOfYear",
+      "quarter",
+      "daysInMonth",
+      "toDate",
+      "toArray",
+      "toObject",
+      // Python Date/Time methods
+      "strftime",
+      "strptime",
+      "isoformat",
+      "replace",
+      "astimezone",
+      "timestamp",
+      "weekday",
+      "isoweekday",
+      "now",
+      "today",
+      "fromtimestamp",
+      "utcfromtimestamp",
+      "combine",
+      "date",
+      "time",
+      "timetz",
+      "tzname",
+      "utcoffset",
+      "dst",
+      "fromisoformat",
+    ]),
+    description: "Date/time variable (today, tomorrow, date, createdAt, etc.)",
+    context: "dateTime",
+  },
+];
+
+/**
+ * Array patterns - recognizes collection/array variable names
+ * This is part of the "Common Sense Standard Library"
+ * Variables named "items", "results", "list", etc. are almost always arrays!
+ */
+const ARRAY_PATTERNS: NamingPattern[] = [
+  {
+    // Match: items, results, list, data, users, todos, products, entries, records, rows, etc.
+    // Also catches plurals like "users", "todos", "products" which are nearly always arrays
+    variablePattern: /^(items?|results?|list|data|users?|todos?|products?|entries|records?|rows?|elements?|values?|keys?|options?|choices?|selections?|children|nodes?|files?|images?|documents?|messages?|comments?|posts?|articles?|orders?|transactions?|events?|tasks?|projects?|members?|participants?|attendees?|friends?|followers?|tags?|categories?|groups?|teams?|roles?|permissions?|settings?|preferences?|logs?|errors?|warnings?|notifications?|alerts?|updates?|changes?|diffs?|patches?|versions?|snapshots?|backups?|exports?|imports?|uploads?|downloads?|responses?|requests?|queries?|mutations?|subscriptions?|hooks?|callbacks?|handlers?|listeners?|observers?|watchers?|middlewares?|plugins?|extensions?|modules?|packages?|dependencies?|devDependencies?|peerDependencies?|scripts?|commands?|args?|argv|params?|arguments?|props?|attributes?|properties?|fields?|columns?|headers?|footers?|sections?|pages?|slides?|frames?|layers?|components?|widgets?|controls?|inputs?|outputs?|streams?|buffers?|chunks?|batches?|collections?|sets?|maps?|pairs?|tuples?|matches?|hits?|scores?|points?|coordinates?|positions?|locations?|addresses?|routes?|paths?|urls?|links?|refs?|references?|citations?|sources?|destinations?|targets?|origins?|endpoints?|apis?|services?|resources?|assets?|media|contents?|bodies?|payloads?|fragments?|segments?|parts?|pieces?|slices?|ranges?|intervals?|periods?|durations?|spans?|gaps?|spaces?|slots?|holes?|vacancies?|availabilities?|stocks?|inventories?|supplies?|demands?|offers?|bids?|asks?|prices?|costs?|fees?|taxes?|discounts?|coupons?|vouchers?|credits?|debits?|balances?|totals?|sums?|counts?|amounts?|quantities?|numbers?|digits?|integers?|floats?|decimals?|ratios?|percentages?|rates?|speeds?|velocities?|accelerations?|forces?|weights?|masses?|volumes?|areas?|lengths?|widths?|heights?|depths?|radii?|diameters?|circumferences?|perimeters?|angles?|degrees?|radians?|gradients?|slopes?|curves?|arcs?|lines?|rays?|vectors?|matrices?|tensors?|arrays?|queues?|stacks?|heaps?|trees?|graphs?|networks?|meshes?|grids?|tables?|charts?|plots?|diagrams?|drawings?|shapes?|figures?|symbols?|icons?|emojis?|avatars?|thumbnails?|previews?|galleries?|albums?|playlists?|tracks?|songs?|videos?|movies?|shows?|episodes?|seasons?|series?|franchises?|brands?|labels?|names?|titles?|descriptions?|summaries?|abstracts?|excerpts?|quotes?|captions?|subtitles?|transcripts?|translations?|languages?|locales?|currencies?|countries?|regions?|states?|cities?|towns?|villages?|neighborhoods?|districts?|zones?|areas?|sectors?|domains?|realms?|worlds?|universes?|dimensions?|levels?|tiers?|grades?|ranks?|ratings?|reviews?|feedback|testimonials?|recommendations?)$/i,
+    allowedMembers: new Set([
+      // Array instance methods - the most common ones
+      "push",
+      "pop",
+      "shift",
+      "unshift",
+      "splice",
+      "slice",
+      "concat",
+      "join",
+      "reverse",
+      "sort",
+      "filter",
+      "map",
+      "reduce",
+      "reduceRight",
+      "forEach",
+      "every",
+      "some",
+      "find",
+      "findIndex",
+      "findLast",
+      "findLastIndex",
+      "indexOf",
+      "lastIndexOf",
+      "includes",
+      "flat",
+      "flatMap",
+      "fill",
+      "copyWithin",
+      "entries",
+      "keys",
+      "values",
+      "at",
+      "with",
+      "toReversed",
+      "toSorted",
+      "toSpliced",
+      // Python List methods
+      "append",
+      "extend",
+      "insert",
+      "remove",
+      "count",
+      "index",
+      "clear",
+      "copy",
+      // Array properties
+      "length",
+      // Common array-like operations (lodash, underscore, etc.)
+      "first",
+      "last",
+      "head",
+      "tail",
+      "take",
+      "drop",
+      "chunk",
+      "compact",
+      "uniq",
+      "unique",
+      "union",
+      "intersection",
+      "difference",
+      "without",
+      "zip",
+      "unzip",
+      "flatten",
+      "groupBy",
+      "sortBy",
+      "orderBy",
+      "countBy",
+      "partition",
+      "sample",
+      "shuffle",
+      "size",
+      "isEmpty",
+      "isNotEmpty",
+      // Iteration (iterator protocol)
+      "next",
+      "done",
+      "value",
+      // Immutable.js / Immer patterns
+      "toJS",
+      "toArray",
+      "toList",
+      "toSet",
+      "toMap",
+      "get",
+      "set",
+      "update",
+      "delete",
+      "has",
+      "clear",
+      "merge",
+    ]),
+    description: "Array/collection variable (items, results, list, data, etc.)",
+    context: "collection",
+  },
+];
+
+/**
+ * Promise/Async patterns - recognizes promise and async result variables
+ * Variables like "promise", "deferred", "pending" are almost always Promises
+ */
+const PROMISE_PATTERNS: NamingPattern[] = [
+  {
+    variablePattern: /^(promise|promises?|deferred|pending|awaited|async|future|futures?)$/i,
+    allowedMembers: new Set([
+      // Promise instance methods
+      "then",
+      "catch",
+      "finally",
+      // Promise properties
+      "resolve",
+      "reject",
+      // Bluebird/Q extensions
+      "spread",
+      "tap",
+      "delay",
+      "timeout",
+      "cancel",
+      "isFulfilled",
+      "isRejected",
+      "isPending",
+      "isCancelled",
+      "value",
+      "reason",
+    ]),
+    description: "Promise/async variable (promise, deferred, pending, etc.)",
+    context: "async",
+  },
+];
+
+/**
+ * Map/Object patterns - recognizes dictionary/map variable names
+ */
+const MAP_PATTERNS: NamingPattern[] = [
+  {
+    variablePattern: /^(map|maps?|dictionary|dict|dicts?|hash|hashes?|cache|caches?|store|stores?|registry|registries?|lookup|lookups?|index|indexes?|indices?|data|config|configuration|payload|body|state|props|context|options|settings?|preferences?)$/i,
+    allowedMembers: new Set([
+      // Map instance methods
+      "get",
+      "set",
+      "has",
+      "delete",
+      "clear",
+      "forEach",
+      "entries",
+      "keys",
+      "values",
+      "size",
+      // Python Dict methods
+      "items",
+      "update",
+      "pop",
+      "popitem",
+      "setdefault",
+      "copy",
+      "fromkeys",
+      // WeakMap methods
+      "has",
+      // Object methods commonly used on maps
+      "assign",
+      "freeze",
+      "seal",
+      "isFrozen",
+      "isSealed",
+      // Common patterns
+      "toJSON",
+      "toString",
+      "valueOf",
+    ]),
+    description: "Map/dictionary variable (map, cache, store, lookup, etc.)",
+    context: "map",
+  },
+];
+
+/**
+ * Set patterns - recognizes set/collection variable names
+ */
+const SET_PATTERNS: NamingPattern[] = [
+  {
+    variablePattern: /^(set|sets?|uniqueItems?|distinctValues?|visited|seen|processed|excluded|included|allowed|blocked|whitelist|blacklist|allowlist|denylist|permissions?Set|roleSet|tagSet|categorySet)$/i,
+    allowedMembers: new Set([
+      // Set instance methods
+      "add",
+      "delete",
+      "has",
+      "clear",
+      "forEach",
+      "entries",
+      "keys",
+      "values",
+      "size",
+      // Python Set methods
+      "remove",
+      "discard",
+      "pop",
+      "copy",
+      "update",
+      "union",
+      "intersection",
+      "difference",
+      "symmetric_difference",
+      "isdisjoint",
+      "issubset",
+      "issuperset",
+      // Set operations (proposed, polyfilled)
+      "union",
+      "intersection",
+      "difference",
+      "symmetricDifference",
+      "isSubsetOf",
+      "isSupersetOf",
+      "isDisjointFrom",
+    ]),
+    description: "Set variable (set, visited, seen, whitelist, etc.)",
+    context: "set",
+  },
+];
+
+/**
+ * String patterns - recognizes string variable names that hint at string type
+ */
+const STRING_PATTERNS: NamingPattern[] = [
+  {
+    variablePattern: /^(str|string|text|content|message|msg|label|title|name|description|desc|body|subject|summary|excerpt|caption|alt|placeholder|hint|tooltip|prefix|suffix|delimiter|separator|pattern|regex|regexp|template|format|encoded|decoded|escaped|sanitized|trimmed|lowercased|uppercased|capitalized|slug|token|hash|digest|signature|checksum|uuid|guid|id|key|code|password|secret|salt|nonce|iv)$/i,
+    allowedMembers: new Set([
+      // String instance methods
+      "charAt",
+      "charCodeAt",
+      "codePointAt",
+      "concat",
+      "endsWith",
+      "includes",
+      "indexOf",
+      "lastIndexOf",
+      "localeCompare",
+      "match",
+      "matchAll",
+      "normalize",
+      "padEnd",
+      "padStart",
+      "repeat",
+      "replace",
+      "replaceAll",
+      "search",
+      "slice",
+      "split",
+      "startsWith",
+      "substring",
+      "toLocaleLowerCase",
+      "toLocaleUpperCase",
+      "toLowerCase",
+      "toUpperCase",
+      "toString",
+      "trim",
+      "trimEnd",
+      "trimStart",
+      "trimLeft",
+      "trimRight",
+      "valueOf",
+      "at",
+      // Python String methods
+      "capitalize",
+      "casefold",
+      "center",
+      "count",
+      "encode",
+      "endswith",
+      "expandtabs",
+      "find",
+      "format",
+      "format_map",
+      "index",
+      "isalnum",
+      "isalpha",
+      "isascii",
+      "isdecimal",
+      "isdigit",
+      "isidentifier",
+      "islower",
+      "isnumeric",
+      "isprintable",
+      "isspace",
+      "istitle",
+      "isupper",
+      "join",
+      "ljust",
+      "lower",
+      "lstrip",
+      "maketrans",
+      "partition",
+      "removeprefix",
+      "removesuffix",
+      "rfind",
+      "rindex",
+      "rjust",
+      "rpartition",
+      "rsplit",
+      "rstrip",
+      "splitlines",
+      "startswith",
+      "strip",
+      "swapcase",
+      "title",
+      "translate",
+      "upper",
+      "zfill",
+      // String properties
+      "length",
+      // Common string operations
+      "toJSON",
+    ]),
+    description: "String variable (str, text, message, label, etc.)",
+    context: "string",
+  },
+];
+
+/**
+ * Number patterns - recognizes numeric variable names
+ */
+const NUMBER_PATTERNS: NamingPattern[] = [
+  {
+    variablePattern: /^(count|total|sum|amount|score|percent|percentage|index|offset|delta|ratio|progress|value|length|width|height|depth|radius|diameter|size|capacity|volume|mass|weight|price|cost|fee|tax|discount|balance|credit|debit)$/i,
+    allowedMembers: new Set([
+      "toFixed",
+      "toPrecision",
+      "toExponential",
+      "toString",
+      "valueOf",
+      "toLocaleString",
+    ]),
+    description: "Numeric variable (count, total, percent, etc.)",
+    context: "number",
+  },
+];
+
+/**
+ * React Ref patterns - recognizes ref objects
+ */
+const REF_PATTERNS: NamingPattern[] = [
+  {
+    variablePattern: /^(ref|.+Ref)$/i, 
+    allowedMembers: new Set([
+      "current",
+    ]),
+    description: "React Ref object (ref, inputRef, etc.)",
+    context: "reactRef",
+  },
+];
+
+/**
+ * Router patterns - recognizes Next.js/React Router objects
+ */
+const ROUTER_PATTERNS: NamingPattern[] = [
+  {
+    variablePattern: /^(router|navigation)$/i,
+    allowedMembers: new Set([
+      "push",
+      "replace",
+      "back",
+      "forward",
+      "refresh",
+      "prefetch",
+      "replace",
+      "go",
+      "createHref",
+      "events",
+    ]),
+    description: "Router object (router, navigation)",
+    context: "router",
+  },
+];
+
+/**
+ * Environment patterns - recognizes env objects
+ */
+const ENV_PATTERNS: NamingPattern[] = [
+  {
+    variablePattern: /^(env|environment|process\.env|import\.meta\.env)$/i,
+    allowedMembers: new Set([
+      "NODE_ENV",
+      "VERCEL",
+      "NEXT_PUBLIC_",
+      "VITE_",
+    ]),
+    description: "Environment variables",
+    context: "env",
+  },
+];
+
+/**
+ * Form patterns - recognizes form handling objects (React Hook Form, Formik)
+ */
+const FORM_PATTERNS: NamingPattern[] = [
+  {
+    variablePattern: /^(form|methods?|useForm)$/i,
+    allowedMembers: new Set([
+      "register",
+      "control",
+      "handleSubmit",
+      "watch",
+      "getValues",
+      "setValue",
+      "reset",
+      "trigger",
+      "setError",
+      "clearErrors",
+      "formState",
+      "getFieldState",
+    ]),
+    description: "Form handler object",
+    context: "form",
+  },
+];
+
+/**
  * All built-in patterns combined
  */
 const ALL_PATTERNS: NamingPattern[] = [
@@ -314,6 +858,17 @@ const ALL_PATTERNS: NamingPattern[] = [
   ...HTTP_PATTERNS,
   ...ERROR_PATTERNS,
   ...CONTEXT_PATTERNS,
+  ...DATE_PATTERNS,
+  ...ARRAY_PATTERNS,
+  ...PROMISE_PATTERNS,
+  ...MAP_PATTERNS,
+  ...SET_PATTERNS,
+  ...STRING_PATTERNS,
+  ...NUMBER_PATTERNS,
+  ...REF_PATTERNS,
+  ...ROUTER_PATTERNS,
+  ...ENV_PATTERNS,
+  ...FORM_PATTERNS,
 ];
 
 // ============================================================================
@@ -464,5 +1019,12 @@ export const BUILTIN_PATTERNS = {
   HTTP_PATTERNS,
   ERROR_PATTERNS,
   CONTEXT_PATTERNS,
+  // "Common Sense" Standard Library patterns
+  DATE_PATTERNS,
+  ARRAY_PATTERNS,
+  PROMISE_PATTERNS,
+  MAP_PATTERNS,
+  SET_PATTERNS,
+  STRING_PATTERNS,
   ALL_PATTERNS,
 };

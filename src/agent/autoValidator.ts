@@ -267,11 +267,17 @@ export class AutoValidator {
       const imports = extractImportsAST(content, this.language);
       const usedSymbols = extractUsagesAST(content, this.language, imports);
       const symbolTable = buildSymbolTable(context, orchestration.relevantSymbols);
+      
+      // Extract type references for unused import detection
+      // This is essential for TypeScript where imports might only be used as types
+      const typeReferences = this.language === "typescript" ? 
+        (await import("../tools/validation/extractors/index.js")).extractTypeReferencesAST(content, this.language) : 
+        [];
 
       // Tier 0: Check manifest dependencies (if manifest loaded)
       let manifestIssues: any[] = [];
       if (this.manifest) {
-          manifestIssues = validateManifest(imports, this.manifest, content);
+          manifestIssues = await validateManifest(imports, this.manifest, content, this.language, filePath);
       }
 
       // Tier 1: Validate symbols (hallucination detection)
@@ -284,7 +290,9 @@ export class AutoValidator {
         imports,
         this.pythonExports,
         context,
-        filePath
+        filePath,
+        undefined, // missingPackages (calculated internally)
+        typeReferences
       );
 
       // Validate usage patterns (architectural consistency)

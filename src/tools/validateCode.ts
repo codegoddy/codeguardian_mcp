@@ -15,6 +15,7 @@
 
 import { ToolDefinition } from "../types/tools.js";
 import { logger } from "../utils/logger.js";
+import { validationReportStore } from "../resources/validationReportStore.js";
 import { getRelevantSymbolsForValidation } from "../analyzers/relevanceScorer.js";
 import { incrementalValidation } from "./incrementalValidation.js";
 import {
@@ -41,7 +42,7 @@ import {
   validateUsagePatterns,
   getLineFromCode,
 } from "./validation/validation.js";
-import { extractSymbolsAST } from "./validation/extractors/index.js";
+import { extractSymbolsAST, extractTypeReferencesAST } from "./validation/extractors/index.js";
 import { impactAnalyzer } from "../analyzers/impactAnalyzer.js";
 import { usagePatternAnalyzer } from "../analyzers/usagePatterns.js";
 import { detectDeadCode } from "./validation/deadCode.js";
@@ -195,7 +196,7 @@ export const validateCodeTool: ToolDefinition = {
 
       if (newCode) {
         // Tier 0: Check manifest dependencies
-        const manifestIssues = validateManifest(imports, manifest, newCode);
+        const manifestIssues = await validateManifest(imports, manifest, newCode, language);
         issues.push(...manifestIssues);
 
         // Tier 1: Validate symbols (hallucinations)
@@ -210,6 +211,10 @@ export const validateCodeTool: ToolDefinition = {
             }
           }
 
+          // Extract type references for unused import detection
+          // This is essential for TypeScript where imports might only be used as types
+          const typeReferences = extractTypeReferencesAST(newCode, language);
+
           const symbolIssues = validateSymbols(
             usedSymbols,
             symbolTable,
@@ -222,7 +227,8 @@ export const validateCodeTool: ToolDefinition = {
             // Don't pass a fake file path - let validation fall back to global symbol lookup
             // for relative imports.
             "",
-            missingPackages
+            missingPackages,
+            typeReferences
           );
         issues.push(...symbolIssues);
 
@@ -256,6 +262,7 @@ export const validateCodeTool: ToolDefinition = {
               issues.push({
                 type: "architecturalDeviation",
                 severity: "high",
+                file: "new_code_validation", // Virtual file for inline code validation
                 message: `Modifying '${sym.name}' has a HIGH project-wide impact affecting ${blast.affectedFiles.length} files.`,
                 line: sym.line,
                 code: getLineFromCode(newCode, sym.line),
@@ -308,6 +315,58 @@ export const validateCodeTool: ToolDefinition = {
         );
       }
 
+      const totalIssues = issues.length + deadCodeIssues.length;
+      const isLargeResult = totalIssues > 50;
+      
+      // Generate a unique ID for this validation run to store it in resources
+      const validationId = `sync_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      
+      // Store in report store
+      validationReportStore.store(validationId, projectPath, {
+        summary: generateStructuredExplanation(issues, deadCodeIssues), // Use as summary text
+        stats: {
+          filesScanned: projectContext.totalFiles,
+          symbolsInProject: projectContext.symbolIndex.size,
+          hallucinationsFound: issues.length,
+          deadCodeFound: deadCodeIssues.length,
+          analysisTime: `${elapsed}ms`,
+        },
+        hallucinations: issues,
+        deadCode: deadCodeIssues,
+        score,
+        recommendation,
+      });
+
+      const reportUri = validationReportStore.getReportUri(validationId);
+
+      // If the result is large, return a compact response with the URI
+      if (isLargeResult) {
+        return formatResponse({
+          success: true,
+          validated: true,
+          score,
+          hallucinationDetected: issues.length > 0,
+          deadCodeDetected: deadCodeIssues.length > 0,
+          reportUri,
+          message: `Validation found ${totalIssues} issues. Results are stored as an MCP Resource to prevent context overflow.`,
+          recommendation,
+          stats: {
+            hallucinationsFound: issues.length,
+            deadCodeFound: deadCodeIssues.length,
+            analysisTime: `${elapsed}ms`,
+          },
+          resourceAccess: {
+            summaryUri: reportUri,
+            hallucinationsUri: `${reportUri}/hallucinations/0`,
+            deadCodeUri: `${reportUri}/dead-code/0`,
+            bySeverityUri: `${reportUri}/by-severity/critical`,
+            byTypeUri: `${reportUri}/by-type/dependencyHallucination`,
+            tip: "Use 'read_resource' to fetch chunks of issues from the URIs above. You can also filter by file: .../by-file/{filePath}",
+          },
+        });
+      }
+
+      // Small results can still be returned inline, but we also include the URI
       return formatResponse({
         success: true,
         validated: true,
@@ -316,6 +375,7 @@ export const validateCodeTool: ToolDefinition = {
         deadCodeDetected: deadCodeIssues.length > 0,
         hallucinations: issues,
         deadCode: deadCodeIssues,
+        reportUri,
         recommendation,
         structuredExplanation: generateStructuredExplanation(
           issues,

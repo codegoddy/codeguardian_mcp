@@ -73,12 +73,20 @@ async function main() {
     
     // Stop all active guardians
     try {
-      await import("./agent/agentTools.js").then((m) => 
-        m.stopGuardianTool.handler({ agent_name: "" })
-      );
+      const { stopGuardianTool } = await import("./agent/agentTools.js");
+      await stopGuardianTool.handler({ agent_name: "" });
       logger.info("All guardians stopped.");
     } catch (err) {
       logger.error("Error stopping guardians during shutdown:", err);
+    }
+    
+    // Shutdown report store
+    try {
+      const { validationReportStore } = await import("./resources/validationReportStore.js");
+      validationReportStore.shutdown();
+      logger.info("Validation report store cleaned up.");
+    } catch (err) {
+      logger.error("Error cleaning up report store:", err);
     }
 
     await server.close();

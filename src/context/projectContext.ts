@@ -818,6 +818,25 @@ async function updateFileInContext(
   context.totalFiles = context.files.size;
 }
 
+/**
+ * Helper to detect common source root directories in a project.
+ * This makes the tool smarter about where to look for code.
+ */
+function detectRootSourceDirs(projectPath: string, language: string): string[] {
+  const commonDirs = language === "python" ? ["app", "src", "server", "core", "api"] : ["src", "app", "pages", "lib", "components", "actions", "services"];
+  const found: string[] = [];
+
+  for (const dir of commonDirs) {
+    const fullPath = path.join(projectPath, dir);
+    if (fsSync.existsSync(fullPath)) {
+      found.push(dir);
+    }
+  }
+
+  // If no common dirs found, return the root
+  return found.length > 0 ? found : ["."];
+}
+
 async function findProjectFiles(
   projectPath: string,
   language: string,
@@ -833,7 +852,17 @@ async function findProjectFiles(
   };
 
   const exts = extensions[language] || extensions.all;
-  const patterns = exts.map((ext) => `${projectPath}/**/*${ext}`);
+  
+  // Intelligence: If running on project root, try to narrow down to common source dirs
+  const sourceDirs = detectRootSourceDirs(projectPath, language);
+  const patterns: string[] = [];
+  
+  for (const dir of sourceDirs) {
+    for (const ext of exts) {
+      // Use standard glob pattern from detected side dirs
+      patterns.push(path.join(projectPath, dir, `**/*${ext}`));
+    }
+  }
 
   const excludes = [
     "**/node_modules/**",

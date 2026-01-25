@@ -98,10 +98,12 @@ export interface ValidationIssue {
     | "dependencyHallucination"
     | "undefinedVariable"
     | "unusedImport"
-    | "architecturalDeviation";
+    | "architecturalDeviation"
+    | "missingDependency";
   severity: IssueSeverity;
   message: string;
   line: number;
+  file: string;
   code: string;
   suggestion: string;
   confidence?: number; // 0-100, how confident we are this is an issue

@@ -34,6 +34,7 @@ import type {
 } from "../tools/validation/types.js";
 import { glob } from "glob";
 import * as fs from "fs/promises";
+import * as path from "path";
 
 // ============================================================================
 // Types
@@ -335,7 +336,7 @@ export async function processBatch(
       const content = await fs.readFile(filePath, "utf-8");
 
       const imports = extractImportsAST(content, language);
-      const manifestIssues = validateManifest(imports, manifest, content);
+      const manifestIssues = await validateManifest(imports, manifest, content, language, filePath);
       batchIssues.push(...manifestIssues);
 
       const usages = extractUsagesAST(content, language, []);
@@ -387,7 +388,29 @@ async function getSourceFiles(
   };
 
   const exts = extensions[language] || extensions.typescript;
-  const patterns = exts.map((ext) => `${projectPath}/**/*${ext}`);
+  
+  // Intelligence: Auto-detect source roots (src, app, pages, etc.)
+  const commonDirs = language === "python" ? ["app", "src", "server"] : ["src", "app", "pages", "lib", "components"];
+  const foundDirs: string[] = [];
+  
+  for (const dir of commonDirs) {
+    const fullPath = path.join(projectPath, dir);
+    try {
+      await fs.access(fullPath);
+      foundDirs.push(dir);
+    } catch {
+      // Not found
+    }
+  }
+
+  const sourceDirs = foundDirs.length > 0 ? foundDirs : ["."];
+  const patterns: string[] = [];
+  
+  for (const dir of sourceDirs) {
+    for (const ext of exts) {
+      patterns.push(path.join(projectPath, dir, `**/*${ext}`));
+    }
+  }
 
   const excludes = [
     "**/node_modules/**",

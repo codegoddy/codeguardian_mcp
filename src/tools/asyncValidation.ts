@@ -12,6 +12,7 @@
 import { ToolDefinition } from "../types/tools.js";
 import { logger } from "../utils/logger.js";
 import { jobQueue } from "../queue/jobQueue.js";
+import { validationReportStore } from "../resources/validationReportStore.js";
 
 // ============================================================================
 // Tool 1: Start Validation
@@ -163,12 +164,41 @@ export const getValidationResultsTool: ToolDefinition = {
           type: "string",
           description: "Job ID returned from start_validation",
         },
+        fileFilter: {
+          type: "string",
+          description: "Optional: Filter results by file path (partial match)",
+        },
+        severityFilter: {
+          type: "string",
+          enum: ["critical", "high", "medium", "low", "warning"],
+          description: "Optional: Filter results by severity",
+        },
+        limit: {
+          type: "number",
+          description: "Optional: Limit number of issues returned (default: all)",
+        },
+        offset: {
+          type: "number",
+          description: "Optional: Offset for pagination (default: 0)",
+        },
+        summaryOnly: {
+          type: "boolean",
+          description: "Optional: If true, returns only summary and stats without issue lists",
+          default: false,
+        },
       },
       required: ["jobId"],
     },
   },
 
-  async handler(args: { jobId: string }) {
+  async handler(args: { 
+    jobId: string;
+    fileFilter?: string;
+    severityFilter?: string;
+    limit?: number;
+    offset?: number;
+    summaryOnly?: boolean;
+  }) {
     logger.info(`Getting results for job: ${args.jobId}`);
 
     try {
@@ -201,12 +231,116 @@ export const getValidationResultsTool: ToolDefinition = {
         });
       }
 
+      const fullResult = results.result as any;
+      if (!fullResult) {
+        return formatResponse({
+          success: true,
+          exists: true,
+          jobId: args.jobId,
+          status: results.status,
+          message: "No result data found",
+        });
+      }
+
+      // Store the report in the resource store (if not already stored)
+      if (!validationReportStore.has(args.jobId)) {
+        const job = jobQueue.getJob(args.jobId);
+        const projectPath = (job?.input as any)?.projectPath || "";
+        
+        validationReportStore.store(args.jobId, projectPath, {
+          summary: fullResult.summary,
+          stats: fullResult.stats,
+          hallucinations: fullResult.hallucinations || [],
+          deadCode: fullResult.deadCode || [],
+          score: fullResult.score,
+          recommendation: fullResult.recommendation,
+        });
+      }
+
+      const totalIssues = (fullResult.hallucinations?.length || 0) + (fullResult.deadCode?.length || 0);
+      const isLargeResult = totalIssues > 50;
+      const hasAppliedFilters = args.fileFilter || args.severityFilter || args.limit !== undefined || args.offset !== undefined;
+
+      // For large results without filters, return ONLY the URI and summary
+      // This prevents LLM context overflow
+      if (isLargeResult && !hasAppliedFilters && !args.summaryOnly) {
+        const reportUri = validationReportStore.getReportUri(args.jobId);
+        const summary = validationReportStore.getSummary(args.jobId);
+        
+        return formatResponse({
+          success: true,
+          exists: true,
+          jobId: args.jobId,
+          status: results.status,
+          // COMPACT RESPONSE: URI + Summary only
+          reportUri,
+          message: `Large result set (${totalIssues} issues). Report stored as MCP Resource.`,
+          summary: (summary as any)?.summary,
+          stats: (summary as any)?.stats,
+          score: (summary as any)?.score,
+          recommendation: (summary as any)?.recommendation,
+          totalHallucinations: (summary as any)?.totalHallucinations,
+          totalDeadCode: (summary as any)?.totalDeadCode,
+          // Instructions for the LLM/IDE to fetch chunks
+          resourceAccess: {
+            summaryUri: reportUri,
+            hallucinationsUri: `${reportUri}/hallucinations/0`,
+            deadCodeUri: `${reportUri}/dead-code/0`,
+            bySeverityUri: `${reportUri}/by-severity/critical`,
+            byTypeUri: `${reportUri}/by-type/dependencyHallucination`,
+            tip: "Use 'list_resources' to see available reports, then 'read_resource' to fetch chunks. Or use filters (fileFilter, severityFilter) with this tool for specific queries.",
+          },
+        });
+      }
+
+      // For summaryOnly, return just the summary
+      if (args.summaryOnly) {
+        return formatResponse({
+          success: true,
+          exists: true,
+          jobId: args.jobId,
+          status: results.status,
+          summary: fullResult.summary,
+          stats: fullResult.stats,
+          recommendation: fullResult.recommendation,
+          score: fullResult.score,
+          totalIssues,
+          reportUri: validationReportStore.getReportUri(args.jobId),
+        });
+      }
+
+      // For filtered/paginated requests, return the filtered data inline
+      // (This is for when the LLM specifically needs certain issues)
+      const filtered = validationReportStore.getFilteredIssues(args.jobId, {
+        type: args.severityFilter ? undefined : undefined, // Can extend later
+        severity: args.severityFilter,
+        file: args.fileFilter,
+        limit: args.limit ?? 25,
+        offset: args.offset ?? 0,
+      });
+
+      if (!filtered) {
+        return formatResponse({
+          success: false,
+          error: "Failed to retrieve filtered issues",
+        });
+      }
+
       return formatResponse({
         success: true,
         exists: true,
         jobId: args.jobId,
         status: results.status,
-        result: results.result,
+        reportUri: validationReportStore.getReportUri(args.jobId),
+        issues: filtered.issues,
+        pagination: {
+          total: filtered.total,
+          limit: args.limit ?? 25,
+          offset: args.offset ?? 0,
+          hasMore: filtered.hasMore,
+        },
+        summary: fullResult.summary,
+        score: fullResult.score,
       });
     } catch (error) {
       logger.error("Error getting job results:", error);

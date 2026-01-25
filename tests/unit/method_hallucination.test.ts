@@ -8,6 +8,12 @@
 import { validateCodeTool } from "../../src/tools/validateCode.js";
 import { clearContextCache } from "../../src/context/projectContext.js";
 
+// Mock registry lookup to simulate offline/controlled environment
+// Default to FALSE (hallucination) so 'react-super-analytics' is treated as a hallucination
+jest.mock("../../src/tools/validation/registry.js", () => ({
+  checkPackageRegistry: jest.fn().mockResolvedValue(false),
+}));
+
 describe("validate_code: method hallucinations", () => {
   beforeEach(() => {
     clearContextCache();

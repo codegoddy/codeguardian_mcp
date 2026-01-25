@@ -23,6 +23,7 @@ import type {
   ManifestDependencies,
   ASTUsage,
   ASTImport,
+  ASTTypeReference,
 } from "./types.js";
 import { resolveImport } from "../../context/projectContext.js";
 import { extractSymbolsAST } from "./extractors/index.js";
@@ -41,6 +42,7 @@ import {
   isContextuallyValid,
   getContextualReason,
 } from "./contextualNaming.js";
+import { checkPackageRegistry } from "./registry.js";
 
 // ============================================================================
 // Manifest Validation (Tier 0)
@@ -53,13 +55,16 @@ import {
  * @param imports - Array of import statements extracted from code
  * @param manifest - Manifest dependencies loaded from package files
  * @param newCode - The source code being validated (for extracting line content)
+ * @param language - Programming language (default: typescript)
  * @returns Array of validation issues for missing dependencies
  */
-export function validateManifest(
+export async function validateManifest(
   imports: ASTImport[],
   manifest: ManifestDependencies,
   newCode: string,
-): ValidationIssue[] {
+  language: string = "typescript",
+  filePath: string = "",
+): Promise<ValidationIssue[]> {
   const issues: ValidationIssue[] = [];
 
   for (const imp of imports) {
@@ -69,6 +74,7 @@ export function validateManifest(
     const pkgName = getPackageName(imp.module);
 
     // Skip Node.js built-ins
+    // Also skip "bun", "deno", etc. if we supported them, but node: is standard
     if (imp.module.startsWith("node:") || NODE_BUILTIN_MODULES.has(pkgName)) {
       continue;
     }
@@ -82,16 +88,37 @@ export function validateManifest(
         : pkgName;
 
       if (!manifest.all.has(scopedName)) {
-        issues.push({
-          type: "dependencyHallucination",
-          severity: "critical",
-          message: `Package '${imp.module}' is not in your package.json/requirements.txt`,
-          line: imp.line,
-          code: getLineFromCode(newCode, imp.line),
-          suggestion: `Run: npm install ${pkgName} (or add to requirements.txt for Python)`,
-          confidence: 95,
-          reasoning: `Checked ${manifest.all.size} packages in manifest. Package '${pkgName}' not found. This will cause import errors at runtime.`,
-        });
+        // Vibe Check: Is this a missing dependency or a hallucination?
+        const existsInRegistry = await checkPackageRegistry(pkgName, language);
+
+        if (existsInRegistry) {
+          // It's a real package, just missing from package.json
+          // Vibe-Centric Severity: Low / Missing Dependency
+          issues.push({
+            type: "missingDependency", // New type preferred, fallback to dependencyHallucination handled downstream if needed
+            severity: "low",
+            message: `Package '${pkgName}' is not installed (but exists on registry)`,
+            line: imp.line,
+            file: filePath,
+            code: getLineFromCode(newCode, imp.line),
+            suggestion: `Run: npm install ${pkgName} (or add to requirements.txt)`,
+            confidence: 100,
+            reasoning: `Package not found in manifest, but verified to exist on ${language} registry. Safe to install.`,
+          });
+        } else {
+          // It's NOT a real package - Critical Hallucination
+          issues.push({
+            type: "dependencyHallucination",
+            severity: "critical",
+            message: `Package '${imp.module}' does not exist on ${language} registry`,
+            line: imp.line,
+            file: filePath,
+            code: getLineFromCode(newCode, imp.line),
+            suggestion: `Did you mean: ${suggestSimilar(pkgName, Array.from(manifest.all)) || "unknown"}?`,
+            confidence: 99,
+            reasoning: `Package not found in manifest AND lookup failed on registry. This is likely a hallucination.`,
+          });
+        }
       }
     }
   }
@@ -298,6 +325,7 @@ export function calculateConfidence(options: {
  * @param strictMode - If true, requires explicit imports for all symbols
  * @param imports - Array of import statements (for internal import validation)
  * @param pythonExports - Map of Python module exports (for __all__ validation)
+ * @param typeReferences - Optional array of type references (for unused import detection)
  * @returns Array of validation issues
  */
 export function validateSymbols(
@@ -309,8 +337,9 @@ export function validateSymbols(
   imports: ASTImport[] = [],
   pythonExports: Map<string, Set<string>> = new Map(),
   context: ProjectContext | null = null, // Added context
-  currentFilePath: string = "", // Added current file path
+  filePath: string = "", // Added file path
   missingPackages: Set<string> = new Set(), // Added missing packages for smart validation
+  typeReferences: ASTTypeReference[] = [], // Added type references
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
@@ -382,12 +411,12 @@ export function validateSymbols(
       // Internal imports: Validate against project symbol table AND precise module resolution
 
       // Attempt module resolution if context is available AND we have a real file path
-      // Skip resolution for empty currentFilePath (code snippets without known location)
+      // Skip resolution for empty filePath (code snippets without known location)
       let resolvedFile: string | null = null;
-      if (context && currentFilePath && currentFilePath.trim()) {
+      if (context && filePath && filePath.trim()) {
         resolvedFile = resolveImport(
           imp.module,
-          currentFilePath,
+          filePath,
           Array.from(context.files.keys()),
         );
       }
@@ -429,6 +458,7 @@ export function validateSymbols(
                   severity: "critical",
                   message: `Module '${imp.module}' exists but has no export named '${name.imported}'`,
                   line: imp.line,
+                  file: filePath,
                   code: getLineFromCode(newCode, imp.line),
                   suggestion,
                   confidence: 99,
@@ -477,8 +507,8 @@ export function validateSymbols(
         // BUT: Only enforce this if we have a real file path (not empty/scratchpad)
         if (
           context &&
-          currentFilePath &&
-          currentFilePath.trim() &&
+          filePath &&
+          filePath.trim() &&
           imp.module.startsWith(".")
         ) {
           if (!resolvedFile) {
@@ -487,10 +517,11 @@ export function validateSymbols(
               severity: "critical",
               message: `Module '${imp.module}' found in import does not exist`,
               line: imp.line,
+              file: filePath,
               code: getLineFromCode(newCode, imp.line),
               suggestion: "Check the relative file path",
               confidence: 99,
-              reasoning: `Could not resolve relative import path '${imp.module}' from '${currentFilePath}'. File does not exist.`,
+              reasoning: `Could not resolve relative import path '${imp.module}' from '${filePath}'. File does not exist.`,
             });
             continue;
           }
@@ -527,6 +558,7 @@ export function validateSymbols(
               severity: "critical",
               message: `Symbol '${name.imported}' exists but is not exported in __all__ of '${imp.module}'`,
               line: imp.line,
+              file: filePath,
               code: getLineFromCode(newCode, imp.line),
               suggestion: `Add '${name.imported}' to __all__ in ${imp.module}/__init__.py, or import directly from the submodule`,
               confidence,
@@ -565,6 +597,7 @@ export function validateSymbols(
             severity: "critical",
             message: `Imported symbol '${name.imported}' does not exist in module '${imp.module}'`,
             line: imp.line,
+            file: filePath,
             code: getLineFromCode(newCode, imp.line),
             suggestion,
             confidence,
@@ -605,13 +638,30 @@ export function validateSymbols(
           continue;
         }
 
+        // SMART TEST RELAXATION:
+        // In test files, we assume unknown functions/variables are globals (describe, it, expect)
+        // or mocks, unless strict mode is explicitly forced.
+        if (isTestFile(filePath) && !strictMode) {
+          continue;
+        }
+
         const existsInProject =
           projectFunctions.has(used.name) || projectClasses.has(used.name);
 
-        const suggestion =
-          strictMode && existsInProject ?
-            `Add: import { ${used.name} } from '...'`
-          : suggestSimilar(used.name, Array.from(projectFunctions.keys()));
+        let suggestion = "";
+        if (existsInProject) {
+          const sym = projectFunctions.get(used.name) || projectClasses.get(used.name);
+          if (sym) {
+            // Calculate a descriptive suggestion including the file
+            // Note: We'd ideally calculate a relative path here, but for now, 
+            // telling the user the file name is a huge win.
+            suggestion = `Add: import { ${used.name} } from './${sym.file.replace(/\\/g, "/")}'`;
+          } else {
+            suggestion = `Add: import { ${used.name} } from '...'`;
+          }
+        } else {
+          suggestion = suggestSimilar(used.name, Array.from(projectFunctions.keys()));
+        }
 
         const similarSymbols = extractSimilarSymbols(suggestion);
         const { confidence, reasoning } = calculateConfidence({
@@ -626,10 +676,11 @@ export function validateSymbols(
           type: "nonExistentFunction",
           severity: "critical",
           message:
-            strictMode && existsInProject ?
-              `Function '${used.name}' exists in project but is not imported`
+            existsInProject ?
+              `Function '${used.name}' exists in your project but is not imported in this file`
             : `Function '${used.name}' does not exist in project`,
           line: used.line,
+          file: filePath,
           code: used.code,
           suggestion,
           confidence,
@@ -654,6 +705,7 @@ export function validateSymbols(
             severity: "high",
             message: `Function '${used.name}' expects ${func.paramCount} args, got ${used.argCount}`,
             line: used.line,
+            file: filePath,
             code: used.code,
             suggestion:
               func.params ?
@@ -678,14 +730,23 @@ export function validateSymbols(
         continue;
       }
 
+      // SMART TEST RELAXATION:
+      // Skip method checks in test files (mocks/spies often have magic methods)
+      if (isTestFile(filePath) && !strictMode) {
+        continue;
+      }
+
       // 2. Check if the object itself exists
       const objExists =
         validClasses.has(used.object!) ||
         validVariables.has(used.object!) ||
-        validFunctions.has(used.object!);
+        validFunctions.has(used.object!) ||
+        // Always trust common short variable names in non-strict mode
+        (!strictMode && ["z", "t", "db", "prisma", "ctx", "req", "res", "e", "i"].includes(used.object!));
 
       // If the object doesn't exist at all, flag it as a hallucination
       if (!objExists) {
+        // ... (existing undefinedVariable check) ...
         const suggestion = suggestSimilar(used.object!, [
           ...validClasses.keys(),
           ...validVariables.keys(),
@@ -708,6 +769,7 @@ export function validateSymbols(
           severity: "critical",
           message: `Object '${used.object}' is not defined or imported (used in ${used.object}.${used.name}())`,
           line: used.line,
+          file: filePath,
           code: used.code,
           suggestion,
           confidence,
@@ -732,22 +794,25 @@ export function validateSymbols(
           if (missingPackages.has(imp.module)) {
             shouldCheck = true; // Hallucinated import - definitely flag usages!
           } else if (!imp.isExternal) {
-            // For internal imports, only check if we have class/method info
-            // This avoids false positives on objects with dynamic methods
-            const objClass = validClasses.get(used.object!);
+            // For internal imports, only check if we have class/method/variable info
+            // This prevents skipping validation for instances (const logger = new Logger())
+            const objClass =
+              validClasses.get(used.object!) || validVariables.get(used.object!);
             if (objClass) {
-              shouldCheck = true; // We have class info, so we can validate methods
+              shouldCheck = true; // We have symbol info, so we can validate methods
             }
           }
         } else {
           // Object is not from an import (locally defined)
           // Check if the method is a known builtin - if not, validate it
           if (!isJSBuiltin(used.name)) {
+            // console.log(`DEBUG: checking local object method ${used.object}.${used.name}`);
             shouldCheck = true; // Unknown method on local object - validate it
           }
         }
       }
 
+      // console.log(`DEBUG: Method ${used.object}.${used.name} - shouldCheck: ${shouldCheck}`);
       if (!shouldCheck) continue;
 
       const method = validMethods.get(used.name);
@@ -775,6 +840,7 @@ export function validateSymbols(
             severity: "medium",
             message: `Method '${used.name}' not found on '${used.object}' (verify manually)`,
             line: used.line,
+            file: filePath,
             code: used.code,
             suggestion,
             confidence,
@@ -793,11 +859,26 @@ export function validateSymbols(
           continue;
         }
 
+        // SMART TEST RELAXATION:
+        if (isTestFile(filePath) && !strictMode) {
+          continue;
+        }
+
         const existsInProject = projectClasses.has(used.name);
-        const suggestion =
-          strictMode && existsInProject ?
-            `Add: import { ${used.name} } from '...'`
-          : suggestSimilar(used.name, Array.from(projectClasses.keys()));
+        let suggestion = "";
+        if (existsInProject) {
+          const sym = projectClasses.get(used.name);
+          if (sym) {
+            suggestion = `Add: import { ${used.name} } from './${sym.file.replace(/\\/g, "/")}'`;
+          } else {
+            suggestion = `Add: import { ${used.name} } from '...'`;
+          }
+        } else {
+          suggestion = suggestSimilar(
+            used.name,
+            Array.from(projectClasses.keys()),
+          );
+        }
 
         const similarSymbols = extractSimilarSymbols(suggestion);
         const { confidence, reasoning } = calculateConfidence({
@@ -812,10 +893,11 @@ export function validateSymbols(
           type: "nonExistentClass",
           severity: "critical",
           message:
-            strictMode && existsInProject ?
-              `Class '${used.name}' exists in project but is not imported`
+            existsInProject ?
+              `Class '${used.name}' exists in your project but is not imported in this file`
             : `Class '${used.name}' does not exist in project`,
           line: used.line,
+          file: filePath,
           code: used.code,
           suggestion,
           confidence,
@@ -837,19 +919,34 @@ export function validateSymbols(
           continue;
         }
 
+        // SMART TEST RELAXATION:
+        if (isTestFile(filePath) && !strictMode) {
+          continue;
+        }
+
         const existsInProject =
           projectFunctions.has(used.name) ||
           projectClasses.has(used.name) ||
           projectVariables.has(used.name);
 
-        const suggestion =
-          strictMode && existsInProject ?
-            `Add: import { ${used.name} } from '...'`
-          : suggestSimilar(used.name, [
-              ...projectFunctions.keys(),
-              ...projectClasses.keys(),
-              ...projectVariables.keys(),
-            ]);
+        let suggestion = "";
+        if (existsInProject) {
+          const sym =
+            projectFunctions.get(used.name) ||
+            projectClasses.get(used.name) ||
+            projectVariables.get(used.name);
+          if (sym) {
+            suggestion = `Add: import { ${used.name} } from './${sym.file.replace(/\\/g, "/")}'`;
+          } else {
+            suggestion = `Add: import { ${used.name} } from '...'`;
+          }
+        } else {
+          suggestion = suggestSimilar(used.name, [
+            ...projectFunctions.keys(),
+            ...projectClasses.keys(),
+            ...projectVariables.keys(),
+          ]);
+        }
 
         const similarSymbols = extractSimilarSymbols(suggestion);
         const { confidence, reasoning } = calculateConfidence({
@@ -864,10 +961,11 @@ export function validateSymbols(
           type: "undefinedVariable",
           severity: "critical",
           message:
-            strictMode && existsInProject ?
-              `Variable '${used.name}' exists in project but is not imported`
+            existsInProject ?
+              `Variable '${used.name}' exists in your project but is not imported in this file`
             : `Variable '${used.name}' is not defined or imported`,
           line: used.line,
+          file: filePath,
           code: used.code,
           suggestion,
           confidence,
@@ -886,9 +984,15 @@ export function validateSymbols(
     }
   }
 
+  // Include type references (e.g., function(req: Request))
+  for (const typeRef of typeReferences) {
+    usedNames.add(typeRef.name);
+  }
+
   for (const imp of imports) {
     for (const name of imp.names) {
       if (name.local === "*" || name.imported === "*") continue; // Skip wildcards
+      if (name.imported.startsWith("React")) continue; // Skip React imports
 
       if (!usedNames.has(name.local)) {
         const { confidence, reasoning } = calculateConfidence({
@@ -904,6 +1008,7 @@ export function validateSymbols(
           severity: "warning",
           message: `Imported symbol '${name.local}' is never used`,
           line: imp.line,
+          file: filePath,
           code: getLineFromCode(newCode, imp.line),
           suggestion: `Remove the unused import: ${name.local}`,
           confidence,
@@ -927,6 +1032,7 @@ export function validateSymbols(
 export function validateUsagePatterns(
   usedSymbols: ASTUsage[],
   projectContext: ProjectContext,
+  filePath: string = "",
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   if (!projectContext.symbolGraph) return issues;
@@ -951,6 +1057,7 @@ export function validateUsagePatterns(
         severity: "warning", // Patterns are suggestions, not necessarily hard errors
         message: msg,
         line: used.line,
+        file: filePath || projectContext.projectPath, // Best effort for patterns
         code: used.code,
         suggestion: "Verify if this ritual call is required in your context.",
         confidence: 70,
@@ -960,4 +1067,20 @@ export function validateUsagePatterns(
   }
 
   return issues;
+}
+
+/**
+ * Helper to identify test files.
+ * Test files often contain "hallucinated" globals (describe, it, expect) and mocks.
+ */
+function isTestFile(filePath: string): boolean {
+  if (!filePath) return false;
+  const lower = filePath.toLowerCase();
+  return (
+    lower.includes(".test.") ||
+    lower.includes(".spec.") ||
+    lower.includes("/tests/") ||
+    lower.includes("/__tests__/") ||
+    lower.includes("/test-utils/")
+  );
 }
