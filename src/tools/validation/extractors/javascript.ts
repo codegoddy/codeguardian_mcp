@@ -47,7 +47,7 @@ export function extractJSSymbols(
 
       if (nameNode) {
         const name = getText(nameNode, code);
-        const params = extractJSParams(paramsNode, code);
+        const params = extractJSParams(paramsNode, code, filePath, symbols);
         const isAsync = node.children.some(
           (c: Parser.SyntaxNode) => getText(c, code) === "async",
         );
@@ -106,8 +106,8 @@ export function extractJSSymbols(
                 valueNode?.type === "arrow_function" ||
                 valueNode?.type === "function"
               ) {
-                const paramsNode = valueNode.childForFieldName("parameters");
-                const params = extractJSParams(paramsNode, code);
+                const paramsNode = valueNode.childForFieldName("parameters") || valueNode.childForFieldName("parameter");
+                const params = extractJSParams(paramsNode, code, filePath, symbols);
                 const isAsync = valueNode.children.some(
                   (c: Parser.SyntaxNode) => getText(c, code) === "async",
                 );
@@ -139,29 +139,33 @@ export function extractJSSymbols(
     }
 
     case "arrow_function": {
-      const paramNode = node.childForFieldName("parameter");
-      if (paramNode) {
-        if (paramNode.type === "identifier") {
+      const pNode = node.childForFieldName("parameter");
+      const psNode = node.childForFieldName("parameters");
+      if (pNode) {
+        if (pNode.type === "identifier") {
           symbols.push({
-            name: getText(paramNode, code),
+            name: getText(pNode, code),
             type: "variable",
             file: filePath,
-            line: node.startPosition.row + 1,
-            column: paramNode.startPosition.column,
+            line: pNode.startPosition.row + 1,
+            column: pNode.startPosition.column,
             isExported: false,
           });
         } else if (
-          paramNode.type === "object_pattern" ||
-          paramNode.type === "array_pattern"
+          pNode.type === "object_pattern" ||
+          pNode.type === "array_pattern"
         ) {
           extractDestructuredNames(
-            paramNode,
+            pNode,
             code,
             filePath,
             symbols,
             node.startPosition.row + 1,
           );
         }
+      }
+      if (psNode) {
+        extractJSParams(psNode, code, filePath, symbols);
       }
       break;
     }
@@ -201,7 +205,7 @@ export function extractJSSymbols(
       if (nameNode) {
         const name = getText(nameNode, code);
         if (name !== "constructor") {
-          const params = extractJSParams(paramsNode, code);
+          const params = extractJSParams(paramsNode, code, filePath, symbols);
           const isAsync = node.children.some(
             (c: Parser.SyntaxNode) => getText(c, code) === "async",
           );
@@ -321,6 +325,7 @@ export function extractJSSymbols(
     case "formal_parameters":
     case "parameters": {
       for (const child of node.children) {
+
         if (child.type === "identifier") {
           symbols.push({
             name: getText(child, code),
@@ -346,34 +351,25 @@ export function extractJSSymbols(
           child.type === "optional_parameter" ||
           child.type === "rest_pattern"
         ) {
+          // For required/optional parameters, they wrap the actual pattern/identifier
           const pattern =
             child.childForFieldName("pattern") ||
             child.children.find(
               (c) =>
                 c.type === "identifier" ||
                 c.type === "object_pattern" ||
-                c.type === "array_pattern",
-            );
-          if (pattern) {
-            if (pattern.type === "identifier") {
-              symbols.push({
-                name: getText(pattern, code),
-                type: "variable",
-                file: filePath,
-                line: node.startPosition.row + 1,
-                column: pattern.startPosition.column,
-                isExported: false,
-              });
-            } else {
-              extractDestructuredNames(
-                pattern,
-                code,
-                filePath,
-                symbols,
-                node.startPosition.row + 1,
-              );
-            }
-          }
+                c.type === "array_pattern" ||
+                c.type === "rest_pattern",
+            ) ||
+            child; // Fallback to the child itself if it's already a pattern (like rest_pattern)
+
+          extractDestructuredNames(
+            pattern,
+            code,
+            filePath,
+            symbols,
+            node.startPosition.row + 1,
+          );
         }
       }
       break;
@@ -390,26 +386,89 @@ export function extractJSSymbols(
 // ============================================================================
 
 /**
- * Extract parameter names from function/method parameter list
+ * Extract parameter names and register them as local variables
  */
 export function extractJSParams(
   paramsNode: Parser.SyntaxNode | null,
   code: string,
+  filePath: string,
+  symbols: ASTSymbol[],
 ): string[] {
   if (!paramsNode) return [];
 
   const params: string[] = [];
   for (const child of paramsNode.children) {
     if (child.type === "identifier") {
-      params.push(getText(child, code));
+      const name = getText(child, code);
+      params.push(name);
+      symbols.push({
+        name,
+        type: "variable",
+        file: filePath,
+        line: child.startPosition.row + 1,
+        column: child.startPosition.column,
+      });
     } else if (
       child.type === "required_parameter" ||
-      child.type === "optional_parameter"
+      child.type === "optional_parameter" ||
+      child.type === "rest_pattern"
     ) {
-      const nameNode = child.childForFieldName("pattern") || child.children[0];
+      // Logic for destructuring or simple names in typed parameters
+      const nameNode =
+        child.childForFieldName("pattern") ||
+        child.children.find(
+          (c) =>
+            c.type === "identifier" ||
+            c.type === "rest_pattern" ||
+            c.type === "object_pattern" ||
+            c.type === "array_pattern",
+        );
+
       if (nameNode) {
-        params.push(getText(nameNode, code));
+        if (nameNode.type === "object_pattern" || nameNode.type === "array_pattern") {
+          extractDestructuredNames(
+            nameNode,
+            code,
+            filePath,
+            symbols,
+            nameNode.startPosition.row + 1,
+          );
+          // For param list, we use the raw text
+          params.push(getText(nameNode, code));
+        } else if (nameNode.type === "rest_pattern") {
+          const id = nameNode.children.find((c) => c.type === "identifier");
+          if (id) {
+            const name = getText(id, code);
+            params.push(name);
+            symbols.push({
+              name,
+              type: "variable",
+              file: filePath,
+              line: id.startPosition.row + 1,
+              column: id.startPosition.column,
+            });
+          }
+        } else {
+          const name = getText(nameNode, code);
+          params.push(name);
+          symbols.push({
+            name,
+            type: "variable",
+            file: filePath,
+            line: nameNode.startPosition.row + 1,
+            column: nameNode.startPosition.column,
+          });
+        }
       }
+    } else if (child.type === "object_pattern" || child.type === "array_pattern") {
+      extractDestructuredNames(
+        child,
+        code,
+        filePath,
+        symbols,
+        child.startPosition.row + 1,
+      );
+      params.push(getText(child, code));
     }
   }
   return params;
@@ -459,7 +518,8 @@ export function extractDestructuredNames(
     }
 
     case "object_pattern":
-    case "array_pattern": {
+    case "array_pattern":
+    case "rest_pattern": {
       for (const child of node.children) {
         // Only recurse into relevant pattern parts
         if (
@@ -468,7 +528,8 @@ export function extractDestructuredNames(
           child.type === "object_pattern" ||
           child.type === "array_pattern" ||
           child.type === "assignment_pattern" ||
-          child.type === "identifier"
+          child.type === "identifier" ||
+          child.type === "rest_pattern"
         ) {
           extractDestructuredNames(child, code, filePath, symbols, line);
         }
@@ -650,11 +711,12 @@ export function extractJSUsages(
       )
         break;
 
-      // 4. Skip if it's a formal parameter
+      // 4. Skip if it's a formal parameter (including rest parameters)
       if (
         parent.type === "formal_parameters" ||
         parent.type === "required_parameter" ||
-        parent.type === "optional_parameter"
+        parent.type === "optional_parameter" ||
+        parent.type === "rest_pattern"
       )
         break;
 

@@ -650,17 +650,21 @@ export function validateSymbols(
 
         let suggestion = "";
         if (existsInProject) {
-          const sym = projectFunctions.get(used.name) || projectClasses.get(used.name);
+          const sym =
+            projectFunctions.get(used.name) || projectClasses.get(used.name);
           if (sym) {
             // Calculate a descriptive suggestion including the file
-            // Note: We'd ideally calculate a relative path here, but for now, 
+            // Note: We'd ideally calculate a relative path here, but for now,
             // telling the user the file name is a huge win.
             suggestion = `Add: import { ${used.name} } from './${sym.file.replace(/\\/g, "/")}'`;
           } else {
             suggestion = `Add: import { ${used.name} } from '...'`;
           }
         } else {
-          suggestion = suggestSimilar(used.name, Array.from(projectFunctions.keys()));
+          suggestion = suggestSimilar(
+            used.name,
+            Array.from(projectFunctions.keys()),
+          );
         }
 
         const similarSymbols = extractSimilarSymbols(suggestion);
@@ -717,12 +721,52 @@ export function validateSymbols(
         }
       }
     } else if (used.type === "methodCall") {
-      // 0. Check contextual naming patterns first (e.preventDefault(), req.body, etc.)
+      // 0. Skip whitelisted objects and chains (e.g., 'this.*', 'window.*', 'z.*', 'smthRef.current.*')
+      const rootObject = used.object?.split(".")[0]?.split("(")[0];
+      if (
+        used.object === "this" ||
+        used.object?.startsWith("this.") ||
+        used.object?.includes(".current") ||
+        (rootObject &&
+          [
+            "window",
+            "navigator",
+            "document",
+            "location",
+            "history",
+            "localStorage",
+            "sessionStorage",
+            "console",
+            "process",
+            "global",
+            "globalThis",
+            "Intl",
+            "z",
+            "t",
+            "db",
+            "prisma",
+            "ctx",
+            "supabase",
+            "api",
+            "client",
+            "auth",
+          ].includes(rootObject))
+      ) {
+        // Special Case: Still validate the method name itself if it's NOT a known builtin
+        // This ensures we catch true hallucinations like toast.hallucinatedMethod()
+        if (isJSBuiltin(used.name)) {
+          continue;
+        }
+        // If the method is NOT whitelisted, we still proceed to check if it exists in the project
+        // but we've already validated the object.
+      }
+
+      // 1. Check contextual naming patterns first (e.preventDefault(), req.body, etc.)
       if (isContextuallyValid(used)) {
         continue; // Trust the vibe - this is a standard pattern
       }
 
-      // 1. Skip standard built-in methods (toString, map, etc.) to avoid false positives
+      // 2. Skip standard built-in methods (toString, map, etc.) to avoid false positives
       if (
         (language === "javascript" || language === "typescript") &&
         isJSBuiltin(used.name)
@@ -736,13 +780,17 @@ export function validateSymbols(
         continue;
       }
 
-      // 2. Check if the object itself exists
+      // 3. Check if the object itself exists
       const objExists =
-        validClasses.has(used.object!) ||
-        validVariables.has(used.object!) ||
-        validFunctions.has(used.object!) ||
+        validClasses.has(rootObject!) ||
+        validVariables.has(rootObject!) ||
+        validFunctions.has(rootObject!) ||
+        isJSBuiltin(rootObject!) ||
         // Always trust common short variable names in non-strict mode
-        (!strictMode && ["z", "t", "db", "prisma", "ctx", "req", "res", "e", "i"].includes(used.object!));
+        (!strictMode &&
+          ["z", "t", "db", "prisma", "ctx", "req", "res", "e", "i", "req", "res"].includes(
+            rootObject!,
+          ));
 
       // If the object doesn't exist at all, flag it as a hallucination
       if (!objExists) {
@@ -797,17 +845,23 @@ export function validateSymbols(
             // For internal imports, only check if we have class/method/variable info
             // This prevents skipping validation for instances (const logger = new Logger())
             const objClass =
-              validClasses.get(used.object!) || validVariables.get(used.object!);
+              validClasses.get(used.object!) ||
+              validVariables.get(used.object!);
             if (objClass) {
               shouldCheck = true; // We have symbol info, so we can validate methods
             }
           }
         } else {
-          // Object is not from an import (locally defined)
-          // Check if the method is a known builtin - if not, validate it
-          if (!isJSBuiltin(used.name)) {
-            // console.log(`DEBUG: checking local object method ${used.object}.${used.name}`);
-            shouldCheck = true; // Unknown method on local object - validate it
+          // Objects not from imports (locally defined)
+          // ONLY check if we have class info, otherwise we don't know the type enough to flag it
+          const objClass =
+            validClasses.get(used.object!) ||
+            validVariables.get(used.object!) ||
+            validClasses.get(rootObject!) ||
+            validVariables.get(rootObject!);
+
+          if (objClass && objClass.file !== "(new code)") {
+            shouldCheck = true;
           }
         }
       }
@@ -914,7 +968,31 @@ export function validateSymbols(
         if (
           (language === "python" && isPythonBuiltin(used.name)) ||
           ((language === "javascript" || language === "typescript") &&
-            isJSBuiltin(used.name))
+            (isJSBuiltin(used.name) ||
+              [
+                "this",
+                "props",
+                "state",
+                "window",
+                "navigator",
+                "document",
+                "location",
+                "Intl",
+                "JSON",
+                "Math",
+                "Date",
+                "Array",
+                "Object",
+                "String",
+                "Number",
+                "Boolean",
+                "Promise",
+                "Error",
+                "process",
+                "global",
+                "globalThis",
+                "self",
+              ].includes(used.name)))
         ) {
           continue;
         }
