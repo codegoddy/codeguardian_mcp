@@ -1,9 +1,11 @@
 /**
  * MCP Notification System
  *
- * Provides a way to push notifications to the MCP client (system UI)
- * such as Claude Desktop, Cline, Continue, etc.
- * Notifications appear in the client's UI, not directly to the LLM.
+ * Provides UI notifications to the MCP client (Claude Desktop, Cline, VS Code, etc.)
+ * 
+ * IMPORTANT: MCP servers CANNOT directly push data to LLMs. These notifications
+ * only appear in the client's UI as hints. The LLM must still call tools like
+ * get_guardian_alerts to retrieve the actual alert data.
  *
  * @format
  */
@@ -61,7 +63,10 @@ export async function sendNotification(
 }
 
 /**
- * Send a validation alert to the LLM
+ * Send a validation alert notification to the UI
+ * 
+ * NOTE: This only shows a notification in the client UI. The LLM must
+ * call get_guardian_alerts to retrieve the actual alert data.
  */
 export async function pushValidationAlert(alert: {
   file: string;

@@ -117,32 +117,19 @@ export async function isSymbolTypeReferenced(
   definedInFile: string,
   context: ProjectContext,
 ): Promise<boolean> {
-  // Optimization: Only check files that could potentially reference this symbol
-  // We limit the scope to prevent timeout on large codebases
-  let checkedFiles = 0;
-  const MAX_FILES_TO_CHECK = 50; // Limit scope to prevent timeout
-
-  for (const [filePath] of context.files) {
-    if (checkedFiles >= MAX_FILES_TO_CHECK) break;
-
-    // Use pre-loaded cache only
-    const typeRefs = typeReferencesCache.get(filePath);
-    if (!typeRefs) continue;
-
-    checkedFiles++;
-
-    // Check if our symbol is referenced as a type
-    const isDefinitionFile = filePath === definedInFile;
-    const usageCount = typeRefs.filter((ref) => ref.name === symbolName).length;
-
-    if (isDefinitionFile) {
-      // In the definition file, we need more than just the definition itself
-      if (usageCount > 1) {
-        return true;
-      }
-    } else {
-      // In other files, any usage counts
-      if (usageCount > 0) {
+  // OPTIMIZED: Use symbolGraph for fast lookup (O(1))
+  if (context.symbolGraph) {
+    const usage = context.symbolGraph.usage.get(symbolName);
+    if (usage && usage.calledBy.size > 0) {
+      return true;
+    }
+  }
+  
+  // Check if any file imports this symbol as a type
+  // This is faster than parsing AST for type references
+  for (const [filePath, fileInfo] of context.files) {
+    for (const imp of fileInfo.imports) {
+      if (imp.namedImports.includes(symbolName) || imp.defaultImport === symbolName) {
         return true;
       }
     }
@@ -214,6 +201,7 @@ export async function isSymbolCalledOrInstantiated(
  * - ChatResponse used as return type in sendMessage()
  * - ActiveDeliverable used in ActiveProject interface
  * - PYTHON_BUILTINS used in isStandardLibrary() via PYTHON_BUILTINS.has()
+ * - Methods within exported service objects (e.g., supportChatService.startNewConversation)
  *
  * If a type/constant is used by an exported function/class, it should not be flagged as unused.
  *
@@ -232,24 +220,37 @@ export async function isSymbolUsedInSameFileExports(
   const fileInfo = context.files.get(definedInFile);
   if (!fileInfo) return false;
 
-  // Check if the symbol is used as a type reference anywhere in the same file
-  // This catches return types, parameter types, generic params, property types, etc.
-  const typeRefs = typeReferencesCache.get(definedInFile) || [];
-  const usageCount = typeRefs.filter((ref) => ref.name === symbolName).length;
-
-  // If used at least once as a type annotation (beyond just the definition), it's being used
-  // We expect at least 1 usage if it's used in function signatures, generic params, etc.
-  if (usageCount >= 1) {
-    return true;
+  // Check if this symbol is a method/property of an exported parent object
+  // e.g., startNewConversation is a method of supportChatService which is exported
+  const symbol = fileInfo.symbols.find(s => s.name === symbolName);
+  if (symbol?.scope) {
+    // This symbol has a scope (parent object) - check if the parent is exported
+    const parentSymbol = fileInfo.symbols.find(s => s.name === symbol.scope);
+    if (parentSymbol?.exported) {
+      // The parent object is exported, so this method is accessible via the parent
+      return true;
+    }
   }
 
-  // Check for member access patterns (e.g., PYTHON_BUILTINS.has(), CONFIG.get())
-  // This catches constants/objects that are accessed via property/method access
-  const content = fileContentCache.get(definedInFile);
-  if (content) {
+  // OPTIMIZED: Check if symbol is used by other exports in the same file
+  // by examining the import/export relationships in the context
+  
+  // Check if any other symbol in the same file references this symbol
+  for (const sym of fileInfo.symbols) {
+    if (sym.name === symbolName) continue;
+    // If another exported symbol exists, check if this symbol is used in its context
+    if (sym.exported && sym.returnType?.includes(symbolName)) {
+      return true;
+    }
+  }
+
+  // Check for member access patterns by reading file content on-demand
+  // This is only done when necessary (not pre-cached for all files)
+  try {
+    const content = await fs.readFile(definedInFile, "utf-8");
+    
     // Pattern 1: symbolName followed by a dot (member access via dot notation)
     // Pattern 2: symbolName followed by [ (member access via bracket notation)
-    // Use word boundaries to avoid partial matches (e.g., MY_SYMBOL vs MY_SYMBOL_OTHER)
     const memberAccessPattern = new RegExp(
       `\\b${escapeRegex(symbolName)}\\s*[.\\[]`,
       "g",
@@ -261,6 +262,8 @@ export async function isSymbolUsedInSameFileExports(
       // Found member access - the symbol is being used
       return true;
     }
+  } catch {
+    // File read failed, continue with other checks
   }
 
   return false;
@@ -420,126 +423,65 @@ export async function detectDeadCode(
     }
   }
 
-  // Pre-calculate which files contain which strings (Reflective Access Awareness)
-  // This is a "Secret" technique to detect symbols used via string-based lookup
+  // OPTIMIZED: Use cached context data instead of re-parsing files
+  // The context already has imports, exports, and symbols from project analysis
+  logger.debug("Using cached context data for dead code detection...");
+
+  // Build string literal usage from cached keywords in context
+  // This is much faster than re-reading and parsing all files
   const stringLiteralUsage = new Set<string>();
-  logger.debug("Scanning for reflective usage patterns...");
+  for (const [filePath, fileInfo] of context.files) {
+    // Use keywords from context (already extracted during project build)
+    for (const keyword of fileInfo.keywords) {
+      if (keyword.length >= 3) {
+        stringLiteralUsage.add(keyword);
+      }
+    }
+  }
 
-  // Preload type references for files with exports
-  // This is needed for isSymbolUsedInSameFileExports to work efficiently
-  logger.debug(`Preloading type references for files with exports...`);
+  // Use cached imports from context for wildcard usage tracking
+  // instead of re-parsing AST for every file
+  for (const [filePath, fileInfo] of context.files) {
+    for (const imp of fileInfo.imports) {
+      if (imp.namespaceImport) {
+        const resolved = resolveImport(imp.source, filePath, Array.from(context.files.keys()));
+        if (resolved) {
+          // Track potential wildcard usage by looking at other imports from same module
+          for (const [otherPath, otherInfo] of context.files) {
+            if (otherPath === filePath) continue;
+            for (const otherImp of otherInfo.imports) {
+              if (otherImp.source === imp.source && otherImp.namedImports.length > 0) {
+                for (const sym of otherImp.namedImports) {
+                  if (!symbolsImportedFromFile.has(resolved)) {
+                    symbolsImportedFromFile.set(resolved, new Set());
+                  }
+                  symbolsImportedFromFile.get(resolved)!.add(sym);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Identify files that need deep analysis (have exports but not in import graph)
   const filesToPreload = new Set<string>();
-
   for (const [filePath, fileInfo] of context.files) {
     if (fileInfo.isTest || fileInfo.isConfig || fileInfo.isEntryPoint) continue;
-    if (
-      fileInfo.exports.length > 0 ||
-      fileInfo.symbols.some((s) => s.exported)
-    ) {
+    if (fileInfo.exports.length === 0 && !fileInfo.symbols.some((s) => s.exported)) continue;
+    
+    // Only deep-analyze if exports aren't in import graph
+    const hasUnimportedExports = fileInfo.exports.some(exp => 
+      !isSymbolImported(exp.name, filePath, symbolsImportedFromFile)
+    );
+    if (hasUnimportedExports) {
       filesToPreload.add(filePath);
     }
   }
 
-  // Preload type references and file contents in parallel (all at once)
-  // Use incremental analysis: only process files that have changed
-  logger.debug(`Checking ${filesToPreload.size} files for changes...`);
-
-  const filesToProcess: string[] = [];
-  const unchangedFiles: string[] = [];
-
-  // Check which files have changed
-  await Promise.all(
-    Array.from(filesToPreload).map(async (filePath) => {
-      const changed = await hasFileChanged(filePath);
-      if (changed) {
-        filesToProcess.push(filePath);
-      } else {
-        unchangedFiles.push(filePath);
-      }
-    }),
-  );
-
   logger.debug(
-    `Incremental analysis: ${filesToProcess.length} changed, ${unchangedFiles.length} unchanged (using cache)`,
-  );
-
-  // Process files to build reflective and wildcard usage context
-  // We scan ALL files in the context for string literals and wildcard usage
-  // This is essential for "Perfect Differentiation"
-  const CHUNK_SIZE = 50;
-  logger.debug(`Scanning ${context.files.size} files for reflective and wildcard usage...`);
-  
-  const reflectiveProgress: string[] = Array.from(context.files.keys());
-  for (let i = 0; i < reflectiveProgress.length; i += CHUNK_SIZE) {
-    const chunk = reflectiveProgress.slice(i, i + CHUNK_SIZE);
-    await Promise.all(chunk.map(async (filePath) => {
-        try {
-            const changed = await hasFileChanged(filePath);
-            let strings = fileStringsCache.get(filePath);
-            let content: string;
-
-            if (changed || !strings) {
-                content = await fs.readFile(filePath, "utf-8");
-                fileContentCache.set(filePath, content);
-                
-                // Fast regex for strings: handles 'string', "string", or `string`
-                const stringRegex = /['"`]([a-zA-Z0-9_-]{3,})['"`]/g;
-                strings = new Set<string>();
-                let match;
-                while ((match = stringRegex.exec(content)) !== null) {
-                    strings.add(match[1]);
-                }
-                fileStringsCache.set(filePath, strings);
-            } else {
-                // Not changed, but we might still need content for AST analysis later
-                // Only preload if it's a file we likely need to deep-analyze
-                if (filesToPreload.has(filePath)) {
-                    content = await fs.readFile(filePath, "utf-8");
-                    fileContentCache.set(filePath, content);
-                }
-            }
-
-            // Merge into global string literal usage
-            for (const s of strings) {
-                stringLiteralUsage.add(s);
-            }
-
-            // Wildcard Usage Tracking (requires content/AST)
-            const fileInfo = context.files.get(filePath);
-            if (fileInfo && filesToPreload.has(filePath)) {
-                content = content! || await fs.readFile(filePath, "utf-8");
-                const lang = fileInfo.language === "javascript" ? "javascript" : "typescript";
-                
-                // Only build typeRefs for exports
-                if (fileInfo.exports.length > 0 || fileInfo.symbols.some(s => s.exported)) {
-                    const typeRefs = extractTypeReferencesAST(content, lang);
-                    typeReferencesCache.set(filePath, typeRefs);
-                }
-
-                // Deep check for wildcard usage: NS.member()
-                const astImports = extractImportsAST(content, lang);
-                const usages = extractUsagesAST(content, lang, astImports);
-                for (const usage of usages) {
-                    if (usage.type === "methodCall" && usage.object) {
-                        const modulePath = wildcardImportedModules.get(usage.object);
-                        if (modulePath) {
-                            if (!symbolsImportedFromFile.has(modulePath)) {
-                                symbolsImportedFromFile.set(modulePath, new Set());
-                            }
-                            symbolsImportedFromFile.get(modulePath)!.add(usage.name);
-                        }
-                    }
-                }
-            }
-        } catch (err) {
-            // Error reading file
-        }
-    }));
-    await new Promise((resolve) => setImmediate(resolve));
-  }
-
-  logger.debug(
-    `Analysis built: ${stringLiteralUsage.size} unique strings found, checking ${typeReferencesCache.size} files`,
+    `Using cached context: ${stringLiteralUsage.size} keywords, ${filesToPreload.size} files need deep analysis`,
   );
 
   // Collect all exported symbols to check
@@ -563,6 +505,14 @@ export async function detectDeadCode(
     // Collect from exports list
     for (const exp of fileInfo.exports) {
       const symbol = fileInfo.symbols.find((s) => s.name === exp.name);
+      
+      // SKIP type-only exports (interfaces, type aliases, enums)
+      // These are compile-time constructs and don't generate runtime code
+      // They should not be flagged as "dead code"
+      if (symbol?.kind === "interface" || symbol?.kind === "type") {
+        continue;
+      }
+      
       exportsToCheck.push({
         name: exp.name,
         file: filePath,
@@ -578,6 +528,13 @@ export async function detectDeadCode(
         exportsToCheck.some((e) => e.name === sym.name && e.file === filePath)
       )
         continue;
+      
+      // SKIP type-only symbols (interfaces, type aliases, enums)
+      // These are compile-time constructs and don't generate runtime code
+      if (sym.kind === "interface" || sym.kind === "type") {
+        continue;
+      }
+      
       exportsToCheck.push({
         name: sym.name,
         file: filePath,

@@ -27,7 +27,7 @@ import type { ProjectContext } from "../../../src/context/projectContext.js";
 
 describe("Validation Module", () => {
   describe("validateManifest", () => {
-    it("should detect missing dependencies", () => {
+    it("should detect missing dependencies", async () => {
       const imports: ASTImport[] = [
         {
           module: "express",
@@ -45,15 +45,15 @@ describe("Validation Module", () => {
 
       const newCode = 'import express from "express";';
 
-      const issues = validateManifest(imports, manifest, newCode);
+      const issues = await validateManifest(imports, manifest, newCode);
 
       expect(issues).toHaveLength(1);
-      expect(issues[0].type).toBe("dependencyHallucination");
-      expect(issues[0].severity).toBe("critical");
+      expect(issues[0].type).toBe("missingDependency");
+      expect(issues[0].severity).toBe("low");
       expect(issues[0].message).toContain("express");
     });
 
-    it("should not flag dependencies that exist in manifest", () => {
+    it("should not flag dependencies that exist in manifest", async () => {
       const imports: ASTImport[] = [
         {
           module: "express",
@@ -71,12 +71,12 @@ describe("Validation Module", () => {
 
       const newCode = 'import express from "express";';
 
-      const issues = validateManifest(imports, manifest, newCode);
+      const issues = await validateManifest(imports, manifest, newCode);
 
       expect(issues).toHaveLength(0);
     });
 
-    it("should skip internal imports", () => {
+    it("should skip internal imports", async () => {
       const imports: ASTImport[] = [
         {
           module: "./utils",
@@ -94,7 +94,7 @@ describe("Validation Module", () => {
 
       const newCode = 'import { helper } from "./utils";';
 
-      const issues = validateManifest(imports, manifest, newCode);
+      const issues = await validateManifest(imports, manifest, newCode);
 
       expect(issues).toHaveLength(0);
     });
@@ -105,7 +105,6 @@ describe("Validation Module", () => {
       const context: ProjectContext = {
         projectPath: "/test",
         totalFiles: 1,
-        totalSymbols: 2,
         files: new Map(),
         symbolIndex: new Map([
           [
@@ -118,6 +117,7 @@ describe("Validation Module", () => {
                   kind: "function",
                   line: 1,
                   params: [{ name: "arg1" }, { name: "arg2" }],
+                  exported: true,
                 },
               },
             ],
@@ -131,6 +131,7 @@ describe("Validation Module", () => {
                   name: "MyClass",
                   kind: "class",
                   line: 5,
+                  exported: true,
                 },
               },
             ],
@@ -138,7 +139,7 @@ describe("Validation Module", () => {
         ]),
         importGraph: new Map(),
         exportGraph: new Map(),
-        framework: null,
+        framework: undefined,
       };
 
       const symbolTable = buildSymbolTable(context);

@@ -50,6 +50,11 @@ import {
   calculateScore,
   generateRecommendation,
 } from "./validation/scoring.js";
+import {
+  verifyFindingsAutomatically,
+  getConfirmedFindings,
+  type VerificationResult,
+} from "../analyzers/findingVerifier.js";
 import type { ValidationIssue, DeadCodeIssue } from "./validation/types.js";
 import { PROMPT_PATTERNS, VALIDATION_CONSTRAINTS } from "../prompts/library.js";
 
@@ -295,44 +300,66 @@ export const validateCodeTool: ToolDefinition = {
         deadCodeIssues = await Promise.race([deadCodePromise, timeoutPromise]);
       }
 
-      // Step 7: Calculate score and recommendation
-      const score = calculateScore(issues, deadCodeIssues);
-      const recommendation = generateRecommendation(
-        score,
+      // Step 7: Automated Verification (eliminates false positives)
+      logger.info(`Verifying ${issues.length} findings to eliminate false positives...`);
+      const verificationResult = await verifyFindingsAutomatically(
         issues,
         deadCodeIssues,
+        projectContext,
+        projectPath,
+        language,
+      );
+
+      // Get filtered findings (only confirmed, no false positives)
+      const { hallucinations: confirmedIssues, deadCode: confirmedDeadCode } = 
+        getConfirmedFindings(verificationResult);
+
+      logger.info(`Verification complete: ${confirmedIssues.length} confirmed, ${verificationResult.stats.falsePositiveCount} false positives filtered`);
+
+      // Step 8: Calculate score and recommendation using CONFIRMED issues only
+      const score = calculateScore(confirmedIssues, confirmedDeadCode);
+      const recommendation = generateRecommendation(
+        score,
+        confirmedIssues,
+        confirmedDeadCode,
       );
 
       const elapsed = Date.now() - startTime;
 
-      // Save snapshot for incremental validation
+      // Save snapshot for incremental validation (store ALL issues for analysis)
       if (sessionId && newCode) {
         incrementalValidation.saveSnapshot(
           sessionId,
           newCode,
-          issues,
+          issues,  // Store original issues for comparison
           deadCodeIssues,
         );
       }
 
-      const totalIssues = issues.length + deadCodeIssues.length;
+      // Use CONFIRMED issues for the response (no false positives)
+      const totalIssues = confirmedIssues.length + confirmedDeadCode.length;
       const isLargeResult = totalIssues > 50;
       
       // Generate a unique ID for this validation run to store it in resources
       const validationId = `sync_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       
-      // Store in report store
+      // Store CONFIRMED issues in report store
       validationReportStore.store(validationId, projectPath, {
-        summary: generateStructuredExplanation(issues, deadCodeIssues), // Use as summary text
+        summary: generateStructuredExplanation(confirmedIssues, confirmedDeadCode),
         stats: {
           filesScanned: projectContext.totalFiles,
           symbolsInProject: projectContext.symbolIndex.size,
-          hallucinationsFound: issues.length,
-          deadCodeFound: deadCodeIssues.length,
+          hallucinationsFound: confirmedIssues.length,
+          deadCodeFound: confirmedDeadCode.length,
           analysisTime: `${elapsed}ms`,
+          verification: {
+            confirmed: verificationResult.stats.confirmedCount,
+            falsePositivesFiltered: verificationResult.stats.falsePositiveCount,
+            uncertain: verificationResult.stats.uncertainCount,
+          },
         },
-        hallucinations: issues,
-        deadCode: deadCodeIssues,
+        hallucinations: confirmedIssues,
+        deadCode: confirmedDeadCode,
         score,
         recommendation,
       });
@@ -345,14 +372,19 @@ export const validateCodeTool: ToolDefinition = {
           success: true,
           validated: true,
           score,
-          hallucinationDetected: issues.length > 0,
-          deadCodeDetected: deadCodeIssues.length > 0,
+          hallucinationDetected: confirmedIssues.length > 0,
+          deadCodeDetected: confirmedDeadCode.length > 0,
           reportUri,
-          message: `Validation found ${totalIssues} issues. Results are stored as an MCP Resource to prevent context overflow.`,
+          message: `Validation found ${totalIssues} confirmed issues (${verificationResult.stats.falsePositiveCount} false positives automatically filtered). Results are stored as an MCP Resource.`,
           recommendation,
+          verification: {
+            confirmedCount: verificationResult.stats.confirmedCount,
+            falsePositiveCount: verificationResult.stats.falsePositiveCount,
+            uncertainCount: verificationResult.stats.uncertainCount,
+          },
           stats: {
-            hallucinationsFound: issues.length,
-            deadCodeFound: deadCodeIssues.length,
+            hallucinationsFound: confirmedIssues.length,
+            deadCodeFound: confirmedDeadCode.length,
             analysisTime: `${elapsed}ms`,
           },
           resourceAccess: {
@@ -371,16 +403,33 @@ export const validateCodeTool: ToolDefinition = {
         success: true,
         validated: true,
         score,
-        hallucinationDetected: issues.length > 0,
-        deadCodeDetected: deadCodeIssues.length > 0,
-        hallucinations: issues,
-        deadCode: deadCodeIssues,
+        hallucinationDetected: confirmedIssues.length > 0,
+        deadCodeDetected: confirmedDeadCode.length > 0,
+        // Return ONLY confirmed findings (no false positives)
+        hallucinations: confirmedIssues,
+        deadCode: confirmedDeadCode,
         reportUri,
         recommendation,
         structuredExplanation: generateStructuredExplanation(
-          issues,
-          deadCodeIssues,
+          confirmedIssues,
+          confirmedDeadCode,
         ),
+        /**
+         * Automated verification results - shows confidence that findings are true positives
+         */
+        verification: {
+          confirmedCount: verificationResult.stats.confirmedCount,
+          falsePositiveCount: verificationResult.stats.falsePositiveCount,
+          uncertainCount: verificationResult.stats.uncertainCount,
+          /** Detailed breakdown of verification for each finding */
+          details: verificationResult.confirmed.map(v => ({
+            type: v.original.type,
+            message: v.original.message,
+            confidence: v.confidence,
+            verificationMethod: v.verificationMethod,
+            reasons: v.reasons,
+          })),
+        },
         stats: {
           filesScanned: projectContext.totalFiles,
           symbolsInProject: projectContext.symbolIndex.size,

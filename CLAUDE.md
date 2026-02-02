@@ -209,6 +209,27 @@ For critical code, validate from multiple angles:
 Overall: PASS"
 ```
 
+### 5. Future Feature Detection (Intelligent Filtering)
+CodeGuardian now intelligently detects **work-in-progress code** vs actual issues:
+
+**Signals that indicate a future feature (not an error):**
+- TODO/FIXME comments in the file
+- Uncommitted changes (new or modified files)
+- Feature branch naming (feature/*, wip/*, etc.)
+- Stub implementations (throw "not implemented")
+- Symbol names suggesting planned functionality (new*, upcoming*, planned*)
+
+**Example:**
+```typescript
+// File: payment/newGateway.ts (uncommitted, on feature/payment-v2 branch)
+// TODO: Implement Stripe integration
+export async function newStripeGateway() {
+  throw new Error("Not implemented yet");
+}
+```
+
+This would be ** flagged as a future feature**, not dead code or a hallucination.
+
 ## Remember
 
 - **Never skip validation** - even for "simple" code

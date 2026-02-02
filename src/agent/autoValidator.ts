@@ -36,6 +36,11 @@ import { logger } from "../utils/logger.js";
 import { sendNotification } from "./mcpNotifications.js";
 import { ManifestDependencies } from "../tools/validation/types.js";
 import { PROMPT_PATTERNS, VALIDATION_CONSTRAINTS } from "../prompts/library.js";
+import { generateAntiPatternContext, enrichIssuesWithAntiPatterns } from "../analyzers/antiPatterns.js";
+import {
+  verifyFindingsAutomatically,
+  getConfirmedFindings,
+} from "../analyzers/findingVerifier.js";
 
 export interface ValidationAlert {
   file: string;
@@ -176,10 +181,25 @@ export class AutoValidator {
       // Run dead code detection on existing codebase
       const deadCodeIssues = await detectDeadCode(context);
 
+      // Verify findings to eliminate false positives
+      let confirmedDeadCode = deadCodeIssues;
       if (deadCodeIssues.length > 0) {
+        logger.debug(`Verifying ${deadCodeIssues.length} dead code findings...`);
+        const verificationResult = await verifyFindingsAutomatically(
+          [],
+          deadCodeIssues,
+          context,
+          this.projectPath,
+          this.language,
+        );
+        confirmedDeadCode = getConfirmedFindings(verificationResult).deadCode;
+        logger.debug(`Verification complete: ${confirmedDeadCode.length} confirmed (filtered ${verificationResult.stats.falsePositiveCount} false positives)`);
+      }
+
+      if (confirmedDeadCode.length > 0) {
         const alert: ValidationAlert = {
           file: "INITIAL_SCAN",
-          issues: deadCodeIssues.map((dc) => ({
+          issues: confirmedDeadCode.map((dc) => ({
             type: "deadCode",
             severity: dc.severity,
             message: dc.message,
@@ -187,11 +207,11 @@ export class AutoValidator {
             line: (dc as any).line,
           })),
           timestamp: Date.now(),
-          llmMessage: this.createInitialScanMessage(deadCodeIssues),
+          llmMessage: this.createInitialScanMessage(confirmedDeadCode),
           isInitialScan: true,
         };
 
-        logger.info(`Initial scan found ${deadCodeIssues.length} issues in existing codebase`);
+        logger.info(`Initial scan found ${confirmedDeadCode.length} confirmed issues in existing codebase`);
 
         if (this.onAlert) {
           this.onAlert(alert);
@@ -334,23 +354,47 @@ export class AutoValidator {
           deadCodeIssues = await detectDeadCode(context, content);
       }
 
+      // Combine all issues for verification
+      let allIssues = [...manifestIssues, ...symbolIssues, ...patternIssues, ...deadCodeIssues, ...impactIssues];
+
+      // === AUTOMATED VERIFICATION (eliminates false positives) ===
+      if (allIssues.length > 0) {
+        logger.debug(`Verifying ${allIssues.length} findings to eliminate false positives...`);
+        const verificationResult = await verifyFindingsAutomatically(
+          allIssues.filter(i => i.type !== 'deadCode' && i.type !== 'unusedExport' && i.type !== 'unusedFunction' && i.type !== 'orphanedFile') as any,
+          allIssues.filter(i => i.type === 'deadCode' || i.type === 'unusedExport' || i.type === 'unusedFunction' || i.type === 'orphanedFile') as any,
+          context,
+          this.projectPath,
+          this.language,
+        );
+        
+        // Replace with confirmed findings only
+        const confirmed = getConfirmedFindings(verificationResult);
+        
+        // Reconstruct allIssues with verified findings
+        allIssues = [
+          ...confirmed.hallucinations,
+          ...confirmed.deadCode,
+        ];
+        
+        logger.debug(`Verification complete: ${allIssues.length} confirmed (filtered ${verificationResult.stats.falsePositiveCount} false positives)`);
+      }
+
       // === SMART MODE FILTERING ===
       if (isLenient) {
         // In learning/new file mode:
         // 1. Ignore architectural deviations (we are learning patterns)
-        patternIssues = []; 
+        allIssues = allIssues.filter(i => i.type !== 'architecturalDeviation');
         
         // 2. Ignore dead code in new/changing files
-        deadCodeIssues = [];
+        allIssues = allIssues.filter(i => i.type !== 'deadCode' && i.type !== 'unusedExport' && i.type !== 'unusedFunction' && i.type !== 'orphanedFile');
 
         // 3. Filter out "Medium" severity symbol issues
-        symbolIssues = symbolIssues.filter(i => i.severity === "critical" || i.severity === "high");
+        allIssues = allIssues.filter(i => i.severity === "critical" || i.severity === "high");
       }
 
-      const allIssues = [...manifestIssues, ...symbolIssues, ...patternIssues, ...deadCodeIssues, ...impactIssues];
-
       if (allIssues.length > 0) {
-        const alert = this.formatAlert(filePath, allIssues);
+        const alert = await this.formatAlert(filePath, allIssues);
         logger.warn(`Found ${allIssues.length} issues in ${relativePath}`);
 
         if (this.onAlert) {
@@ -374,20 +418,24 @@ export class AutoValidator {
     }
   }
 
-  private formatAlert(filePath: string, issues: any[]): ValidationAlert {
+  private async formatAlert(filePath: string, issues: any[]): Promise<ValidationAlert> {
     const relativePath = path.relative(this.projectPath, filePath);
 
+    // Enrich issues with anti-pattern context (async)
+    const enrichedIssues = await enrichIssuesWithAntiPatterns(issues, this.language);
+
     // Format issues for LLM consumption
-    const issueList = issues.map((issue) => ({
+    const issueList = enrichedIssues.map((issue) => ({
       type: issue.type,
       severity: issue.severity,
       message: issue.message,
       suggestion: issue.suggestion,
       line: issue.line,
+      antiPattern: issue.antiPattern,
     }));
 
-    // Create a natural language message for the LLM
-    const llmMessage = this.createLLMMessage(relativePath, issues);
+    // Create a natural language message for the LLM (async for anti-pattern context)
+    const llmMessage = await this.createLLMMessage(relativePath, enrichedIssues);
 
     return {
       file: relativePath,
@@ -397,7 +445,7 @@ export class AutoValidator {
     };
   }
 
-  private createLLMMessage(file: string, issues: any[]): string {
+  private async createLLMMessage(file: string, issues: any[]): Promise<string> {
     const critical = issues.filter((i) => i.severity === "critical" || i.severity === "high");
     const count = issues.length;
     
@@ -414,10 +462,24 @@ export class AutoValidator {
       let item = `${idx + 1}. [${i.severity.toUpperCase()}] ${i.type}: ${i.message}`;
       if (i.line) item += ` (Line ${i.line})`;
       if (i.suggestion) item += `\n   Suggestion: ${i.suggestion}`;
+      // Include anti-pattern context if available
+      if (i.antiPattern) {
+        item += `\n   📚 ${i.antiPattern.id}: ${i.antiPattern.name} - ${i.antiPattern.description}`;
+      }
       return item;
     }).join("\n");
+
+    // Generate anti-pattern context for LLM
+    const antiPatternContext = await generateAntiPatternContext(issues, this.language);
     
-    return `${constrainedMsg}\n\nDETECTED ISSUES:\n${issuesList}`;
+    let message = `${constrainedMsg}\n\nDETECTED ISSUES:\n${issuesList}`;
+    
+    // Append anti-pattern guidance if relevant
+    if (antiPatternContext) {
+      message += `\n\n${antiPatternContext}`;
+    }
+    
+    return message;
   }
 
   getStatus(): { watching: boolean; projectPath: string; name: string } {

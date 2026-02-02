@@ -344,16 +344,26 @@ export function validateSymbols(
   const issues: ValidationIssue[] = [];
 
   // Build lookup maps for PROJECT symbols
-  const projectFunctions = new Map<string, ProjectSymbol>();
+  // Use arrays to handle multiple symbols with same name (different scopes)
+  const projectFunctions = new Map<string, ProjectSymbol[]>();
   const projectClasses = new Map<string, ProjectSymbol>();
-  const projectMethods = new Map<string, ProjectSymbol>();
+  const projectMethods = new Map<string, ProjectSymbol[]>();
   const projectVariables = new Map<string, ProjectSymbol>(); // includes interfaces, types, enums
 
   for (const sym of symbolTable) {
-    if (sym.type === "function") projectFunctions.set(sym.name, sym);
-    else if (sym.type === "class") projectClasses.set(sym.name, sym);
-    else if (sym.type === "method") projectMethods.set(sym.name, sym);
-    else if (sym.type === "variable") projectVariables.set(sym.name, sym);
+    if (sym.type === "function") {
+      const existing = projectFunctions.get(sym.name) || [];
+      existing.push(sym);
+      projectFunctions.set(sym.name, existing);
+    } else if (sym.type === "class") {
+      projectClasses.set(sym.name, sym);
+    } else if (sym.type === "method") {
+      const existing = projectMethods.get(sym.name) || [];
+      existing.push(sym);
+      projectMethods.set(sym.name, existing);
+    } else if (sym.type === "variable") {
+      projectVariables.set(sym.name, sym);
+    }
   }
 
   // Build lookup maps for VALID symbols
@@ -362,17 +372,42 @@ export function validateSymbols(
   const validMethods = new Map<string, ProjectSymbol>();
   const validVariables = new Map<string, ProjectSymbol>();
 
+  // Helper to get first matching symbol by scope
+  const getMatchingSymbol = (symbols: ProjectSymbol[] | undefined, objectName?: string): ProjectSymbol | undefined => {
+    if (!symbols || symbols.length === 0) return undefined;
+    if (symbols.length === 1) {
+      // Single symbol - check if scope matches (if it has one)
+      const sym = symbols[0];
+      if (!sym.scope || !objectName || sym.scope === objectName) {
+        return sym;
+      }
+      return undefined;
+    }
+    // Multiple symbols - find one with matching scope, or one without scope (general method)
+    for (const sym of symbols) {
+      if (sym.scope === objectName) return sym; // Exact scope match
+      if (!sym.scope) return sym; // General method (no scope)
+    }
+    return undefined;
+  };
+
   // In non-strict mode: all project symbols are valid (backwards compatible)
   if (!strictMode) {
-    for (const [name, sym] of projectFunctions) validFunctions.set(name, sym);
+    for (const [name, syms] of projectFunctions) {
+      validFunctions.set(name, syms[0]); // Use first function as representative
+    }
     for (const [name, sym] of projectClasses) validClasses.set(name, sym);
-    for (const [name, sym] of projectMethods) validMethods.set(name, sym);
+    for (const [name, syms] of projectMethods) {
+      validMethods.set(name, syms[0]); // Use first method as representative
+    }
     for (const [name, sym] of projectVariables) validVariables.set(name, sym);
   }
 
   // Tier 1: Add symbols defined in the new code itself (including parameters, destructured variables)
   // These MUST TAKE PRECEDENCE over project symbols to avoid false positives on local scope
-  const newCodeSymbols = extractSymbolsAST(newCode, "(new code)", language);
+  const newCodeSymbols = extractSymbolsAST(newCode, "(new code)", language, {
+    includeParameterSymbols: true,
+  });
   for (const sym of newCodeSymbols) {
     const projectSym = {
       name: sym.name,
@@ -485,8 +520,9 @@ export function validateSymbols(
             validClasses.set(name.local, { ...validSym, type: "class" });
 
             // Also try to find real symbol for better type info
+            const funcSyms = projectFunctions.get(name.imported);
             const realSym =
-              projectFunctions.get(name.imported) ||
+              (funcSyms && funcSyms[0]) ||
               projectClasses.get(name.imported) ||
               projectVariables.get(name.imported);
 
@@ -528,9 +564,11 @@ export function validateSymbols(
         }
 
         // FALLBACK: Old global lookup logic (only for non-relative or if context missing)
+        const importedFuncSyms = projectFunctions.get(name.imported);
+        const localFuncSyms = projectFunctions.get(name.local);
         const projectSym =
-          projectFunctions.get(name.imported) ||
-          projectFunctions.get(name.local) ||
+          (importedFuncSyms && importedFuncSyms[0]) ||
+          (localFuncSyms && localFuncSyms[0]) ||
           projectClasses.get(name.imported) ||
           projectClasses.get(name.local) ||
           projectVariables.get(name.imported) ||
@@ -645,13 +683,14 @@ export function validateSymbols(
           continue;
         }
 
+        const funcSyms = projectFunctions.get(used.name);
         const existsInProject =
-          projectFunctions.has(used.name) || projectClasses.has(used.name);
+          (funcSyms && funcSyms.length > 0) || projectClasses.has(used.name);
 
         let suggestion = "";
         if (existsInProject) {
           const sym =
-            projectFunctions.get(used.name) || projectClasses.get(used.name);
+            (funcSyms && funcSyms[0]) || projectClasses.get(used.name);
           if (sym) {
             // Calculate a descriptive suggestion including the file
             // Note: We'd ideally calculate a relative path here, but for now,
@@ -723,9 +762,16 @@ export function validateSymbols(
     } else if (used.type === "methodCall") {
       // 0. Skip whitelisted objects and chains (e.g., 'this.*', 'window.*', 'z.*', 'smthRef.current.*')
       const rootObject = used.object?.split(".")[0]?.split("(")[0];
+
+      // CRITICAL FIX: Skip ALL 'this' method calls - we can't validate class scope
+      // The 'this' keyword is always in scope within a class/function context
+      // TypeScript/ESLint handle class method validation, not CodeGuardian
+      if (used.object === "this" || used.object?.startsWith("this.")) {
+        continue; // Trust class scope - this is not a hallucination risk
+      }
+
+      // Skip other whitelisted global objects and common patterns
       if (
-        used.object === "this" ||
-        used.object?.startsWith("this.") ||
         used.object?.includes(".current") ||
         (rootObject &&
           [
@@ -788,9 +834,19 @@ export function validateSymbols(
         isJSBuiltin(rootObject!) ||
         // Always trust common short variable names in non-strict mode
         (!strictMode &&
-          ["z", "t", "db", "prisma", "ctx", "req", "res", "e", "i", "req", "res"].includes(
-            rootObject!,
-          ));
+          [
+            "z",
+            "t",
+            "db",
+            "prisma",
+            "ctx",
+            "req",
+            "res",
+            "e",
+            "i",
+            "req",
+            "res",
+          ].includes(rootObject!));
 
       // If the object doesn't exist at all, flag it as a hallucination
       if (!objExists) {
@@ -854,11 +910,7 @@ export function validateSymbols(
         } else {
           // Objects not from imports (locally defined)
           // ONLY check if we have class info, otherwise we don't know the type enough to flag it
-          const objClass =
-            validClasses.get(used.object!) ||
-            validVariables.get(used.object!) ||
-            validClasses.get(rootObject!) ||
-            validVariables.get(rootObject!);
+          const objClass = validClasses.get(used.object!) || validClasses.get(rootObject!);
 
           if (objClass && objClass.file !== "(new code)") {
             shouldCheck = true;
@@ -869,17 +921,31 @@ export function validateSymbols(
       // console.log(`DEBUG: Method ${used.object}.${used.name} - shouldCheck: ${shouldCheck}`);
       if (!shouldCheck) continue;
 
-      const method = validMethods.get(used.name);
-      const func = validFunctions.get(used.name);
+      // Look up method by name, but also check if it has a matching scope
+      // This handles object literal methods: const api = { method: () => {} }
+      const methodSym = validMethods.get(used.name);
+      const funcSym = validFunctions.get(used.name);
+      
+      // Check if method exists with matching scope (e.g., timeEntriesApi.getPending)
+      // If the method has a scope, it must match the object name
+      // If no scope, it's a general method (like class methods)
+      const methodMatches = methodSym && (!methodSym.scope || methodSym.scope === used.object);
+      const funcMatches = funcSym && (!funcSym.scope || funcSym.scope === used.object);
 
-      if (!method && !func) {
+      if (!methodMatches && !funcMatches) {
         const objClass =
           validClasses.get(used.object!) || validVariables.get(used.object!);
         if (objClass) {
-          const suggestion = suggestSimilar(
-            used.name,
-            Array.from(validMethods.keys()),
-          );
+          // Build list of valid methods for this object type
+          const objectMethods: string[] = [];
+          for (const [name, sym] of validMethods) {
+            // Include methods that either have no scope (general) or match the object
+            if (!sym.scope || sym.scope === used.object) {
+              objectMethods.push(name);
+            }
+          }
+          
+          const suggestion = suggestSimilar(used.name, objectMethods);
           const similarSymbols = extractSimilarSymbols(suggestion);
           const { confidence, reasoning } = calculateConfidence({
             issueType: "nonExistentMethod",
@@ -959,6 +1025,12 @@ export function validateSymbols(
         });
       }
     } else if (used.type === "reference") {
+      // CRITICAL FIX: Skip property access on 'this' (e.g., this.ws, this.data)
+      // These are class properties and should not be validated as standalone variables
+      if (used.object === "this" || used.object?.startsWith("this.")) {
+        continue; // Trust class scope - properties are validated by TypeScript
+      }
+
       const func = validFunctions.get(used.name);
       const cls = validClasses.get(used.name);
       const variable = validVariables.get(used.name);
@@ -1009,8 +1081,9 @@ export function validateSymbols(
 
         let suggestion = "";
         if (existsInProject) {
+          const funcSymsForRef = projectFunctions.get(used.name);
           const sym =
-            projectFunctions.get(used.name) ||
+            (funcSymsForRef && funcSymsForRef[0]) ||
             projectClasses.get(used.name) ||
             projectVariables.get(used.name);
           if (sym) {

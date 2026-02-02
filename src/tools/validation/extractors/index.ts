@@ -17,7 +17,7 @@ import type {
   ASTImport,
   ASTTypeReference,
 } from "../types.js";
-import { getParser } from "../parser.js";
+import { getParser, isSupportedLanguage } from "../parser.js";
 import {
   extractPythonSymbols,
   extractPythonUsages,
@@ -66,10 +66,32 @@ export type {
  */
 export function extractSymbolsAST(
   code: string,
-  filePath: string,
-  language: string,
+  filePathOrLanguage: string,
+  languageOrOptions?: string | { includeParameterSymbols?: boolean },
+  options: { includeParameterSymbols?: boolean } = {},
 ): ASTSymbol[] {
-  const parser = getParser(language);
+  // Backwards compatibility:
+  // - Old signature: extractSymbolsAST(code, language)
+  // - Current signature: extractSymbolsAST(code, filePath, language, options?)
+  let filePath = filePathOrLanguage;
+  let language: string | undefined;
+  let normalizedOptions = options;
+
+  if (typeof languageOrOptions === "object" && languageOrOptions !== null) {
+    // Called as: (code, language, options)
+    language = filePathOrLanguage;
+    filePath = "";
+    normalizedOptions = languageOrOptions;
+  } else {
+    language = languageOrOptions;
+    // Called as: (code, language)
+    if (!language && isSupportedLanguage(filePathOrLanguage)) {
+      language = filePathOrLanguage;
+      filePath = "";
+    }
+  }
+
+  const parser = getParser(language as any);
   const tree = parser.parse(code);
   const symbols: ASTSymbol[] = [];
 
@@ -78,7 +100,14 @@ export function extractSymbolsAST(
   } else {
     // JavaScript and TypeScript use the same extractor
     // Cast to any to handle type mismatch between tree-sitter and web-tree-sitter
-    extractJSSymbols(tree.rootNode as any, code, filePath, symbols, null);
+    extractJSSymbols(
+      tree.rootNode as any,
+      code,
+      filePath,
+      symbols,
+      null,
+      normalizedOptions,
+    );
   }
 
   return symbols;

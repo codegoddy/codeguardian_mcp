@@ -19,7 +19,11 @@ const fileAlerts = new Map<string, ValidationAlert>();
 
 /**
  * Callback to handle validation alerts
- * Stores them for MCP sampling to retrieve AND auto-pushes to LLM
+ * Stores them for retrieval via get_guardian_alerts tool
+ * 
+ * Note: MCP servers cannot directly push data to LLMs. The LLM must
+ * call get_guardian_alerts to retrieve pending alerts. We also send
+ * a UI notification to hint the user/LLM that alerts are available.
  */
 function handleAlert(alert: ValidationAlert): void {
   // Update state for this file
@@ -28,19 +32,19 @@ function handleAlert(alert: ValidationAlert): void {
     const hadIssues = fileAlerts.has(alert.file);
     fileAlerts.delete(alert.file);
     
-    // Only verify notification if we actually cleared something
+    // Only log if we actually cleared something
     if (hadIssues) {
       logger.info(`Issues cleared for: ${alert.file}`);
-      // Optional: Push "all clear" notification if desired
     }
   } else {
-    // Store new issues
+    // Store new issues for LLM to retrieve via get_guardian_alerts
     fileAlerts.set(alert.file, alert);
-    logger.info(`Alert tracked for: ${alert.file} (${alert.issues.length} issues)`);
+    logger.info(`Alert stored for: ${alert.file} (${alert.issues.length} issues) - use get_guardian_alerts to retrieve`);
     
-    // Auto-push to LLM via MCP notification
+    // Send UI notification as a hint (shows in client UI, not to LLM directly)
+    // The LLM still needs to call get_guardian_alerts to get the actual data
     pushValidationAlert(alert).catch((err) => {
-      logger.warn("Failed to auto-push alert:", err);
+      logger.warn("Failed to send UI notification:", err);
     });
   }
 }

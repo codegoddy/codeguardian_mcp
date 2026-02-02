@@ -31,11 +31,16 @@ describe("JavaScript Extractor", () => {
 
       extractJSSymbols(tree.rootNode, code, "test.js", symbols, null);
 
-      expect(symbols).toHaveLength(1);
-      expect(symbols[0].name).toBe("hello");
-      expect(symbols[0].type).toBe("function");
-      expect(symbols[0].params).toEqual(["name"]);
-      expect(symbols[0].paramCount).toBe(1);
+      // Should have function symbol + parameter symbol(s)
+      expect(symbols.length).toBeGreaterThanOrEqual(1);
+      const funcSymbol = symbols.find((s) => s.name === "hello");
+      expect(funcSymbol).toBeDefined();
+      expect(funcSymbol?.type).toBe("function");
+      expect(funcSymbol?.params).toEqual(["name"]);
+      expect(funcSymbol?.paramCount).toBe(1);
+      // Parameter 'name' is also extracted as a local variable symbol
+      const paramSymbol = symbols.find((s) => s.name === "name" && s.type === "variable");
+      expect(paramSymbol).toBeDefined();
     });
 
     it("should extract arrow functions", () => {
@@ -46,10 +51,15 @@ describe("JavaScript Extractor", () => {
 
       extractJSSymbols(tree.rootNode, code, "test.js", symbols, null);
 
-      expect(symbols).toHaveLength(1);
-      expect(symbols[0].name).toBe("greet");
-      expect(symbols[0].type).toBe("function");
-      expect(symbols[0].params).toEqual(["name"]);
+      // Should have function symbol + parameter symbol(s)
+      expect(symbols.length).toBeGreaterThanOrEqual(1);
+      const funcSymbol = symbols.find((s) => s.name === "greet");
+      expect(funcSymbol).toBeDefined();
+      expect(funcSymbol?.type).toBe("function");
+      expect(funcSymbol?.params).toEqual(["name"]);
+      // Parameter 'name' is also extracted as a local variable symbol
+      const paramSymbol = symbols.find((s) => s.name === "name" && s.type === "variable");
+      expect(paramSymbol).toBeDefined();
     });
 
     it("should extract class declarations", () => {

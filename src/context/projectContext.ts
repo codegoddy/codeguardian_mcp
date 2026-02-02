@@ -64,12 +64,14 @@ export interface SymbolInfo {
     | "variable"
     | "enum"
     | "component"
-    | "hook";
+    | "hook"
+    | "method";
   line: number;
   exported: boolean;
   async?: boolean;
   returnType?: string;
   params?: Array<{ name: string; type?: string }>;
+  scope?: string; // For object literal methods: the parent object name (e.g., "timeEntriesApi")
 }
 
 export interface ImportInfo {
@@ -624,6 +626,11 @@ async function buildProjectContext(
     if (i % 5 === 0 && i > 0) {
       await new Promise((resolve) => setImmediate(resolve));
     }
+    
+    // Log progress periodically to avoid "stuck" feeling
+    if (i % 50 === 0 && i > 0) {
+        logger.info(`Context build progress: ${i}/${filesToProcess.length} files analyzed`);
+    }
   }
 
   // Process test files for import tracking only (not for symbol indexing)
@@ -1032,6 +1039,12 @@ function extractJSSymbolsAST(
         case "variable":
           kind = "variable";
           break;
+        case "interface":
+          kind = "interface";
+          break;
+        case "type":
+          kind = "type";
+          break;
         default:
           kind = "function";
       }
@@ -1043,6 +1056,7 @@ function extractJSSymbolsAST(
         exported: sym.isExported ?? false,
         async: sym.isAsync,
         params: sym.params?.map((p) => ({ name: p })),
+        returnType: sym.returnType,
       });
     }
 
@@ -1058,16 +1072,21 @@ function extractJSSymbolsAST(
 /**
  * Extract TypeScript-specific types (interfaces, types, enums) using regex
  * These aren't well-supported by tree-sitter-javascript
+ * 
+ * NOTE: This now only adds symbols that weren't already extracted by AST parsing
  */
 function extractJSTypesRegex(content: string, fileInfo: FileInfo): void {
   const lines = content.split("\n");
+  
+  // Helper to check if symbol already exists
+  const symbolExists = (name: string) => fileInfo.symbols.some(s => s.name === name);
 
   lines.forEach((line, idx) => {
     const lineNum = idx + 1;
 
-    // Interfaces
+    // Interfaces - only add if not already extracted by AST
     const interfaceMatch = line.match(/(?:export\s+)?interface\s+(\w+)/);
-    if (interfaceMatch) {
+    if (interfaceMatch && !symbolExists(interfaceMatch[1])) {
       fileInfo.symbols.push({
         name: interfaceMatch[1],
         kind: "interface",
@@ -1076,11 +1095,11 @@ function extractJSTypesRegex(content: string, fileInfo: FileInfo): void {
       });
     }
 
-    // Types
+    // Types - only add if not already extracted by AST
     const typeMatch = line.match(
       /(?:export\s+)?type\s+(\w+)\s*(?:<[^>]+>)?\s*=/,
     );
-    if (typeMatch) {
+    if (typeMatch && !symbolExists(typeMatch[1])) {
       fileInfo.symbols.push({
         name: typeMatch[1],
         kind: "type",
@@ -1089,9 +1108,9 @@ function extractJSTypesRegex(content: string, fileInfo: FileInfo): void {
       });
     }
 
-    // Enums
+    // Enums - only add if not already extracted by AST
     const enumMatch = line.match(/(?:export\s+)?enum\s+(\w+)/);
-    if (enumMatch) {
+    if (enumMatch && !symbolExists(enumMatch[1])) {
       fileInfo.symbols.push({
         name: enumMatch[1],
         kind: "enum",
@@ -1997,6 +2016,7 @@ async function loadContextFromDisk(
 
     // Verify it belongs to this project path (just in case)
     if (cached.context.projectPath !== projectPath) {
+        logger.info(`Disk cache path mismatch: ${cached.context.projectPath} vs ${projectPath}`);
         return null;
     }
 
@@ -2004,11 +2024,12 @@ async function loadContextFromDisk(
     if (currentGitInfo && cached.gitInfo) {
         if (currentGitInfo.branch !== cached.gitInfo.branch || 
             currentGitInfo.commitSHA !== cached.gitInfo.commitSHA) {
-            logger.info("Disk cache invalid: Git commit/branch mismatch");
+            logger.info(`Disk cache invalid: Git commit/branch mismatch (${currentGitInfo.commitSHA} vs ${cached.gitInfo.commitSHA})`);
             return null;
         }
     } else if (currentGitInfo || cached.gitInfo) {
         // One has git, the other doesn't -> mismatch
+        logger.info("Disk cache invalid: Git presence mismatch");
         return null;
     }
 
@@ -2017,6 +2038,7 @@ async function loadContextFromDisk(
     if (!currentGitInfo) {
          // Simple age check - expire after 1 hour if no git
          if (Date.now() - cached.timestamp > 60 * 60 * 1000) {
+             logger.info("Disk cache expired (no git)");
              return null;
          }
     }

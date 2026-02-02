@@ -37,6 +37,7 @@ export function extractJSSymbols(
   filePath: string,
   symbols: ASTSymbol[],
   currentClass: string | null,
+  options: { includeParameterSymbols?: boolean } = {},
 ): void {
   if (!node) return;
 
@@ -47,7 +48,7 @@ export function extractJSSymbols(
 
       if (nameNode) {
         const name = getText(nameNode, code);
-        const params = extractJSParams(paramsNode, code, filePath, symbols);
+        const params = extractJSParams(paramsNode, code, filePath, symbols, options);
         const isAsync = node.children.some(
           (c: Parser.SyntaxNode) => getText(c, code) === "async",
         );
@@ -107,7 +108,13 @@ export function extractJSSymbols(
                 valueNode?.type === "function"
               ) {
                 const paramsNode = valueNode.childForFieldName("parameters") || valueNode.childForFieldName("parameter");
-                const params = extractJSParams(paramsNode, code, filePath, symbols);
+                const params = extractJSParams(
+                  paramsNode,
+                  code,
+                  filePath,
+                  symbols,
+                  options,
+                );
                 const isAsync = valueNode.children.some(
                   (c: Parser.SyntaxNode) => getText(c, code) === "async",
                 );
@@ -143,6 +150,7 @@ export function extractJSSymbols(
       const psNode = node.childForFieldName("parameters");
       if (pNode) {
         if (pNode.type === "identifier") {
+          // Single parameter arrow function: x => x + 1
           symbols.push({
             name: getText(pNode, code),
             type: "variable",
@@ -165,8 +173,16 @@ export function extractJSSymbols(
         }
       }
       if (psNode) {
-        extractJSParams(psNode, code, filePath, symbols);
+        extractJSParams(psNode, code, filePath, symbols, options);
       }
+      // Continue recursion to process function body, but parameter identifiers
+      // will be skipped by the case "identifier" check below
+      // IMPORTANT: Use return here, not break, to prevent falling through to
+      // the recursive call at the end of extractJSSymbols. The recursive call
+      // for arrow_function children is handled by the recursive call to
+      // extractJSParams and subsequent processing.
+      // Actually, we DO need to recurse into the function body to find nested symbols.
+      // The break allows the loop at the end of extractJSSymbols to handle recursion.
       break;
     }
 
@@ -190,7 +206,7 @@ export function extractJSSymbols(
         const bodyNode = node.childForFieldName("body");
         if (bodyNode) {
           for (const child of bodyNode.children) {
-            extractJSSymbols(child, code, filePath, symbols, className);
+            extractJSSymbols(child, code, filePath, symbols, className, options);
           }
         }
         return;
@@ -205,10 +221,14 @@ export function extractJSSymbols(
       if (nameNode) {
         const name = getText(nameNode, code);
         if (name !== "constructor") {
-          const params = extractJSParams(paramsNode, code, filePath, symbols);
+          const params = extractJSParams(paramsNode, code, filePath, symbols, options);
           const isAsync = node.children.some(
             (c: Parser.SyntaxNode) => getText(c, code) === "async",
           );
+          
+          // Extract return type for TypeScript methods
+          const returnTypeNode = node.childForFieldName("return_type");
+          const returnType = returnTypeNode ? getText(returnTypeNode, code) : undefined;
 
           symbols.push({
             name,
@@ -220,6 +240,7 @@ export function extractJSSymbols(
             paramCount: params.length,
             scope: currentClass || undefined,
             isAsync,
+            returnType,
           });
         }
       }
@@ -280,6 +301,116 @@ export function extractJSSymbols(
       break;
     }
 
+    // Object literals: const api = { method: () => {} }
+    // Extract methods from object literals to support API client patterns
+    case "object": {
+      // Check if this object is the value of a variable declarator
+      // This handles: const timeEntriesApi = { getPending: async () => {} }
+      const parent = node.parent;
+      let parentVariableName: string | null = null;
+      
+      if (parent?.type === "variable_declarator") {
+        const nameNode = parent.childForFieldName("name");
+        if (nameNode?.type === "identifier") {
+          parentVariableName = getText(nameNode, code);
+        }
+      }
+      
+      // Extract all method properties from the object literal
+      for (const child of node.children) {
+        if (child.type === "pair") {
+          const keyNode = child.childForFieldName("key");
+          const valueNode = child.childForFieldName("value");
+          
+          if (keyNode && valueNode) {
+            const keyName = getText(keyNode, code);
+            
+            // Check if the value is a function (arrow_function, function, or call_expression that returns a function)
+            const isFunctionValue = 
+              valueNode.type === "arrow_function" ||
+              valueNode.type === "function";
+            
+            if (isFunctionValue) {
+              const paramsNode = valueNode.childForFieldName("parameters") || valueNode.childForFieldName("parameter");
+              // Pass undefined for symbols to avoid registering params as local variables
+              // We only want the parameter names for the method signature
+              const params = extractJSParams(paramsNode, code, filePath, undefined, options);
+              const isAsync = valueNode.children.some(
+                (c: Parser.SyntaxNode) => getText(c, code) === "async",
+              );
+              
+              // Register as a method with scope = parent variable name
+              // Note: We don't extract params here - let recursion handle it
+              // to avoid duplicate parameter symbols
+              symbols.push({
+                name: keyName,
+                type: "method",
+                file: filePath,
+                line: child.startPosition.row + 1,
+                column: child.startPosition.column,
+                params,
+                paramCount: params.length,
+                scope: parentVariableName || undefined,
+                isAsync,
+                isExported: parent?.parent?.parent?.type === "export_statement",
+              });
+              
+              // Recurse into the arrow function to extract its parameter symbols
+              // This ensures parameters like (id) in { mutationFn: (id) => ... } are registered
+              extractJSSymbols(valueNode, code, filePath, symbols, null, options);
+            } else {
+              // Not a function value, recurse to find any nested symbols
+              extractJSSymbols(valueNode, code, filePath, symbols, null, options);
+            }
+          }
+        }
+        // Handle shorthand methods: { method() {} }
+        else if (child.type === "method_definition") {
+          const nameNode = child.childForFieldName("name");
+          const paramsNode = child.childForFieldName("parameters");
+          
+          if (nameNode) {
+            const name = getText(nameNode, code);
+            // Pass symbols to register params as local variables
+            const params = extractJSParams(paramsNode, code, filePath, symbols, options);
+            const isAsync = child.children.some(
+              (c: Parser.SyntaxNode) => getText(c, code) === "async",
+            );
+            
+            // Extract return type for TypeScript methods
+            const returnTypeNode = child.childForFieldName("return_type");
+            const returnType = returnTypeNode ? getText(returnTypeNode, code) : undefined;
+            
+            symbols.push({
+              name,
+              type: "method",
+              file: filePath,
+              line: child.startPosition.row + 1,
+              column: child.startPosition.column,
+              params,
+              paramCount: params.length,
+              scope: parentVariableName || undefined,
+              isAsync,
+              isExported: parent?.parent?.parent?.type === "export_statement",
+              returnType,
+            });
+            
+            // Recurse into method body to extract any nested symbols
+            const bodyNode = child.childForFieldName("body");
+            if (bodyNode) {
+              extractJSSymbols(bodyNode, code, filePath, symbols, null, options);
+            }
+          }
+        } else if (child.type !== "{" && child.type !== "}" && child.type !== ",") {
+          // Recurse into other children (but skip punctuation)
+          extractJSSymbols(child, code, filePath, symbols, null, options);
+        }
+      }
+      // Use break (not return) so we don't process the same nodes again in the main recursion
+      // But we've already handled all children, so this prevents double-processing
+      return;
+    }
+
     // Catch clause parameters: catch (error) { ... }
     case "catch_clause": {
       // Find the parameter node - it's usually the first identifier after 'catch'
@@ -322,62 +453,20 @@ export function extractJSSymbols(
     }
 
     // Function parameters (arrow functions, methods, etc.)
+    // NOTE: Parameters are extracted by extractJSParams which is called from
+    // function_declaration, arrow_function, and method_definition cases.
+    // The function body will be processed by recursion into other children.
     case "formal_parameters":
-    case "parameters": {
-      for (const child of node.children) {
-
-        if (child.type === "identifier") {
-          symbols.push({
-            name: getText(child, code),
-            type: "variable",
-            file: filePath,
-            line: node.startPosition.row + 1,
-            column: node.startPosition.column,
-            isExported: false,
-          });
-        } else if (
-          child.type === "object_pattern" ||
-          child.type === "array_pattern"
-        ) {
-          extractDestructuredNames(
-            child,
-            code,
-            filePath,
-            symbols,
-            node.startPosition.row + 1,
-          );
-        } else if (
-          child.type === "required_parameter" ||
-          child.type === "optional_parameter" ||
-          child.type === "rest_pattern"
-        ) {
-          // For required/optional parameters, they wrap the actual pattern/identifier
-          const pattern =
-            child.childForFieldName("pattern") ||
-            child.children.find(
-              (c) =>
-                c.type === "identifier" ||
-                c.type === "object_pattern" ||
-                c.type === "array_pattern" ||
-                c.type === "rest_pattern",
-            ) ||
-            child; // Fallback to the child itself if it's already a pattern (like rest_pattern)
-
-          extractDestructuredNames(
-            pattern,
-            code,
-            filePath,
-            symbols,
-            node.startPosition.row + 1,
-          );
-        }
-      }
+    case "parameters":
+    case "required_parameter":
+    case "optional_parameter": {
+      // Fall through to recursion - function body will be processed
       break;
     }
   }
 
   for (const child of node.children) {
-    extractJSSymbols(child, code, filePath, symbols, currentClass);
+    extractJSSymbols(child, code, filePath, symbols, currentClass, options);
   }
 }
 
@@ -386,13 +475,17 @@ export function extractJSSymbols(
 // ============================================================================
 
 /**
- * Extract parameter names and register them as local variables
+ * Extract parameter names from a formal_parameters node.
+ * Returns the parameter names for the function's params list.
+ * For destructured parameters (object/array patterns), also registers the
+ * individual variable names as symbols for validation purposes.
  */
 export function extractJSParams(
   paramsNode: Parser.SyntaxNode | null,
   code: string,
-  filePath: string,
-  symbols: ASTSymbol[],
+  filePath: string = "",
+  symbols?: ASTSymbol[],
+  options: { includeParameterSymbols?: boolean } = {},
 ): string[] {
   if (!paramsNode) return [];
 
@@ -401,19 +494,25 @@ export function extractJSParams(
     if (child.type === "identifier") {
       const name = getText(child, code);
       params.push(name);
-      symbols.push({
-        name,
-        type: "variable",
-        file: filePath,
-        line: child.startPosition.row + 1,
-        column: child.startPosition.column,
-      });
+      // ALWAYS register simple parameter identifiers as local symbols.
+      // This prevents false positives where function parameters are flagged
+      // as "undefinedVariable" when used within the function body.
+      if (symbols) {
+        symbols.push({
+          name,
+          type: "variable",
+          file: filePath,
+          line: child.startPosition.row + 1,
+          column: child.startPosition.column,
+        });
+      }
     } else if (
       child.type === "required_parameter" ||
       child.type === "optional_parameter" ||
       child.type === "rest_pattern"
     ) {
       // Logic for destructuring or simple names in typed parameters
+      // TypeScript: function foo({ x }: Type) or function foo(x: Type)
       const nameNode =
         child.childForFieldName("pattern") ||
         child.children.find(
@@ -426,13 +525,17 @@ export function extractJSParams(
 
       if (nameNode) {
         if (nameNode.type === "object_pattern" || nameNode.type === "array_pattern") {
-          extractDestructuredNames(
-            nameNode,
-            code,
-            filePath,
-            symbols,
-            nameNode.startPosition.row + 1,
-          );
+          // For destructured params, register the individual names as symbols
+          // This is needed for validation to recognize them as defined variables
+          if (symbols) {
+            extractDestructuredNames(
+              nameNode,
+              code,
+              filePath,
+              symbols,
+              nameNode.startPosition.row + 1,
+            );
+          }
           // For param list, we use the raw text
           params.push(getText(nameNode, code));
         } else if (nameNode.type === "rest_pattern") {
@@ -440,34 +543,45 @@ export function extractJSParams(
           if (id) {
             const name = getText(id, code);
             params.push(name);
+            // Rest parameters are registered as symbols
+            if (symbols) {
+              symbols.push({
+                name,
+                type: "variable",
+                file: filePath,
+                line: id.startPosition.row + 1,
+                column: id.startPosition.column,
+              });
+            }
+          }
+        } else if (nameNode.type === "identifier") {
+          // Handle simple typed parameters: function foo(x: Type)
+          const name = getText(nameNode, code);
+          params.push(name);
+          // ALWAYS register parameter symbols to prevent false positives
+          // when validating local variable usage within the function scope
+          if (symbols) {
             symbols.push({
               name,
               type: "variable",
               file: filePath,
-              line: id.startPosition.row + 1,
-              column: id.startPosition.column,
+              line: nameNode.startPosition.row + 1,
+              column: nameNode.startPosition.column,
             });
           }
-        } else {
-          const name = getText(nameNode, code);
-          params.push(name);
-          symbols.push({
-            name,
-            type: "variable",
-            file: filePath,
-            line: nameNode.startPosition.row + 1,
-            column: nameNode.startPosition.column,
-          });
         }
       }
     } else if (child.type === "object_pattern" || child.type === "array_pattern") {
-      extractDestructuredNames(
-        child,
-        code,
-        filePath,
-        symbols,
-        child.startPosition.row + 1,
-      );
+      // For destructured params at the top level, register the individual names
+      if (symbols) {
+        extractDestructuredNames(
+          child,
+          code,
+          filePath,
+          symbols,
+          child.startPosition.row + 1,
+        );
+      }
       params.push(getText(child, code));
     }
   }
@@ -484,8 +598,9 @@ export function extractDestructuredNames(
   filePath: string,
   symbols: ASTSymbol[],
   line: number,
+  depth: number = 0,
 ): void {
-  if (!node) return;
+  if (!node || depth > 50) return; // Recursion loop guard
 
   switch (node.type) {
     case "identifier":
@@ -502,36 +617,60 @@ export function extractDestructuredNames(
     }
 
     case "pair_pattern": {
+      // Handle { oldName: newName } - extract newName
       const valueNode = node.childForFieldName("value");
       if (valueNode) {
-        extractDestructuredNames(valueNode, code, filePath, symbols, line);
+        extractDestructuredNames(valueNode, code, filePath, symbols, line, depth + 1);
       }
       break;
     }
 
     case "assignment_pattern": {
+      // Handle [a = 1] or {a = 1} - extract the left side
       const leftNode = node.childForFieldName("left");
       if (leftNode) {
-        extractDestructuredNames(leftNode, code, filePath, symbols, line);
+        extractDestructuredNames(leftNode, code, filePath, symbols, line, depth + 1);
       }
       break;
     }
 
+    case "object_assignment_pattern": {
+       // Handle { a = 1 } in object destructuring (with default value)
+       for (const child of node.children) {
+         // Only extract the identifier being defined, not the default value
+         if (child.type === "shorthand_property_identifier_pattern" ||
+             child.type === "identifier") {
+           extractDestructuredNames(child, code, filePath, symbols, line, depth + 1);
+         }
+       }
+       break;
+    }
+
     case "object_pattern":
-    case "array_pattern":
-    case "rest_pattern": {
+    case "array_pattern": {
       for (const child of node.children) {
-        // Only recurse into relevant pattern parts
+        // Only recurse into relevant pattern parts (skip punctuation like {, }, [, ], commas)
         if (
           child.type === "pair_pattern" ||
           child.type === "shorthand_property_identifier_pattern" ||
           child.type === "object_pattern" ||
           child.type === "array_pattern" ||
           child.type === "assignment_pattern" ||
+          child.type === "object_assignment_pattern" ||
           child.type === "identifier" ||
           child.type === "rest_pattern"
         ) {
-          extractDestructuredNames(child, code, filePath, symbols, line);
+          extractDestructuredNames(child, code, filePath, symbols, line, depth + 1);
+        }
+      }
+      break;
+    }
+    
+    case "rest_pattern": {
+      // Handle ...rest - find the identifier inside
+      for (const child of node.children) {
+        if (child.type === "identifier") {
+          extractDestructuredNames(child, code, filePath, symbols, line, depth + 1);
         }
       }
       break;
@@ -582,7 +721,13 @@ export function extractJSUsages(
             const obj = getText(objNode, code);
             const method = getText(propNode, code);
 
-            if (!externalSymbols.has(obj) && !isJSBuiltin(obj)) {
+            // Skip built-in objects (console, window, etc.) but NOT imported symbols
+            // We need to track method calls on imported symbols for validation
+            // The imported object methods can be validated against the project symbol table
+            if (isJSBuiltin(obj)) {
+              // Skip method calls on built-in objects (Array.map, String.split, etc.)
+              // These are standard library methods we don't need to validate
+            } else {
               usages.push({
                 name: method,
                 type: "methodCall",
@@ -611,12 +756,27 @@ export function extractJSUsages(
           code: getLineText(code, node.startPosition.row),
         });
       }
-      break;
+      // Don't recurse into children to avoid extracting the constructor name again as a reference
+      return;
     }
 
     case "identifier":
     case "jsx_identifier": {
       const name = getText(node, code);
+
+      // Skip built-in objects that are commonly used as property access base
+      // (e.g., console in console.log, window in window.location)
+      // These are handled specially and shouldn't be flagged as undefined references
+      if (isJSBuiltin(name)) {
+        // But only skip if it's being used as an object base (member_expression.object)
+        const parent = node.parent;
+        if (
+          parent?.type === "member_expression" &&
+          parent.childForFieldName("object") === node
+        ) {
+          break; // Skip this identifier
+        }
+      }
 
       // Semantic Bridge: Detect potential API calls (fetch('/api/...'))
       if (
@@ -642,15 +802,21 @@ export function extractJSUsages(
                   (u) =>
                     u.name === url && u.line === node.startPosition.row + 1,
                 );
-                if (!exists) {
-                  usages.push({
-                    name: url,
-                    type: "reference", // We tag it as reference with name = URL
-                    line: node.startPosition.row + 1,
-                    column: node.startPosition.column,
-                    code: `API_CALL: ${url}`,
-                  });
-                }
+                // NOTE: We intentionally do NOT add URLs as usages to validate.
+                // URLs are string literals, not variables. Adding them as "reference"
+                // type causes false positives (e.g., '/api/cli/generate-token' flagged
+                // as undefined variable). This code block is kept for potential future
+                // API endpoint validation but currently does nothing.
+                //
+                // if (!exists) {
+                //   usages.push({
+                //     name: url,
+                //     type: "apiCall", // Custom type - not validated as variable
+                //     line: node.startPosition.row + 1,
+                //     column: node.startPosition.column,
+                //     code: `API_CALL: ${url}`,
+                //   });
+                // }
               }
             }
           }
@@ -666,6 +832,7 @@ export function extractJSUsages(
 
       // 0. Skip if inside a string literal or JSX text content
       // This prevents false positives like "Notes" in <h3>Comments & Notes</h3>
+      // Also skip ERROR nodes inside JSX (parser errors from invalid JSX characters like &)
       let ancestor: Parser.SyntaxNode | null = parent;
       while (ancestor) {
         if (
@@ -675,6 +842,23 @@ export function extractJSUsages(
           ancestor.type === "string_fragment"
         ) {
           return; // Don't process this identifier at all
+        }
+        // Skip identifiers inside ERROR nodes that are within JSX elements
+        // This happens when JSX contains invalid characters like unescaped &
+        if (ancestor.type === "ERROR") {
+          // Check if this ERROR is within a JSX element
+          let jsxAncestor: Parser.SyntaxNode | null = ancestor.parent;
+          while (jsxAncestor) {
+            if (
+              jsxAncestor.type === "jsx_element" ||
+              jsxAncestor.type === "jsx_self_closing_element" ||
+              jsxAncestor.type === "jsx_expression" ||
+              jsxAncestor.type === "jsx_fragment"
+            ) {
+              return; // This is an identifier in invalid JSX text, skip it
+            }
+            jsxAncestor = jsxAncestor.parent;
+          }
         }
         ancestor = ancestor.parent;
       }
@@ -710,6 +894,14 @@ export function extractJSUsages(
         parent.childForFieldName("name") === node
       )
         break;
+
+      // 3a. Skip if it's the name of a function expression
+      // e.g., return function ProtectedComponent(props: P) { ... }
+      // The 'ProtectedComponent' here is a local name for the function expression,
+      // NOT a reference to an external variable
+      if (parent.type === "function" && parent.childForFieldName("name") === node) {
+        break;
+      }
 
       // 4. Skip if it's a formal parameter (including rest parameters)
       if (

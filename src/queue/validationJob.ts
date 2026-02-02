@@ -28,6 +28,13 @@ import {
   calculateScore,
   generateRecommendation,
 } from "../tools/validation/scoring.js";
+import { enrichIssuesWithAntiPatterns, generateAntiPatternContext } from "../analyzers/antiPatterns.js";
+import {
+  verifyFindingsAutomatically,
+  getConfirmedFindings,
+  type VerificationResult,
+  type VerificationProgress,
+} from "../analyzers/findingVerifier.js";
 import type {
   ValidationIssue,
   DeadCodeIssue,
@@ -76,7 +83,23 @@ export interface ValidationJobResult {
     contextBuildTime: string;
     validationTime: string;
     deadCodeTime: string;
+    verificationTime: string;
     totalTime: string;
+  };
+  /**
+   * Automated verification results - eliminates false positives without human intervention
+   */
+  verification?: {
+    /** Findings confirmed to be real issues */
+    confirmedCount: number;
+    /** Findings determined to be false positives */
+    falsePositiveCount: number;
+    /** Findings that couldn't be automatically verified */
+    uncertainCount: number;
+    /** Whether verification timed out */
+    timedOut?: boolean;
+    /** Detailed breakdown of what was filtered */
+    details: VerificationResult;
   };
 }
 
@@ -227,7 +250,7 @@ async function handleValidationJob(
   });
 
   const deadCodeStartTime = Date.now();
-  const DEAD_CODE_TIMEOUT = 30000; // 30 seconds max
+  const DEAD_CODE_TIMEOUT = 120000; // 120 seconds max (increased for large projects)
   const deadCodePromise = detectDeadCode(projectContext);
   const timeoutPromise = new Promise<DeadCodeIssue[]>((resolve) => {
     setTimeout(() => {
@@ -241,44 +264,126 @@ async function handleValidationJob(
 
   updateProgress({
     phase: "dead_code_detection",
-    percent: 95,
+    percent: 85,
     message: `Dead code detection complete: ${deadCodeIssues.length} issues found`,
     details: { deadCodeCount: deadCodeIssues.length },
   });
 
-  // Phase 6: Calculate results
+  // Phase 6: Automated Verification (eliminates false positives)
+  updateProgress({
+    phase: "verification",
+    percent: 90,
+    message: "Verifying findings to eliminate false positives...",
+  });
+
+  const verificationStartTime = Date.now();
+  const VERIFICATION_TIMEOUT = 120000; // 120 seconds max (2x expected for large projects)
+  
+  const verificationPromise = verifyFindingsAutomatically(
+    allIssues,
+    deadCodeIssues,
+    projectContext,
+    projectPath,
+    language,
+    (progress: VerificationProgress) => {
+      // Report progress every few files
+      if (progress.processedFiles % 5 === 0 || progress.processedFiles === progress.totalFiles) {
+        updateProgress({
+          phase: "verification",
+          percent: 90 + Math.floor((progress.processedFiles / progress.totalFiles) * 4),
+          message: `Verifying findings... ${progress.processedFiles}/${progress.totalFiles} files (${progress.processedFindings}/${progress.totalFindings} findings)`,
+          details: {
+            filesProcessed: progress.processedFiles,
+            totalFiles: progress.totalFiles,
+            findingsProcessed: progress.processedFindings,
+            totalFindings: progress.totalFindings,
+          },
+        });
+      }
+    }
+  );
+  
+  const verificationTimeoutPromise = new Promise<VerificationResult>((resolve) => {
+    setTimeout(() => {
+      logger.warn(`Verification timed out after ${VERIFICATION_TIMEOUT}ms`);
+      // Return empty result - we'll use original findings
+      resolve({
+        confirmed: [],
+        falsePositives: [],
+        uncertain: [],
+        stats: {
+          totalAnalyzed: allIssues.length + deadCodeIssues.length,
+          confirmedCount: 0,
+          falsePositiveCount: 0,
+          uncertainCount: allIssues.length + deadCodeIssues.length,
+        },
+      });
+    }, VERIFICATION_TIMEOUT);
+  });
+  
+  const verificationResult = await Promise.race([verificationPromise, verificationTimeoutPromise]);
+  const verificationTime = Date.now() - verificationStartTime;
+
+  // Check if verification timed out (no findings processed)
+  const verificationTimedOut = verificationResult.stats.totalAnalyzed > 0 && 
+    verificationResult.stats.confirmedCount === 0 && 
+    verificationResult.stats.falsePositiveCount === 0 &&
+    allIssues.length + deadCodeIssues.length > 0;
+
+  // Get filtered findings (only confirmed, no false positives)
+  // If verification timed out, fall back to using all findings
+  const { hallucinations: confirmedHallucinations, deadCode: confirmedDeadCode } = 
+    verificationTimedOut 
+      ? { hallucinations: allIssues, deadCode: deadCodeIssues }
+      : getConfirmedFindings(verificationResult);
+
+  updateProgress({
+    phase: "verification",
+    percent: 95,
+    message: `Verification complete: ${verificationResult.stats.confirmedCount} confirmed, ${verificationResult.stats.falsePositiveCount} filtered`,
+    details: { 
+      confirmed: verificationResult.stats.confirmedCount,
+      falsePositives: verificationResult.stats.falsePositiveCount,
+      uncertain: verificationResult.stats.uncertainCount,
+    },
+  });
+
+  // Phase 7: Calculate results
   updateProgress({
     phase: "finalizing",
     percent: 98,
     message: "Calculating scores and recommendations...",
   });
 
-  const score = calculateScore(allIssues, deadCodeIssues);
+  // Enrich issues with anti-pattern context
+  updateProgress({
+    phase: "finalizing",
+    percent: 99,
+    message: "Enriching with anti-pattern context...",
+  });
+
+  // Enrich only CONFIRMED issues with anti-pattern context
+  const enrichedConfirmedIssues = await enrichIssuesWithAntiPatterns(confirmedHallucinations, language);
+
+  const score = calculateScore(enrichedConfirmedIssues, confirmedDeadCode);
   const recommendation = generateRecommendation(
     score,
-    allIssues,
-    deadCodeIssues,
+    enrichedConfirmedIssues,
+    confirmedDeadCode,
   );
 
   const totalTime = Date.now() - startTime;
 
-  // Group issues by severity
-  const criticalIssues = allIssues.filter((i) => (i.confidence ?? 0) >= 85);
-  const highIssues = allIssues.filter(
-    (i) => (i.confidence ?? 0) >= 70 && (i.confidence ?? 0) < 85,
-  );
-  const mediumIssues = allIssues.filter(
-    (i) => (i.confidence ?? 0) >= 50 && (i.confidence ?? 0) < 70,
-  );
-
   updateProgress({
     phase: "complete",
     percent: 100,
-    message: "Validation complete",
+    message: `Validation complete: ${enrichedConfirmedIssues.length + confirmedDeadCode.length} confirmed issues (filtered ${verificationResult.stats.falsePositiveCount} false positives)`,
     details: {
       score,
-      totalIssues: allIssues.length,
-      deadCodeIssues: deadCodeIssues.length,
+      totalIssues: enrichedConfirmedIssues.length + confirmedDeadCode.length,
+      confirmedHallucinations: enrichedConfirmedIssues.length,
+      confirmedDeadCode: confirmedDeadCode.length,
+      falsePositivesFiltered: verificationResult.stats.falsePositiveCount,
     },
   });
 
@@ -286,16 +391,17 @@ async function handleValidationJob(
     success: true,
     validated: true,
     score,
-    hallucinationDetected: allIssues.length > 0,
-    deadCodeDetected: deadCodeIssues.length > 0,
-    hallucinations: allIssues,
-    deadCode: deadCodeIssues,
+    hallucinationDetected: enrichedConfirmedIssues.length > 0,
+    deadCodeDetected: confirmedDeadCode.length > 0,
+    // Return ONLY confirmed findings (no false positives)
+    hallucinations: enrichedConfirmedIssues,
+    deadCode: confirmedDeadCode,
     recommendation,
     summary: {
-      totalIssues: allIssues.length,
-      criticalIssues: criticalIssues.length,
-      highIssues: highIssues.length,
-      mediumIssues: mediumIssues.length,
+      totalIssues: enrichedConfirmedIssues.length + confirmedDeadCode.length,
+      criticalIssues: enrichedConfirmedIssues.filter((i) => (i.confidence ?? 0) >= 85).length,
+      highIssues: enrichedConfirmedIssues.filter((i) => (i.confidence ?? 0) >= 70 && (i.confidence ?? 0) < 85).length,
+      mediumIssues: enrichedConfirmedIssues.filter((i) => (i.confidence ?? 0) >= 50 && (i.confidence ?? 0) < 70).length,
       deadCodeIssues: deadCodeIssues.length,
     },
     stats: {
@@ -309,7 +415,18 @@ async function handleValidationJob(
       contextBuildTime: `${contextTime}ms`,
       validationTime: `${validationTime}ms`,
       deadCodeTime: `${deadCodeTime}ms`,
+      verificationTime: `${verificationTime}ms`,
       totalTime: `${totalTime}ms`,
+    },
+    /**
+     * Automated verification results - shows what was filtered and why
+     */
+    verification: {
+      confirmedCount: verificationTimedOut ? allIssues.length + deadCodeIssues.length : verificationResult.stats.confirmedCount,
+      falsePositiveCount: verificationTimedOut ? 0 : verificationResult.stats.falsePositiveCount,
+      uncertainCount: verificationTimedOut ? 0 : verificationResult.stats.uncertainCount,
+      timedOut: verificationTimedOut,
+      details: verificationResult,
     },
   };
 }
