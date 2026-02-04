@@ -87,7 +87,8 @@ export const validateCodeTool: ToolDefinition = {
         strictMode: {
           type: "boolean",
           description:
-            "Flag all unresolved symbols, not just likely hallucinations (default: false)",
+            "ONLY use true if explicitly requested. When true, flags ALL unresolved symbols including edge cases. Default is false which catches likely hallucinations without excessive noise.",
+          default: false,
         },
         useSmartContext: {
           type: "boolean",
@@ -130,7 +131,7 @@ export const validateCodeTool: ToolDefinition = {
       recentlyEditedFiles = [],
     } = args;
 
-    logger.info(`Validating code against project: ${projectPath}`);
+    logger.info(`Validating code against project: ${projectPath} (strictMode: ${strictMode})`);
 
     try {
       // Step 0: Parse imports first (needed for context orchestration)

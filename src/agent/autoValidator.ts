@@ -235,10 +235,17 @@ export class AutoValidator {
   }
 
   private handleFileChange(event: FileChangeEvent): void {
-    // Track new files
+    // Track new files and refresh context
     if (event.type === "add") {
       this.newFilesTracked.add(event.path);
       this.projectFileCount++;
+      
+      // IMPORTANT: Refresh context when new files are added
+      // This ensures new symbols are available for validation in other files
+      logger.debug(`New file detected: ${event.path} - refreshing context...`);
+      refreshFileContext(this.projectPath, event.path, { language: this.language }).catch((err) => {
+        logger.warn(`Failed to refresh context for new file ${event.path}:`, err);
+      });
       
       // Check if we should exit learning mode
       if (this.mode === "auto" && this.projectFileCount >= AutoValidator.LEARNING_MODE_FILE_COUNT) {
@@ -248,6 +255,10 @@ export class AutoValidator {
     } else if (event.type === "unlink") {
       this.newFilesTracked.delete(event.path);
       this.projectFileCount = Math.max(0, this.projectFileCount - 1);
+      
+      // Invalidate context when files are deleted
+      logger.debug(`File deleted: ${event.path} - invalidating context...`);
+      invalidateContext(this.projectPath);
     }
 
     // Debounce rapid changes to the same file
@@ -348,11 +359,13 @@ export class AutoValidator {
         }
       }
 
-      // Tier 2: Check for dead code (only if file is substantial > 50 lines)
+      // Tier 2: Check for dead code (REMOVED 50-line limit - vibecoders write small files!)
+      // Always run dead code detection to catch:
+      // - Unused imports (most common vibecoder mistake)
+      // - Orphaned exports (exports with no importers)
+      // - Unused functions/constants
       let deadCodeIssues: any[] = [];
-      if (content.split('\n').length > 50) {
-          deadCodeIssues = await detectDeadCode(context, content);
-      }
+      deadCodeIssues = await detectDeadCode(context, content);
 
       // Combine all issues for verification
       let allIssues = [...manifestIssues, ...symbolIssues, ...patternIssues, ...deadCodeIssues, ...impactIssues];
@@ -390,7 +403,12 @@ export class AutoValidator {
         allIssues = allIssues.filter(i => i.type !== 'deadCode' && i.type !== 'unusedExport' && i.type !== 'unusedFunction' && i.type !== 'orphanedFile');
 
         // 3. Filter out "Medium" severity symbol issues
-        allIssues = allIssues.filter(i => i.severity === "critical" || i.severity === "high");
+        // BUT keep unusedImport warnings - they're the #1 vibecoder mistake!
+        allIssues = allIssues.filter(i => 
+          i.severity === "critical" || 
+          i.severity === "high" || 
+          i.type === "unusedImport"  // Always catch unused imports, even in learning mode
+        );
       }
 
       if (allIssues.length > 0) {

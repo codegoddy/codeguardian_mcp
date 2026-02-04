@@ -252,6 +252,88 @@ function processItems(first: string, ...rest: string[]) {
     });
   });
 
+  describe("named function expressions", () => {
+    it("should not flag named function expression as undefined variable", () => {
+      const code = `
+export function withAuth<P extends object>(Component: React.ComponentType<P>) {
+  return function ProtectedComponent(props: P) {
+    const { isAuthenticated } = useAuthContext();
+    
+    if (!isAuthenticated) {
+      window.location.href = '/login';
+      return null;
+    }
+    
+    return <Component {...props} />;
+  };
+}
+      `;
+
+      const symbols = extractSymbolsAST(code, "typescript");
+      const imports = extractImportsAST(code, "typescript");
+      const usages = extractUsagesAST(code, "typescript", imports);
+
+      // Named function expression should be extracted as a symbol
+      const protectedComponentSymbol = symbols.find(
+        (s) => s.name === "ProtectedComponent" && s.type === "function"
+      );
+      expect(protectedComponentSymbol).toBeDefined();
+
+      const issues = validateSymbols(
+        usages,
+        symbols,
+        code,
+        "typescript",
+        false,
+        imports,
+        new Map(),
+        null,
+        "test.ts",
+        new Set(),
+        [],
+      );
+
+      // Should NOT flag ProtectedComponent as undefined variable
+      const protectedComponentError = issues.filter(
+        (i) =>
+          i.type === "undefinedVariable" &&
+          i.message.includes("'ProtectedComponent'"),
+      );
+      expect(protectedComponentError).toHaveLength(0);
+    });
+
+    it("should allow recursion in named function expressions", () => {
+      const code = `
+function createCounter() {
+  let count = 0;
+  return function counter() {
+    count++;
+    if (count < 10) {
+      return counter(); // Recursive call
+    }
+    return count;
+  };
+}
+      `;
+
+      const symbols = extractSymbolsAST(code, "typescript");
+      const imports = extractImportsAST(code, "typescript");
+      const usages = extractUsagesAST(code, "typescript", imports);
+
+      // counter should be extracted as a symbol
+      const counterSymbol = symbols.find(
+        (s) => s.name === "counter" && s.type === "function"
+      );
+      expect(counterSymbol).toBeDefined();
+
+      // counter() call should be tracked as a usage
+      const counterUsage = usages.find(
+        (u) => u.name === "counter" && u.type === "call"
+      );
+      expect(counterUsage).toBeDefined();
+    });
+  });
+
   describe("common library patterns", () => {
     it("should not flag AbortController.abort() as hallucination", () => {
       const code = `

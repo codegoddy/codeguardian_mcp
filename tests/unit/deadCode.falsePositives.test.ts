@@ -372,4 +372,68 @@ export const reviewApi = {
       expect(deadCodeNames).not.toContain("BulkReviewResponse");
     });
   });
+
+  describe("Method usage through parent object", () => {
+    it("should NOT flag methods on exported objects when parent is used via method reference", async () => {
+      // Create a minimal test project
+      const testDir = path.join(tempDir, "method-usage-test");
+      await fs.mkdir(testDir, { recursive: true });
+
+      // API file with exported object containing methods
+      const apiFile = `
+export const paymentsApi = {
+  getPaymentMethods: async (): Promise<any[]> => {
+    return [];
+  },
+  getActivePaymentMethods: async (): Promise<any[]> => {
+    return [];
+  }
+};
+`;
+      await fs.writeFile(path.join(testDir, "payments.ts"), apiFile);
+
+      // Consumer file that uses methods from the API object
+      const consumerFile = `
+import { paymentsApi } from './payments';
+
+export function usePayments() {
+  return {
+    queryKey: ['payment-methods'],
+    queryFn: paymentsApi.getPaymentMethods,
+  };
+}
+
+export function useActivePayments() {
+  return {
+    queryKey: ['active-payment-methods'],
+    queryFn: paymentsApi.getActivePaymentMethods,
+  };
+}
+`;
+      await fs.writeFile(path.join(testDir, "usePayments.ts"), consumerFile);
+
+      // Add a minimal package.json
+      await fs.writeFile(
+        path.join(testDir, "package.json"),
+        JSON.stringify({
+          name: "test",
+          version: "1.0.0",
+        }),
+      );
+
+      const result = await validateCodeTool.handler({
+        projectPath: testDir,
+        language: "typescript",
+        checkDeadCode: true,
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      const deadCodeIssues = parsed.deadCode || [];
+      const deadCodeNames = deadCodeIssues.map((d: any) => d.name);
+
+      // Methods should NOT be flagged as dead code since parent object is used
+      expect(deadCodeNames).not.toContain("getPaymentMethods");
+      expect(deadCodeNames).not.toContain("getActivePaymentMethods");
+    }, 30000); // 30 second timeout
+  });
 });

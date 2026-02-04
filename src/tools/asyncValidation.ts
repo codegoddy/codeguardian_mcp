@@ -43,7 +43,7 @@ export const startValidationTool: ToolDefinition = {
         },
         strictMode: {
           type: "boolean",
-          description: "Flag all unresolved symbols (default: false)",
+          description: "ONLY use true if explicitly requested. When true, flags ALL unresolved symbols including edge cases. Default is false which catches likely hallucinations without excessive noise.",
           default: false,
         },
         includeTests: {

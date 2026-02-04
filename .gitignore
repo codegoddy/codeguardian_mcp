@@ -160,3 +160,7 @@ cython_debug/
 
 # CodeGuardian Cache
 .codeguardian/
+ 
+#Testing Reports
+report/
+report.json

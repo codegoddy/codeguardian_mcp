@@ -151,6 +151,7 @@ export async function isSymbolTypeReferenced(
 export async function isSymbolCalledOrInstantiated(
   symbolName: string,
   context: ProjectContext,
+  symbolScope?: string,
 ): Promise<boolean> {
   // Signal 1: Check the pre-computed symbol graph (Secret #3)
   // This is extremely fast (O(1)) and accurate if the graph is AST-driven
@@ -182,10 +183,44 @@ export async function isSymbolCalledOrInstantiated(
     // Check for direct function calls or instantiations
     for (const usage of usages) {
       if (usage.name === symbolName) {
-        return true;
+        // If symbol has a scope (e.g., it's a method of an object), 
+        // verify that the usage is via that object
+        if (symbolScope && usage.type === "methodCall" && usage.object) {
+          // Check if the usage object matches the symbol's scope
+          // e.g., paymentsApi.getPaymentMethods - usage.object is "paymentsApi"
+          // and symbolScope should also be "paymentsApi"
+          if (usage.object === symbolScope) {
+            return true;
+          }
+          // Also check if the object is imported from the file where symbol is defined
+          // This handles cases where the object is imported with a different name
+          const fileInfo = context.files.get(filePath);
+          if (fileInfo) {
+            for (const imp of fileInfo.imports) {
+              // Check if this import resolves to the file containing the symbol
+              const { resolveImport } = await import("../../context/projectContext.js");
+              const resolvedPath = resolveImport(imp.source, filePath, Array.from(context.files.keys()));
+              if (resolvedPath) {
+                // Find the file that defines this symbol with the given scope
+                for (const [defFilePath, defFileInfo] of context.files) {
+                  const matchingSymbol = defFileInfo.symbols.find(
+                    s => s.name === symbolName && s.scope === symbolScope && s.exported
+                  );
+                  if (matchingSymbol && defFilePath === resolvedPath) {
+                    return true;
+                  }
+                }
+              }
+            }
+          }
+        } else if (!symbolScope) {
+          // No scope required, any usage matches
+          return true;
+        }
       }
       // Check for method calls on objects (e.g., api.symbolName())
-      if (usage.type === "methodCall" && usage.name === symbolName) {
+      // This is the original check for backward compatibility
+      if (usage.type === "methodCall" && usage.name === symbolName && !symbolScope) {
         return true;
       }
     }
@@ -322,7 +357,10 @@ async function isSymbolUsedAnywhere(
   }
 
   // Check 3: Is it called or instantiated anywhere?
-  if (await isSymbolCalledOrInstantiated(symbolName, context)) {
+  // Look up the symbol to get its scope (for method detection)
+  const fileInfo = context.files.get(definedInFile);
+  const symbol = fileInfo?.symbols.find(s => s.name === symbolName);
+  if (await isSymbolCalledOrInstantiated(symbolName, context, symbol?.scope)) {
     symbolUsageCache.set(cacheKey, true);
     return true;
   }
@@ -490,6 +528,7 @@ export async function detectDeadCode(
     file: string;
     relativePath: string;
     kind?: string;
+    scope?: string;
   }> = [];
 
   for (const [filePath, fileInfo] of context.files) {
@@ -518,6 +557,7 @@ export async function detectDeadCode(
         file: filePath,
         relativePath: fileInfo.relativePath,
         kind: symbol?.kind,
+        scope: symbol?.scope,
       });
     }
 
@@ -540,6 +580,7 @@ export async function detectDeadCode(
         file: filePath,
         relativePath: fileInfo.relativePath,
         kind: sym.kind,
+        scope: sym.scope,
       });
     }
   }
@@ -665,7 +706,7 @@ export async function detectDeadCode(
         }
 
         // Finally check function calls (most expensive)
-        const isCalled = await isSymbolCalledOrInstantiated(exp.name, context);
+        const isCalled = await isSymbolCalledOrInstantiated(exp.name, context, exp.scope);
         if (isCalled) {
           symbolUsageCache.set(cacheKey, true);
           return null;

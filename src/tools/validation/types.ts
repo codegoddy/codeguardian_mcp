@@ -61,6 +61,7 @@ export interface ASTImport {
   names: Array<{ imported: string; local: string }>;
   isExternal: boolean;
   line: number;
+  isTypeOnly?: boolean; // import type { Foo } - TypeScript only
 }
 
 /**
@@ -98,6 +99,7 @@ export interface ValidationIssue {
     | "dependencyHallucination"
     | "undefinedVariable"
     | "unusedImport"
+    | "typeOnlyImportMisuse"
     | "architecturalDeviation"
     | "missingDependency";
   severity: IssueSeverity;

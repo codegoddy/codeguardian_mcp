@@ -42,7 +42,8 @@ export function extractJSSymbols(
   if (!node) return;
 
   switch (node.type) {
-    case "function_declaration": {
+    case "function_declaration":
+    case "function_expression": {
       const nameNode = node.childForFieldName("name");
       const paramsNode = node.childForFieldName("parameters");
 
@@ -761,7 +762,8 @@ export function extractJSUsages(
     }
 
     case "identifier":
-    case "jsx_identifier": {
+    case "jsx_identifier":
+    case "property_identifier": {
       const name = getText(node, code);
 
       // Skip built-in objects that are commonly used as property access base
@@ -863,20 +865,32 @@ export function extractJSUsages(
         ancestor = ancestor.parent;
       }
 
-      // 1. Skip if it's the property in a member expression (x.NAME or <Comp.NAME />)
-      // EXCEPT: If the object is 'state' or 'store', we might want to check it for store hallucinations.
+      // 1. Handle member expression property access (x.NAME)
+      // This is used for method references like: { queryFn: api.getMethod }
       if (
         (parent.type === "member_expression" ||
           parent.type === "jsx_member_expression") &&
         parent.childForFieldName("property") === node
       ) {
-        // Detect store property access: state.hallucination
         const objNode = parent.childForFieldName("object");
-        if (objNode && getText(objNode, code) === "state") {
+        const objName = objNode ? getText(objNode, code) : "";
+        
+        // Detect store property access: state.hallucination
+        if (objName === "state") {
           // We ALLOW this to be processed as a usage to catch hallucinations in stores
-        } else {
-          break;
+        } else if (!isJSBuiltin(objName)) {
+          // Track method/property access on non-built-in objects
+          // This handles cases like: { queryFn: paymentsApi.getPaymentMethods }
+          usages.push({
+            name: name,
+            type: "methodCall",
+            object: objName,
+            line: node.startPosition.row + 1,
+            column: node.startPosition.column,
+            code: getLineText(code, node.startPosition.row),
+          });
         }
+        break;
       }
 
       // 2. Skip if it's a field name in an object literal ({ NAME: val })
@@ -899,7 +913,9 @@ export function extractJSUsages(
       // e.g., return function ProtectedComponent(props: P) { ... }
       // The 'ProtectedComponent' here is a local name for the function expression,
       // NOT a reference to an external variable
-      if (parent.type === "function" && parent.childForFieldName("name") === node) {
+      // Note: Tree-sitter uses "function_expression" for function expressions, not "function"
+      if ((parent.type === "function" || parent.type === "function_expression") && 
+          parent.childForFieldName("name") === node) {
         break;
       }
 
@@ -979,9 +995,15 @@ export function extractJSImports(
     if (sourceNode) {
       const module = getText(sourceNode, code).replace(/['"]/g, "");
       const names: Array<{ imported: string; local: string }> = [];
+      let isTypeOnly = false;
 
       for (const child of node.children) {
         if (!child) continue;
+
+        // Detect "import type" - TypeScript specific
+        if (child.type === "type") {
+          isTypeOnly = true;
+        }
 
         if (child.type === "import_clause") {
           for (const clauseChild of child.children) {
@@ -1029,6 +1051,7 @@ export function extractJSImports(
         names,
         isExternal,
         line: node.startPosition.row + 1,
+        isTypeOnly,
       });
     }
   }

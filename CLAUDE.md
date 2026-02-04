@@ -55,23 +55,29 @@ Explicit format for automated processing. Use for CI/CD integration.
 
 ### `validate_code` - Use EVERY TIME you generate code
 
+**Default mode (recommended):** Catches likely hallucinations without excessive noise
 ```typescript
-// Basic validation
 validate_code({
   projectPath: ".",
   newCode: "const user = getUserById(id);",
   language: "typescript"
+  // strictMode defaults to false - DO NOT set it unless user explicitly asks
 })
+```
 
-// With confidence scoring (strict mode)
+**Strict mode (ONLY when user explicitly requests it):** Flags all unresolved symbols including edge cases, but increases false positives
+```typescript
+// Only use this if the user specifically says "run with strict mode" or "strict validation"
 validate_code({
   projectPath: ".",
   newCode: "...",
   language: "typescript",
-  strictMode: true  // Requires explicit imports
+  strictMode: true
 })
+```
 
-// Check for dead code
+**Dead code detection:**
+```typescript
 validate_code({
   projectPath: "src/components",
   language: "typescript",

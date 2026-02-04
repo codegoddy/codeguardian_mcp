@@ -1169,6 +1169,39 @@ export function validateSymbols(
     }
   }
 
+  // Tier 3.5: Type-only import misuse detection
+  // Check if something imported with "import type" is used as a value
+  for (const imp of imports) {
+    if (!imp.isTypeOnly) continue; // Only check type-only imports
+    
+    for (const name of imp.names) {
+      // Check if this type-imported symbol is used as a value (not just in type positions)
+      const usages = usedSymbols.filter(u => u.name === name.local);
+      const typeUsages = typeReferences.filter(t => t.name === name.local);
+      
+      // If used in runtime contexts (call, instantiation, etc.) but imported as type
+      const runtimeUsages = usages.filter(u => 
+        u.type === "call" || 
+        u.type === "instantiation" || 
+        u.type === "methodCall"
+      );
+      
+      if (runtimeUsages.length > 0) {
+        issues.push({
+          type: "typeOnlyImportMisuse",
+          severity: "high",
+          message: `'${name.local}' is imported as a type but used as a value at runtime`,
+          line: runtimeUsages[0].line,
+          file: filePath,
+          code: getLineFromCode(newCode, runtimeUsages[0].line),
+          suggestion: `Change to regular import: import { ${name.local} } from '${imp.module}'`,
+          confidence: 95,
+          reasoning: `Type-only imports are erased at compile time and cannot be used for runtime values like function calls or instantiation.`,
+        });
+      }
+    }
+  }
+
   return issues;
 }
 

@@ -1057,6 +1057,7 @@ function extractJSSymbolsAST(
         async: sym.isAsync,
         params: sym.params?.map((p) => ({ name: p })),
         returnType: sym.returnType,
+        scope: sym.scope,
       });
     }
 
