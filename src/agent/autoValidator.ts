@@ -41,6 +41,11 @@ import {
   verifyFindingsAutomatically,
   getConfirmedFindings,
 } from "../analyzers/findingVerifier.js";
+import {
+  validateApiContracts,
+  formatValidationResults,
+  type ValidationResult,
+} from "../api-contract/index.js";
 
 export interface ValidationAlert {
   file: string;
@@ -178,6 +183,34 @@ export class AutoValidator {
 
   private async runInitialHealthCheck(context: any): Promise<void> {
     try {
+      // Run API Contract validation
+      logger.info("Running API Contract validation...");
+      const apiContractResult = await validateApiContracts(this.projectPath);
+
+      if (apiContractResult.success && apiContractResult.issues.length > 0) {
+        const apiContractAlert: ValidationAlert = {
+          file: "API_CONTRACT_SCAN",
+          issues: apiContractResult.issues.map((issue) => ({
+            type: issue.type,
+            severity: issue.severity,
+            message: issue.message,
+            suggestion: issue.suggestion,
+            line: issue.line,
+          })),
+          timestamp: Date.now(),
+          llmMessage: this.createApiContractMessage(apiContractResult),
+          isInitialScan: true,
+        };
+
+        logger.info(
+          `API Contract scan found ${apiContractResult.issues.length} issues`,
+        );
+
+        if (this.onAlert) {
+          this.onAlert(apiContractAlert);
+        }
+      }
+
       // Run dead code detection on existing codebase
       const deadCodeIssues = await detectDeadCode(context);
 
@@ -226,6 +259,45 @@ export class AutoValidator {
 
   private createInitialScanMessage(deadCodeIssues: any[]): string {
     return `📋 **${this.agentName}: Initial Scan Complete** - Found **${deadCodeIssues.length} potential issues** in existing codebase. Use 'get_guardian_alerts' to see details.`;
+  }
+
+  private createApiContractMessage(result: ValidationResult): string {
+    const lines: string[] = [];
+    lines.push(`🔗 **${this.agentName}: API Contract Validation**`);
+    lines.push("");
+    lines.push(`Found **${result.issues.length}** API contract issues:`);
+    lines.push(`- 🔴 Critical: ${result.summary.critical}`);
+    lines.push(`- 🟠 High: ${result.summary.high}`);
+    lines.push(`- 🟡 Medium: ${result.summary.medium}`);
+    lines.push(`- 🟢 Low: ${result.summary.low}`);
+    lines.push("");
+    lines.push(`📊 Matched Endpoints: ${result.summary.matchedEndpoints}`);
+    lines.push(`📊 Matched Types: ${result.summary.matchedTypes}`);
+    lines.push("");
+
+    if (result.summary.critical > 0) {
+      lines.push("**Critical Issues (Fix Immediately):**");
+      const critical = result.issues.filter((i) => i.severity === "critical").slice(0, 3);
+      critical.forEach((issue) => {
+        lines.push(`- ${issue.message}`);
+        lines.push(`  Suggestion: ${issue.suggestion}`);
+      });
+      lines.push("");
+    }
+
+    if (result.summary.unmatchedFrontend > 0) {
+      lines.push(
+        `⚠️ **${result.summary.unmatchedFrontend} frontend services** don't have matching backend routes`,
+      );
+    }
+
+    if (result.summary.unmatchedBackend > 0) {
+      lines.push(
+        `⚠️ **${result.summary.unmatchedBackend} backend routes** are not used by frontend`,
+      );
+    }
+
+    return lines.join("\n");
   }
 
   stop(): void {

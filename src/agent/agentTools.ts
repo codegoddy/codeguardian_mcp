@@ -11,6 +11,11 @@ import { ToolDefinition } from "../types/tools.js";
 import { AutoValidator, ValidationAlert } from "./autoValidator.js";
 import { pushValidationAlert } from "./mcpNotifications.js";
 import { logger } from "../utils/logger.js";
+import {
+  validateApiContracts,
+  formatValidationResults,
+  generateValidationReport,
+} from "../api-contract/index.js";
 
 // Global map of active agents (key: name)
 const activeGuardians = new Map<string, AutoValidator>();
@@ -327,5 +332,184 @@ export const getGuardianStatusTool: ToolDefinition = {
         },
       ],
     };
+  },
+};
+
+// ============================================================================
+// API Contract Validation Tools
+// ============================================================================
+
+export const validateApiContractsTool: ToolDefinition = {
+  definition: {
+    name: "validate_api_contracts",
+    description: `Validate API contracts between frontend and backend. Detects mismatches in endpoints, types, and parameters before runtime errors occur.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectPath: {
+          type: "string",
+          description: "Absolute path to the project root (should contain both frontend and backend)",
+        },
+        includeEndpoints: {
+          type: "boolean",
+          description: "Validate endpoint existence and HTTP methods",
+          default: true,
+        },
+        includeParameters: {
+          type: "boolean",
+          description: "Validate request/response parameters",
+          default: true,
+        },
+        includeTypes: {
+          type: "boolean",
+          description: "Validate type compatibility",
+          default: true,
+        },
+      },
+      required: ["projectPath"],
+    },
+  },
+
+  async handler(args: any) {
+    const {
+      projectPath,
+      includeEndpoints = true,
+      includeParameters = true,
+      includeTypes = true,
+    } = args;
+
+    const absolutePath = path.resolve(projectPath);
+
+    try {
+      logger.info(`Running API Contract validation for ${absolutePath}`);
+
+      const result = await validateApiContracts(absolutePath, {
+        validation: {
+          endpoint: includeEndpoints,
+          parameters: includeParameters,
+          types: includeTypes,
+          strict: false,
+        },
+      });
+
+      const formatted = formatValidationResults(result);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: formatted,
+          },
+        ],
+      };
+    } catch (error) {
+      logger.error("API Contract validation failed:", error);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error validating API contracts: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  },
+};
+
+export const getApiContractReportTool: ToolDefinition = {
+  definition: {
+    name: "get_api_contract_report",
+    description: `Generate a detailed API Contract validation report with recommendations.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectPath: {
+          type: "string",
+          description: "Absolute path to the project root",
+        },
+      },
+      required: ["projectPath"],
+    },
+  },
+
+  async handler(args: any) {
+    const { projectPath } = args;
+    const absolutePath = path.resolve(projectPath);
+
+    try {
+      const report = await generateValidationReport(absolutePath);
+
+      const lines: string[] = [];
+      lines.push("# API Contract Validation Report");
+      lines.push("");
+      lines.push(`**Generated:** ${report.timestamp}`);
+      lines.push(`**Project:** ${report.projectPath}`);
+      lines.push("");
+
+      lines.push("## Summary");
+      lines.push(`- **Total Issues:** ${report.summary.totalIssues}`);
+      lines.push(`  - Critical: ${report.summary.critical} 🔴`);
+      lines.push(`  - High: ${report.summary.high} 🟠`);
+      lines.push(`  - Medium: ${report.summary.medium} 🟡`);
+      lines.push(`  - Low: ${report.summary.low} 🟢`);
+      lines.push(`- **Matched Endpoints:** ${report.summary.matchedEndpoints}`);
+      lines.push(`- **Matched Types:** ${report.summary.matchedTypes}`);
+      lines.push(`- **Unmatched Frontend:** ${report.summary.unmatchedFrontend}`);
+      lines.push(`- **Unmatched Backend:** ${report.summary.unmatchedBackend}`);
+      lines.push("");
+
+      if (report.recommendations.length > 0) {
+        lines.push("## Recommendations");
+        report.recommendations.forEach((rec, i) => {
+          lines.push(`${i + 1}. ${rec}`);
+        });
+        lines.push("");
+      }
+
+      if (report.issues.length > 0) {
+        lines.push("## Issues");
+        lines.push("");
+
+        const byType = report.issues.reduce((acc, issue) => {
+          if (!acc[issue.type]) acc[issue.type] = [];
+          acc[issue.type].push(issue);
+          return acc;
+        }, {} as Record<string, typeof report.issues>);
+
+        for (const [type, issues] of Object.entries(byType)) {
+          lines.push(`### ${type}`);
+          issues.slice(0, 5).forEach((issue) => {
+            lines.push(`- **[${issue.severity.toUpperCase()}]** ${issue.message}`);
+            lines.push(`  - File: ${issue.file}:${issue.line}`);
+            lines.push(`  - Suggestion: ${issue.suggestion}`);
+          });
+          if (issues.length > 5) {
+            lines.push(`- *... and ${issues.length - 5} more issues of this type*`);
+          }
+          lines.push("");
+        }
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: lines.join("\n"),
+          },
+        ],
+      };
+    } catch (error) {
+      logger.error("Failed to generate API Contract report:", error);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error generating report: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
   },
 };

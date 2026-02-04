@@ -42,6 +42,8 @@ import {
   stopGuardianTool,
   getGuardianAlertsTool,
   getGuardianStatusTool,
+  validateApiContractsTool,
+  getApiContractReportTool,
 } from "../agent/agentTools.js";
 
 /**
@@ -71,6 +73,10 @@ export function registerTools(server: Server) {
         stopGuardianTool.definition,
         getGuardianAlertsTool.definition,
         getGuardianStatusTool.definition,
+
+        // API Contract Guardian - validate frontend/backend contracts
+        validateApiContractsTool.definition,
+        getApiContractReportTool.definition,
       ],
     };
   });
@@ -112,6 +118,12 @@ export function registerTools(server: Server) {
 
         case "get_guardian_status":
           return await getGuardianStatusTool.handler(args);
+
+        case "validate_api_contracts":
+          return await validateApiContractsTool.handler(args);
+
+        case "get_api_contract_report":
+          return await getApiContractReportTool.handler(args);
 
         default:
           throw new Error(`Unknown tool: ${name}`);
