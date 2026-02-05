@@ -11,7 +11,9 @@ import chokidar, { FSWatcher } from "chokidar";
 import { EventEmitter } from "events";
 import { logger } from "../utils/logger.js";
 
-const CODE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".py", ".go"];
+// PROTOTYPE: Only fully supported languages
+// TODO: Add support for Go, Java, and other languages in future versions
+const CODE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".py"];
 
 export interface FileChangeEvent {
   type: "add" | "change" | "unlink";

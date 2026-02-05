@@ -44,8 +44,11 @@ import {
 import {
   validateApiContracts,
   formatValidationResults,
-  type ValidationResult,
+  type ApiContractIssue,
 } from "../api-contract/index.js";
+
+// File scope types for smart filtering
+type FileScope = "frontend" | "backend" | "shared" | "unknown";
 
 export interface ValidationAlert {
   file: string;
@@ -75,10 +78,24 @@ export class AutoValidator {
   private manifest: ManifestDependencies | null = null;
   private pythonExports: Map<string, Set<string>> = new Map();
   private agentName: string;
+  private projectStructure?: { frontend?: string; backend?: string };
 
   // Thresholds for smart mode
   private static readonly NEW_PROJECT_THRESHOLD = 5; // Less than 5 files = new project
   private static readonly LEARNING_MODE_FILE_COUNT = 10; // After 10 files created, switch to strict
+  
+  // Common path patterns for scope detection
+  private static readonly FRONTEND_PATTERNS = [
+    '/frontend/', '/client/', '/web/', '/app/', '/src/',
+    '/components/', '/pages/', '/views/', '/hooks/', '/services/'
+  ];
+  private static readonly BACKEND_PATTERNS = [
+    '/backend/', '/server/', '/api/', '/services/',
+    '/routes/', '/routers/', '/controllers/', '/models/', '/db/'
+  ];
+  private static readonly SHARED_PATTERNS = [
+    '/shared/', '/common/', '/types/', '/interfaces/', '/utils/'
+  ];
 
   constructor(
     projectPath: string,
@@ -167,6 +184,111 @@ export class AutoValidator {
     return "strict";
   }
 
+  /**
+   * Detect the scope of a file (frontend, backend, shared, or unknown)
+   * Used for smart filtering of validation issues
+   */
+  private detectFileScope(filePath: string): FileScope {
+    const normalizedPath = filePath.toLowerCase();
+    
+    // Check for shared patterns first (highest priority)
+    for (const pattern of AutoValidator.SHARED_PATTERNS) {
+      if (normalizedPath.includes(pattern)) {
+        return "shared";
+      }
+    }
+    
+    // Check for frontend patterns
+    for (const pattern of AutoValidator.FRONTEND_PATTERNS) {
+      if (normalizedPath.includes(pattern)) {
+        // But make sure it's not in a backend directory
+        const isBackend = AutoValidator.BACKEND_PATTERNS.some(p => 
+          normalizedPath.includes(p)
+        );
+        if (!isBackend) {
+          return "frontend";
+        }
+      }
+    }
+    
+    // Check for backend patterns
+    for (const pattern of AutoValidator.BACKEND_PATTERNS) {
+      if (normalizedPath.includes(pattern)) {
+        return "backend";
+      }
+    }
+    
+    // Detect by file extension and content patterns
+    if (filePath.endsWith('.tsx') || filePath.endsWith('.jsx')) {
+      return "frontend";
+    }
+    
+    if (filePath.endsWith('.py') && !filePath.includes('test')) {
+      // Check if it's clearly a backend file
+      if (normalizedPath.includes('main.py') || normalizedPath.includes('app.py')) {
+        return "backend";
+      }
+    }
+    
+    return "unknown";
+  }
+
+  /**
+   * Filter issues based on file scope for smart alerting
+   * Shows all critical issues, but filters lower severity by relevance
+   */
+  private filterIssuesByScope(
+    issues: any[],
+    fileScope: FileScope,
+    isLenient: boolean
+  ): any[] {
+    if (isLenient) {
+      // In lenient mode, only show critical and high severity issues
+      return issues.filter(issue => 
+        issue.severity === 'critical' || issue.severity === 'high'
+      );
+    }
+    
+    return issues.filter(issue => {
+      // Always show critical issues
+      if (issue.severity === 'critical') return true;
+      
+      // Always show API contract mismatches (they affect both sides)
+      if (issue.type === 'apiContractMismatch') return true;
+      
+      // For high severity, show if relevant to scope
+      if (issue.severity === 'high') {
+        // If we can't determine scope, show all high severity
+        if (fileScope === 'unknown') return true;
+        
+        // Dead code in shared files affects everyone
+        if (issue.type === 'deadCode' && fileScope === 'shared') return true;
+        
+        // Unused imports are always relevant
+        if (issue.type === 'unusedImport') return true;
+        
+        return true; // Show other high severity issues
+      }
+      
+      // For medium/low severity, be more selective
+      if (fileScope === 'frontend') {
+        // In frontend files, prioritize frontend-specific issues
+        if (issue.type === 'unusedImport') return true;
+        if (issue.type === 'nonExistentFunction') return true;
+        return false; // Filter out less relevant issues
+      }
+      
+      if (fileScope === 'backend') {
+        // In backend files, prioritize backend-specific issues
+        if (issue.type === 'unusedImport') return true;
+        if (issue.type === 'nonExistentFunction') return true;
+        return false;
+      }
+      
+      return true;
+    });
+  }
+
   private pushLearningModeNotification(): void {
     const alert: ValidationAlert = {
       file: "SYSTEM",
@@ -187,7 +309,7 @@ export class AutoValidator {
       logger.info("Running API Contract validation...");
       const apiContractResult = await validateApiContracts(this.projectPath);
 
-      if (apiContractResult.success && apiContractResult.issues.length > 0) {
+      if (apiContractResult.issues.length > 0) {
         const apiContractAlert: ValidationAlert = {
           file: "API_CONTRACT_SCAN",
           issues: apiContractResult.issues.map((issue) => ({
@@ -261,7 +383,7 @@ export class AutoValidator {
     return `📋 **${this.agentName}: Initial Scan Complete** - Found **${deadCodeIssues.length} potential issues** in existing codebase. Use 'get_guardian_alerts' to see details.`;
   }
 
-  private createApiContractMessage(result: ValidationResult): string {
+  private createApiContractMessage(result: { issues: ApiContractIssue[]; summary: { totalIssues: number; critical: number; high: number; medium: number; low: number; matchedEndpoints: number; matchedTypes: number; unmatchedFrontend: number; unmatchedBackend: number; }; }): string {
     const lines: string[] = [];
     lines.push(`🔗 **${this.agentName}: API Contract Validation**`);
     lines.push("");
@@ -277,8 +399,8 @@ export class AutoValidator {
 
     if (result.summary.critical > 0) {
       lines.push("**Critical Issues (Fix Immediately):**");
-      const critical = result.issues.filter((i) => i.severity === "critical").slice(0, 3);
-      critical.forEach((issue) => {
+      const critical = result.issues.filter((i: ApiContractIssue) => i.severity === "critical").slice(0, 3);
+      critical.forEach((issue: ApiContractIssue) => {
         lines.push(`- ${issue.message}`);
         lines.push(`  Suggestion: ${issue.suggestion}`);
       });
@@ -439,8 +561,42 @@ export class AutoValidator {
       let deadCodeIssues: any[] = [];
       deadCodeIssues = await detectDeadCode(context, content);
 
+      // Tier 3: API Contract Validation (for service/route files)
+      let apiContractIssues: any[] = [];
+      const isServiceFile = filePath.includes('/services/') || filePath.includes('/api/');
+      const isRouteFile = filePath.includes('/api/') && filePath.endsWith('.py');
+      
+      if (isServiceFile || isRouteFile) {
+        logger.debug(`API Contract file changed: ${relativePath} - running contract validation...`);
+        const apiContractResult = await validateApiContracts(this.projectPath);
+        
+        // Only report critical and high severity issues for real-time validation
+        apiContractIssues = apiContractResult.issues
+          .filter(issue => issue.severity === 'critical' || issue.severity === 'high')
+          .map(issue => ({
+            type: issue.type,
+            severity: issue.severity,
+            message: issue.message,
+            line: issue.line,
+            suggestion: issue.suggestion,
+          }));
+        
+        if (apiContractIssues.length > 0) {
+          logger.info(`API Contract validation found ${apiContractIssues.length} issues in ${relativePath}`);
+        }
+      }
+
       // Combine all issues for verification
-      let allIssues = [...manifestIssues, ...symbolIssues, ...patternIssues, ...deadCodeIssues, ...impactIssues];
+      let allIssues = [...manifestIssues, ...symbolIssues, ...patternIssues, ...deadCodeIssues, ...impactIssues, ...apiContractIssues];
+
+      // === SMART SCOPE FILTERING (NEW) ===
+      // Detect file scope and filter issues by relevance
+      const fileScope = this.detectFileScope(filePath);
+      logger.debug(`File scope detected: ${fileScope} for ${relativePath}`);
+      
+      // Apply scope-based filtering
+      allIssues = this.filterIssuesByScope(allIssues, fileScope, isLenient);
+      logger.debug(`After scope filtering: ${allIssues.length} relevant issues`);
 
       // === AUTOMATED VERIFICATION (eliminates false positives) ===
       if (allIssues.length > 0) {

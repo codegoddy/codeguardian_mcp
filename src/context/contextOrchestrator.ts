@@ -7,11 +7,12 @@
  * @format
  */
 
-import { getProjectContext, type ProjectContext } from "./projectContext.js";
+import { getProjectContext, type ProjectContext, type ApiContractContext } from "./projectContext.js";
 import { intentTracker } from "./intentTracker.js";
 import { contextLineage, type LineageContext } from "./contextLineage.js";
 import { getRelevantSymbolsForValidation } from "../analyzers/relevanceScorer.js";
 import { logger } from "../utils/logger.js";
+import { validateApiContractsFromContext, type ApiContractIssue } from "../api-contract/validators/index.js";
 
 export interface OrchestrationContext {
   projectContext: ProjectContext;
@@ -20,6 +21,15 @@ export interface OrchestrationContext {
   useIncremental: boolean;
   contextQuality: "excellent" | "good" | "fair" | "poor";
   recommendations: string[];
+  // API Contract Guardian integration
+  apiContractIssues?: ApiContractIssue[];
+  apiContractSummary?: {
+    totalIssues: number;
+    critical: number;
+    high: number;
+    matchedEndpoints: number;
+    matchedTypes: number;
+  };
 }
 
 /**
@@ -34,6 +44,7 @@ export async function orchestrateContext(options: {
   currentFile?: string;
   recentlyEditedFiles?: string[];
 }): Promise<OrchestrationContext> {
+  const orchestrationStart = Date.now();
   const {
     projectPath,
     language,
@@ -48,10 +59,12 @@ export async function orchestrateContext(options: {
   let contextQuality: "excellent" | "good" | "fair" | "poor" = "good";
 
   // 1. Get project context (with branch-aware caching)
+  const contextStart = Date.now();
   const projectContext = await getProjectContext(projectPath, {
     language, // Use the requested language without overriding
     forceRebuild: false,
   });
+  logger.debug(`Project context loaded in ${Date.now() - contextStart}ms`);
 
   // 2. Get git lineage context (if available)
   let lineageContext: LineageContext | null = null;
@@ -137,6 +150,36 @@ export async function orchestrateContext(options: {
     );
   }
 
+  // 8. API Contract validation (if context has API Contract info)
+  let apiContractIssues: ApiContractIssue[] | undefined;
+  let apiContractSummary: OrchestrationContext["apiContractSummary"] | undefined;
+
+  if (projectContext.apiContract) {
+    const validationResult = validateApiContractsFromContext(projectContext);
+    apiContractIssues = validationResult.issues;
+    apiContractSummary = {
+      totalIssues: validationResult.summary.totalIssues,
+      critical: validationResult.summary.critical,
+      high: validationResult.summary.high,
+      matchedEndpoints: validationResult.summary.matchedEndpoints,
+      matchedTypes: validationResult.summary.matchedTypes,
+    };
+
+    if (validationResult.summary.critical > 0) {
+      recommendations.push(
+        `${validationResult.summary.critical} critical API contract issues detected - review recommended`,
+      );
+    }
+  }
+
+  const totalTime = Date.now() - orchestrationStart;
+  logger.info(`Context orchestration completed in ${totalTime}ms (quality: ${contextQuality})`);
+  
+  // Performance warning
+  if (totalTime > 5000) {
+    logger.warn(`Slow orchestration detected (${totalTime}ms) - consider limiting project scope`);
+  }
+
   return {
     projectContext,
     lineageContext,
@@ -144,6 +187,8 @@ export async function orchestrateContext(options: {
     useIncremental,
     contextQuality,
     recommendations,
+    apiContractIssues,
+    apiContractSummary,
   };
 }
 

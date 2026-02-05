@@ -34,6 +34,97 @@ import {
 import { buildSymbolGraph } from "../analyzers/symbolGraph.js";
 import type { SymbolGraph } from "../types/symbolGraph.js";
 import { serialize, deserialize } from "../utils/serialization.js";
+import { extractApiContractContext } from "./apiContractContext.js";
+
+// ============================================================================
+// Helper Functions for Lazy API Contract Loading
+// ============================================================================
+
+/**
+ * Detect if project has frontend code based on file patterns and symbols
+ */
+function detectFrontendPresence(context: ProjectContext): boolean {
+  const frontendPatterns = [
+    '/frontend/', '/client/', '/web/', '/app/src/',
+    '/components/', '/pages/', '/views/', '/hooks/'
+  ];
+  
+  // Check file paths
+  for (const filePath of context.files.keys()) {
+    const normalizedPath = filePath.toLowerCase();
+    if (frontendPatterns.some(pattern => normalizedPath.includes(pattern))) {
+      return true;
+    }
+    
+    // Check for React/Vue/Angular imports
+    const fileInfo = context.files.get(filePath);
+    if (fileInfo?.imports.some(imp => 
+      imp.source.includes('react') ||
+      imp.source.includes('vue') ||
+      imp.source.includes('@angular')
+    )) {
+      return true;
+    }
+  }
+  
+  // Check for frontend-specific symbols
+  for (const [symbolName, symbolInfos] of context.symbolIndex) {
+    for (const info of symbolInfos) {
+      if (info.symbol.kind === 'component' || info.symbol.kind === 'hook') {
+        return true;
+      }
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * Detect if project has backend code based on file patterns and symbols
+ */
+function detectBackendPresence(context: ProjectContext): boolean {
+  const backendPatterns = [
+    '/backend/', '/server/', '/api/', '/routes/',
+    '/routers/', '/controllers/', '/models/',
+    'main.py', 'app.py', 'server.js', 'index.js'
+  ];
+  
+  // Check file paths
+  for (const filePath of context.files.keys()) {
+    const normalizedPath = filePath.toLowerCase();
+    if (backendPatterns.some(pattern => normalizedPath.includes(pattern))) {
+      return true;
+    }
+    
+    // Check for backend framework imports
+    const fileInfo = context.files.get(filePath);
+    if (fileInfo?.imports.some(imp =>
+      imp.source.includes('express') ||
+      imp.source.includes('fastapi') ||
+      imp.source.includes('flask') ||
+      imp.source.includes('fastify') ||
+      imp.source.includes('django')
+    )) {
+      return true;
+    }
+  }
+  
+  // Check for backend-specific symbols (route handlers, etc.)
+  for (const [symbolName, symbolInfos] of context.symbolIndex) {
+    for (const info of symbolInfos) {
+      // Check if symbol is in a backend file
+      const fileInfo = context.files.get(info.file);
+      if (fileInfo) {
+        const normalizedPath = info.file.toLowerCase();
+        if (backendPatterns.some(pattern => normalizedPath.includes(pattern))) {
+          return true;
+        }
+      }
+    }
+  }
+  
+  return false;
+}
 
 // ============================================================================
 // Types
@@ -133,6 +224,133 @@ export interface ProjectContext {
     name: string;
     version?: string;
     patterns: string[];
+  };
+
+  // API Contract Guardian - Frontend/Backend contract information
+  apiContract?: ApiContractContext;
+}
+
+// ============================================================================
+// API Contract Types
+// ============================================================================
+
+export interface ApiContractContext {
+  // Project structure detection
+  projectStructure: {
+    frontend?: {
+      path: string;
+      framework: string;
+      apiPattern: string;
+      httpClient: string;
+      apiBaseUrl?: string;
+    };
+    backend?: {
+      path: string;
+      framework: string;
+      apiPattern: string;
+      apiPrefix?: string;
+    };
+    relationship: "monorepo" | "separate" | "frontend-only" | "backend-only";
+  };
+
+  // Frontend API services extracted from TypeScript
+  frontendServices: ApiServiceDefinition[];
+
+  // Frontend types/interfaces
+  frontendTypes: ApiTypeDefinition[];
+
+  // Backend API routes extracted from Python/Node.js
+  backendRoutes: ApiRouteDefinition[];
+
+  // Backend models/schemas
+  backendModels: ApiModelDefinition[];
+
+  // Matched endpoints (frontend service <-> backend route)
+  endpointMappings: Map<string, ApiEndpointMapping>;
+
+  // Matched types (frontend type <-> backend model)
+  typeMappings: Map<string, ApiTypeMapping>;
+
+  // Unmatched items for reporting
+  unmatchedFrontend: ApiServiceDefinition[];
+  unmatchedBackend: ApiRouteDefinition[];
+
+  // Last updated timestamp
+  lastUpdated: string;
+}
+
+export interface ApiServiceDefinition {
+  name: string;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  endpoint: string;
+  requestType?: string;
+  responseType?: string;
+  queryParams?: ApiParameter[];
+  file: string;
+  line: number;
+}
+
+export interface ApiParameter {
+  name: string;
+  type: string;
+  required: boolean;
+}
+
+export interface ApiTypeDefinition {
+  name: string;
+  fields: ApiTypeField[];
+  file: string;
+  line: number;
+  kind: "interface" | "type" | "class";
+}
+
+export interface ApiTypeField {
+  name: string;
+  type: string;
+  required: boolean;
+  optional?: boolean;
+}
+
+export interface ApiRouteDefinition {
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  path: string;
+  handler: string;
+  requestModel?: string;
+  responseModel?: string;
+  queryParams?: ApiParameter[];
+  file: string;
+  line: number;
+}
+
+export interface ApiModelDefinition {
+  name: string;
+  fields: ApiModelField[];
+  file: string;
+  line: number;
+  baseClasses?: string[];
+}
+
+export interface ApiModelField {
+  name: string;
+  type: string;
+  required: boolean;
+  default?: unknown;
+}
+
+export interface ApiEndpointMapping {
+  frontend: ApiServiceDefinition;
+  backend: ApiRouteDefinition;
+  score: number; // Match confidence 0-100
+  hasMultipleMethods?: boolean; // True if multiple backend routes exist with same path
+  availableMethods?: string[]; // List of available HTTP methods for this path
+}
+
+export interface ApiTypeMapping {
+  frontend: ApiTypeDefinition;
+  backend: ApiModelDefinition;
+  compatibility: {
+    score: number; // 0-100
+    issues: string[];
   };
 }
 
@@ -239,6 +457,14 @@ export async function getProjectContext(
     includeTests,
     maxFiles,
   });
+  
+  const buildTime = Date.now() - startTime;
+  logger.info(`Project context built in ${buildTime}ms - ${context.files.size} files indexed`);
+  
+  // Performance warning for large projects
+  if (buildTime > 30000) {
+    logger.warn(`Context build took ${buildTime}ms - consider using 'scope' parameter to limit files`);
+  }
 
   // Store git info in context
   context.gitInfo = gitInfo;
@@ -431,13 +657,12 @@ async function isContextStale(
   try {
     // Quick check 1: See if file count changed significantly
     // Use the same search logic as building context to ensure consistency
+    // PROTOTYPE: Only fully supported languages
     const extensions: Record<string, string[]> = {
       javascript: [".js", ".jsx", ".mjs", ".cjs"],
       typescript: [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx"], // Include js in ts projects
       python: [".py"],
-      go: [".go"],
-      java: [".java"],
-      all: [".js", ".jsx", ".ts", ".tsx", ".py", ".go", ".java"],
+      all: [".js", ".jsx", ".ts", ".tsx", ".py"], // Only TS/JS/Python for prototype
     };
     const exts = extensions[cached.context.language] || extensions.all;
     const patterns = exts.map((ext) => `${projectPath}/**/*${ext}`);
@@ -563,6 +788,17 @@ async function buildProjectContext(
 
   // Find source files (excluding tests if requested)
   const files = await findProjectFiles(projectPath, language, includeTests);
+  
+  // Log ignored files for transparency
+  const totalFiles = await glob(`${projectPath}/**/*`, {
+    ignore: ["**/node_modules/**", "**/venv/**", "**/.git/**", "**/dist/**"],
+    nodir: true,
+  });
+  const ignoredCount = totalFiles.length - files.length;
+  if (ignoredCount > 0) {
+    logger.info(`PROTOTYPE: Ignoring ${ignoredCount} unsupported files (Go, Java, etc.) - focusing on TypeScript/JavaScript/Python`);
+  }
+  
   const filesToProcess = files.slice(0, maxFiles);
 
   // Always find test files separately for import tracking (dead code detection)
@@ -675,6 +911,28 @@ async function buildProjectContext(
     includeCoOccurrence: true,
     minCoOccurrenceCount: 2,
   });
+
+  // Extract API Contract information (frontend/backend alignment)
+  // This integrates API Contract Guardian into the existing context system
+  // LAZY LOADING: Only build API contract context if both frontend and backend detected
+  try {
+    const hasFrontend = detectFrontendPresence(context);
+    const hasBackend = detectBackendPresence(context);
+    
+    if (hasFrontend && hasBackend) {
+      logger.info("Full-stack project detected - building API contract context...");
+      const apiContractStart = Date.now();
+      context.apiContract = await extractApiContractContext(context);
+      logger.info(`API contract context built in ${Date.now() - apiContractStart}ms`);
+    } else {
+      logger.info(
+        `${hasFrontend ? 'Frontend' : hasBackend ? 'Backend' : 'Unknown'}-only project - skipping API contract context`
+      );
+    }
+  } catch (error) {
+    logger.warn("Failed to extract API Contract context:", error);
+    // Don't fail the entire context build if API Contract extraction fails
+  }
 
   context.totalFiles = context.files.size;
   return context;
@@ -849,13 +1107,13 @@ async function findProjectFiles(
   language: string,
   includeTests: boolean,
 ): Promise<string[]> {
+  // PROTOTYPE: Only fully supported languages
+  // TODO: Add support for Go, Java, and other languages in future versions
   const extensions: Record<string, string[]> = {
     javascript: [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"], // Include TS in JS projects for modern interop
     typescript: [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx"], // Include JS in TS projects for Vite/React
     python: [".py"],
-    go: [".go"],
-    java: [".java"],
-    all: [".js", ".jsx", ".ts", ".tsx", ".py", ".go", ".java"],
+    all: [".js", ".jsx", ".ts", ".tsx", ".py"], // Only TS/JS/Python for prototype
   };
 
   const exts = extensions[language] || extensions.all;

@@ -1,38 +1,91 @@
 /**
- * API Contract Guardian - Main Orchestrator
+ * API Contract Guardian - Integrated Module
  *
- * Central coordinator for API contract validation.
+ * This module is now integrated into the main context system.
+ * API Contract validation happens automatically during context building.
+ *
+ * Usage:
+ *   const orchestration = await orchestrateContext({ projectPath, language });
+ *   const apiContractIssues = orchestration.apiContractIssues;
+ *   const apiContractSummary = orchestration.apiContractSummary;
  *
  * @format
  */
 
-import { logger } from "../utils/logger.js";
-import type {
-  ProjectStructure,
-  FrontendContext,
-  BackendContext,
-  ContractContext,
-  ApiContractIssue,
-  ApiContractConfig,
-} from "./types.js";
-import { detectProjectStructure } from "./detector.js";
-import { buildFrontendContext } from "./context/frontend.js";
-import { buildBackendContext } from "./context/backend.js";
-import { buildContractContext } from "./context/contract.js";
-import { validateAllEndpoints } from "./validators/endpoint.js";
-import { validateAllParameters } from "./validators/parameter.js";
-import { validateAllTypes } from "./validators/type.js";
+import { getProjectContext } from "../context/projectContext.js";
+import { orchestrateContext } from "../context/contextOrchestrator.js";
+import { validateApiContractsFromContext, type ApiContractIssue } from "./validators/index.js";
 
-// ============================================================================
-// Main Validation Function
-// ============================================================================
+// Re-export types for convenience
+export type { ApiContractIssue } from "./validators/index.js";
 
-export interface ValidationResult {
-  success: boolean;
-  projectStructure: ProjectStructure;
-  frontendContext?: FrontendContext;
-  backendContext?: BackendContext;
-  contractContext?: ContractContext;
+/**
+ * Default ignore patterns for common false positives
+ * These patterns are used to filter out known unmatched endpoints
+ */
+export const DEFAULT_IGNORE_PATTERNS = {
+  // Webhook endpoints (usually called by external services, not frontend)
+  webhooks: [
+    /\/webhook/i,
+    /\/webhooks/i,
+    /\/stripe\/webhook/i,
+    /\/paypal\/webhook/i,
+    /\/github\/webhook/i,
+    /\/slack\/webhook/i,
+  ],
+  
+  // Admin-only routes (not typically called from frontend)
+  admin: [
+    /\/admin/i,
+    /\/api\/admin/i,
+    /\/management/i,
+    /\/api\/management/i,
+  ],
+  
+  // Internal/debug routes
+  internal: [
+    /\/debug/i,
+    /\/internal/i,
+    /\/api\/internal/i,
+    /\/health/i,
+    /\/ping/i,
+    /\/metrics/i,
+    /\/ready/i,
+    /\/alive/i,
+  ],
+  
+  // OAuth/Auth callbacks
+  auth: [
+    /\/auth\/callback/i,
+    /\/oauth/i,
+    /\/oauth2/i,
+    /\/callback/i,
+  ],
+  
+  // API documentation
+  docs: [
+    /\/docs/i,
+    /\/swagger/i,
+    /\/openapi/i,
+    /\/redoc/i,
+  ],
+};
+
+/**
+ * Check if an endpoint should be ignored based on patterns
+ */
+export function shouldIgnoreEndpoint(
+  endpoint: string,
+  patterns: RegExp[] = Object.values(DEFAULT_IGNORE_PATTERNS).flat(),
+): boolean {
+  return patterns.some((pattern) => pattern.test(endpoint));
+}
+
+/**
+ * Validate API contracts for a project using the integrated context system
+ * This is the recommended way to validate API contracts
+ */
+export async function validateApiContracts(projectPath: string): Promise<{
   issues: ApiContractIssue[];
   summary: {
     totalIssues: number;
@@ -45,176 +98,59 @@ export interface ValidationResult {
     unmatchedFrontend: number;
     unmatchedBackend: number;
   };
-}
+}> {
+  // Get orchestrated context (includes API Contract validation)
+  const orchestration = await orchestrateContext({
+    projectPath,
+    language: "all",
+  });
 
-/**
- * Validate API contracts for a project
- */
-export async function validateApiContracts(
-  projectPath: string,
-  config?: Partial<ApiContractConfig>,
-): Promise<ValidationResult> {
-  const startTime = Date.now();
-  logger.info(`Starting API Contract validation for ${projectPath}`);
-
-  try {
-    // Step 1: Detect project structure
-    logger.info("Step 1: Detecting project structure...");
-    const projectStructure = await detectProjectStructure(projectPath);
-
-    if (!projectStructure.frontend && !projectStructure.backend) {
-      return {
-        success: false,
-        projectStructure,
-        issues: [],
-        summary: {
-          totalIssues: 0,
-          critical: 0,
-          high: 0,
-          medium: 0,
-          low: 0,
-          matchedEndpoints: 0,
-          matchedTypes: 0,
-          unmatchedFrontend: 0,
-          unmatchedBackend: 0,
-        },
-      };
-    }
-
-    // Step 2: Build contexts
-    logger.info("Step 2: Building contexts...");
-    let frontendContext: FrontendContext | undefined;
-    let backendContext: BackendContext | undefined;
-    let contractContext: ContractContext | undefined;
-
-    if (projectStructure.frontend) {
-      frontendContext = await buildFrontendContext(projectStructure.frontend);
-    }
-
-    if (projectStructure.backend) {
-      backendContext = await buildBackendContext(projectStructure.backend);
-    }
-
-    // Step 3: Build contract context (if both frontend and backend exist)
-    if (frontendContext && backendContext) {
-      logger.info("Step 3: Building contract context...");
-      contractContext = await buildContractContext(frontendContext, backendContext);
-    }
-
-    // Step 4: Run validators
-    logger.info("Step 4: Running validators...");
-    const issues: ApiContractIssue[] = [];
-
-    if (contractContext) {
-      // Validate endpoints
-      if (config?.validation?.endpoint !== false) {
-        logger.debug("Validating endpoints...");
-        const endpointIssues = validateAllEndpoints(contractContext);
-        issues.push(...endpointIssues);
-      }
-
-      // Validate parameters
-      if (config?.validation?.parameters !== false) {
-        logger.debug("Validating parameters...");
-        const paramIssues = validateAllParameters(contractContext);
-        issues.push(...paramIssues);
-      }
-
-      // Validate types
-      if (config?.validation?.types !== false) {
-        logger.debug("Validating types...");
-        const typeIssues = validateAllTypes(contractContext);
-        issues.push(...typeIssues);
-      }
-    }
-
-    // Calculate summary
-    const summary = {
-      totalIssues: issues.length,
-      critical: issues.filter((i) => i.severity === "critical").length,
-      high: issues.filter((i) => i.severity === "high").length,
-      medium: issues.filter((i) => i.severity === "medium").length,
-      low: issues.filter((i) => i.severity === "low").length,
-      matchedEndpoints: contractContext?.endpoints.size || 0,
-      matchedTypes: contractContext?.types.size || 0,
-      unmatchedFrontend: contractContext?.unmatchedFrontend.length || 0,
-      unmatchedBackend: contractContext?.unmatchedBackend.length || 0,
-    };
-
-    const duration = Date.now() - startTime;
-    logger.info(
-      `API Contract validation complete in ${duration}ms. ` +
-        `Found ${issues.length} issues (${summary.critical} critical, ${summary.high} high, ${summary.medium} medium, ${summary.low} low)`,
-    );
-
+  // If API Contract validation was performed, return those results
+  if (orchestration.apiContractIssues && orchestration.apiContractSummary) {
     return {
-      success: true,
-      projectStructure,
-      frontendContext,
-      backendContext,
-      contractContext,
-      issues,
-      summary,
-    };
-  } catch (error) {
-    logger.error("API Contract validation failed:", error);
-    return {
-      success: false,
-      projectStructure: {
-        relationship: "frontend-only",
-      },
-      issues: [
-        {
-          type: "apiContractMismatch",
-          severity: "critical",
-          message: `Validation failed: ${error instanceof Error ? error.message : "Unknown error"}`,
-          file: projectPath,
-          line: 0,
-          suggestion: "Check project structure and try again",
-        },
-      ],
+      issues: orchestration.apiContractIssues,
       summary: {
-        totalIssues: 1,
-        critical: 1,
-        high: 0,
-        medium: 0,
-        low: 0,
-        matchedEndpoints: 0,
-        matchedTypes: 0,
-        unmatchedFrontend: 0,
-        unmatchedBackend: 0,
+        totalIssues: orchestration.apiContractSummary.totalIssues,
+        critical: orchestration.apiContractSummary.critical,
+        high: orchestration.apiContractSummary.high,
+        medium: 0, // Not tracked in summary
+        low: 0, // Not tracked in summary
+        matchedEndpoints: orchestration.apiContractSummary.matchedEndpoints,
+        matchedTypes: orchestration.apiContractSummary.matchedTypes,
+        unmatchedFrontend: 0, // Not tracked in summary
+        unmatchedBackend: 0, // Not tracked in summary
       },
     };
   }
+
+  // Fallback: Validate directly from context
+  const projectContext = await getProjectContext(projectPath);
+  return validateApiContractsFromContext(projectContext);
 }
 
-// ============================================================================
-// Quick Validation Functions
-// ============================================================================
-
 /**
- * Quick check for critical issues only
+ * Quick check for critical API contract issues
  */
-export async function checkCriticalIssues(projectPath: string): Promise<ApiContractIssue[]> {
+export async function checkCriticalApiIssues(projectPath: string): Promise<ApiContractIssue[]> {
   const result = await validateApiContracts(projectPath);
   return result.issues.filter((i) => i.severity === "critical");
 }
 
 /**
- * Check if a specific endpoint exists
+ * Check if a specific endpoint exists in the backend
  */
 export async function checkEndpointExists(
   projectPath: string,
   method: string,
   endpoint: string,
 ): Promise<boolean> {
-  const result = await validateApiContracts(projectPath);
+  const projectContext = await getProjectContext(projectPath);
 
-  if (!result.contractContext) {
+  if (!projectContext.apiContract) {
     return false;
   }
 
-  for (const mapping of result.contractContext.endpoints.values()) {
+  for (const mapping of projectContext.apiContract.endpointMappings.values()) {
     if (
       mapping.frontend.method.toUpperCase() === method.toUpperCase() &&
       mapping.frontend.endpoint === endpoint
@@ -227,7 +163,7 @@ export async function checkEndpointExists(
 }
 
 /**
- * Get contract information for an endpoint
+ * Get contract information for a specific endpoint
  */
 export async function getEndpointContract(
   projectPath: string,
@@ -247,13 +183,13 @@ export async function getEndpointContract(
     responseModel?: string;
   };
 } | null> {
-  const result = await validateApiContracts(projectPath);
+  const projectContext = await getProjectContext(projectPath);
 
-  if (!result.contractContext) {
+  if (!projectContext.apiContract) {
     return null;
   }
 
-  const mapping = result.contractContext.endpoints.get(endpoint);
+  const mapping = projectContext.apiContract.endpointMappings.get(endpoint);
   if (!mapping) {
     return null;
   }
@@ -275,57 +211,48 @@ export async function getEndpointContract(
   };
 }
 
-// ============================================================================
-// Report Generation
-// ============================================================================
-
-export interface ValidationReport {
-  timestamp: string;
-  projectPath: string;
-  summary: ValidationResult["summary"];
-  issues: ApiContractIssue[];
-  recommendations: string[];
-}
-
 /**
  * Generate a validation report
  */
-export async function generateValidationReport(
-  projectPath: string,
-): Promise<ValidationReport> {
+export async function generateValidationReport(projectPath: string): Promise<{
+  timestamp: string;
+  projectPath: string;
+  summary: {
+    totalIssues: number;
+    critical: number;
+    high: number;
+    matchedEndpoints: number;
+    matchedTypes: number;
+  };
+  issues: ApiContractIssue[];
+  recommendations: string[];
+}> {
   const result = await validateApiContracts(projectPath);
 
   const recommendations: string[] = [];
 
-  // Generate recommendations based on issues
   if (result.summary.critical > 0) {
     recommendations.push(
       `Address ${result.summary.critical} critical issues immediately to prevent runtime errors`,
     );
   }
 
-  if (result.summary.unmatchedFrontend > 0) {
+  if (result.summary.totalIssues > 0) {
     recommendations.push(
-      `${result.summary.unmatchedFrontend} frontend services don't have matching backend routes - verify endpoints or implement missing routes`,
-    );
-  }
-
-  if (result.summary.unmatchedBackend > 0) {
-    recommendations.push(
-      `${result.summary.unmatchedBackend} backend routes are not used by frontend - consider removing unused endpoints or implementing frontend calls`,
-    );
-  }
-
-  if (result.summary.high > 0) {
-    recommendations.push(
-      `Review ${result.summary.high} high severity issues for potential data integrity problems`,
+      `${result.summary.totalIssues} API contract issues detected - review recommended`,
     );
   }
 
   return {
     timestamp: new Date().toISOString(),
     projectPath,
-    summary: result.summary,
+    summary: {
+      totalIssues: result.summary.totalIssues,
+      critical: result.summary.critical,
+      high: result.summary.high,
+      matchedEndpoints: result.summary.matchedEndpoints,
+      matchedTypes: result.summary.matchedTypes,
+    },
     issues: result.issues,
     recommendations,
   };
@@ -334,7 +261,16 @@ export async function generateValidationReport(
 /**
  * Format validation results for display
  */
-export function formatValidationResults(result: ValidationResult): string {
+export function formatValidationResults(result: {
+  issues: ApiContractIssue[];
+  summary: {
+    totalIssues: number;
+    critical: number;
+    high: number;
+    matchedEndpoints: number;
+    matchedTypes: number;
+  };
+}): string {
   const lines: string[] = [];
 
   lines.push("=".repeat(80));
@@ -342,29 +278,14 @@ export function formatValidationResults(result: ValidationResult): string {
   lines.push("=".repeat(80));
   lines.push("");
 
-  // Project structure
-  lines.push("📁 Project Structure:");
-  lines.push(`  Type: ${result.projectStructure.relationship}`);
-  if (result.projectStructure.frontend) {
-    lines.push(`  Frontend: ${result.projectStructure.frontend.framework} (${result.projectStructure.frontend.apiPattern})`);
-  }
-  if (result.projectStructure.backend) {
-    lines.push(`  Backend: ${result.projectStructure.backend.framework} (${result.projectStructure.backend.apiPattern})`);
-  }
-  lines.push("");
-
   // Summary
   lines.push("📊 Summary:");
   lines.push(`  Total Issues: ${result.summary.totalIssues}`);
   lines.push(`    - Critical: ${result.summary.critical} 🔴`);
   lines.push(`    - High: ${result.summary.high} 🟠`);
-  lines.push(`    - Medium: ${result.summary.medium} 🟡`);
-  lines.push(`    - Low: ${result.summary.low} 🟢`);
   lines.push("");
   lines.push(`  Matched Endpoints: ${result.summary.matchedEndpoints}`);
   lines.push(`  Matched Types: ${result.summary.matchedTypes}`);
-  lines.push(`  Unmatched Frontend: ${result.summary.unmatchedFrontend}`);
-  lines.push(`  Unmatched Backend: ${result.summary.unmatchedBackend}`);
   lines.push("");
 
   // Issues by severity
@@ -374,7 +295,6 @@ export function formatValidationResults(result: ValidationResult): string {
 
     const critical = result.issues.filter((i) => i.severity === "critical");
     const high = result.issues.filter((i) => i.severity === "high");
-    const medium = result.issues.filter((i) => i.severity === "medium");
 
     if (critical.length > 0) {
       lines.push("🔴 Critical Issues:");
@@ -401,7 +321,7 @@ export function formatValidationResults(result: ValidationResult): string {
       lines.push("");
     }
   } else {
-    lines.push("✅ No issues found!");
+    lines.push("✅ No API contract issues found!");
   }
 
   lines.push("=".repeat(80));

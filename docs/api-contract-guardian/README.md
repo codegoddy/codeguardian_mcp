@@ -82,24 +82,33 @@ Issues Found:
 ### ✅ Auto-Detection
 - Detects project structure automatically
 - Supports monorepo and separate repos
-- Works with popular frameworks
+- Works with popular frameworks (Next.js, FastAPI, Flask)
+- Extracts router prefixes from main.py automatically
+
+### ✅ AST-Based Extraction
+- Uses Tree-sitter for accurate TypeScript parsing
+- Handles template strings with path parameters
+- Strips query parameters for matching
+- Extracts internal router prefixes from APIRouter definitions
 
 ### ✅ Real-Time Validation
 - Validates on every file save
 - Checks endpoint existence
 - Validates HTTP methods
 - Compares request/response schemas
+- Integrates with CodeGuardian's alert system
+
+### ✅ Smart Matching
+- Exact path matching
+- Path parameter matching (`{id}`, `{param}`)
+- Query string handling
+- Router prefix combination (main.py + router prefixes)
 
 ### ✅ Smart Error Messages
 - Clear explanations
 - Specific suggestions
 - Line numbers and file paths
-- Severity levels
-
-### ✅ Framework Agnostic
-**Frontend**: Next.js, React, Vue, Angular, Svelte
-**Backend**: FastAPI, Flask, Express, Django, NestJS
-**API Styles**: REST, GraphQL, tRPC
+- Severity levels (Critical, High, Medium, Low)
 
 ## Configuration
 
@@ -173,7 +182,18 @@ Backend expects: GET /api/clients
 Suggestion: Change frontend to use GET
 ```
 
-### 3. Parameter Validation
+### 3. Path Validation
+
+Checks endpoint path compatibility including path parameters.
+
+```
+❌ Path Mismatch
+Frontend calls: /api/users/123/posts
+Backend route: /api/users/{user_id}/articles
+Suggestion: Update frontend path to match backend
+```
+
+### 4. Parameter Validation
 
 Checks parameter names and required fields.
 
@@ -184,7 +204,7 @@ Backend expects: { user_id: string }
 Suggestion: Rename 'userId' to 'user_id'
 ```
 
-### 4. Type Validation
+### 5. Type Validation
 
 Checks type compatibility between TypeScript and Python.
 

@@ -383,14 +383,7 @@ export const validateApiContractsTool: ToolDefinition = {
     try {
       logger.info(`Running API Contract validation for ${absolutePath}`);
 
-      const result = await validateApiContracts(absolutePath, {
-        validation: {
-          endpoint: includeEndpoints,
-          parameters: includeParameters,
-          types: includeTypes,
-          strict: false,
-        },
-      });
+      const result = await validateApiContracts(absolutePath);
 
       const formatted = formatValidationResults(result);
 
@@ -451,12 +444,8 @@ export const getApiContractReportTool: ToolDefinition = {
       lines.push(`- **Total Issues:** ${report.summary.totalIssues}`);
       lines.push(`  - Critical: ${report.summary.critical} 🔴`);
       lines.push(`  - High: ${report.summary.high} 🟠`);
-      lines.push(`  - Medium: ${report.summary.medium} 🟡`);
-      lines.push(`  - Low: ${report.summary.low} 🟢`);
       lines.push(`- **Matched Endpoints:** ${report.summary.matchedEndpoints}`);
       lines.push(`- **Matched Types:** ${report.summary.matchedTypes}`);
-      lines.push(`- **Unmatched Frontend:** ${report.summary.unmatchedFrontend}`);
-      lines.push(`- **Unmatched Backend:** ${report.summary.unmatchedBackend}`);
       lines.push("");
 
       if (report.recommendations.length > 0) {
