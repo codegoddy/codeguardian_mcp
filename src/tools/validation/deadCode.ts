@@ -170,8 +170,17 @@ export async function isSymbolCalledOrInstantiated(
   for (const [filePath, fileInfo] of context.files) {
     if (checkedFiles >= MAX_FILES_TO_CHECK) break;
 
-    const content = fileContentCache.get(filePath);
-    if (!content) continue;
+    // Get content from cache or read from disk
+    let content = fileContentCache.get(filePath);
+    if (!content) {
+      try {
+        content = await fs.readFile(filePath, "utf-8");
+        fileContentCache.set(filePath, content);
+      } catch {
+        // Skip files we can't read
+        continue;
+      }
+    }
 
     checkedFiles++;
 

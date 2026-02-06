@@ -73,6 +73,9 @@ export function extractJSSymbols(
     case "lexical_declaration":
     case "variable_declaration": {
       // const/let/var declarations
+      // Check if this declaration is exported
+      const isExported = node.parent?.type === "export_statement";
+      
       for (const child of node.children) {
         if (child.type === "variable_declarator") {
           const nameNode = child.childForFieldName("name");
@@ -129,6 +132,7 @@ export function extractJSSymbols(
                   params,
                   paramCount: params.length,
                   isAsync,
+                  isExported,
                 });
               } else {
                 symbols.push({
@@ -137,6 +141,7 @@ export function extractJSSymbols(
                   file: filePath,
                   line: node.startPosition.row + 1,
                   column: node.startPosition.column,
+                  isExported,
                 });
               }
             }
@@ -244,6 +249,28 @@ export function extractJSSymbols(
             returnType,
           });
         }
+      }
+      break;
+    }
+
+    // TypeScript class field declarations (private/public/protected properties)
+    // e.g., class Foo { private bar: string = ''; }
+    case "public_field_definition":
+    case "private_field_definition":
+    case "protected_field_definition":
+    case "field_definition":
+    case "property_definition": {
+      const nameNode = node.childForFieldName("name");
+      if (nameNode) {
+        const name = getText(nameNode, code);
+        symbols.push({
+          name,
+          type: "variable",
+          file: filePath,
+          line: node.startPosition.row + 1,
+          column: node.startPosition.column,
+          scope: currentClass || undefined,
+        });
       }
       break;
     }
@@ -729,10 +756,15 @@ export function extractJSUsages(
               // Skip method calls on built-in objects (Array.map, String.split, etc.)
               // These are standard library methods we don't need to validate
             } else {
+              // Extract the root object from complex expressions like:
+              // - (err as Type).property -> err
+              // - arr[index].property -> arr[index]
+              // - fn().property -> fn()
+              const rootObj = getRootObject(objNode, code);
               usages.push({
                 name: method,
                 type: "methodCall",
-                object: obj,
+                object: rootObj,
                 line: node.startPosition.row + 1,
                 column: node.startPosition.column,
                 code: getLineText(code, node.startPosition.row),
@@ -763,7 +795,8 @@ export function extractJSUsages(
 
     case "identifier":
     case "jsx_identifier":
-    case "property_identifier": {
+    case "property_identifier":
+    case "type_identifier": {
       const name = getText(node, code);
 
       // Skip built-in objects that are commonly used as property access base
@@ -873,7 +906,55 @@ export function extractJSUsages(
         parent.childForFieldName("property") === node
       ) {
         const objNode = parent.childForFieldName("object");
-        const objName = objNode ? getText(objNode, code) : "";
+        // Use getRootObject to handle complex expressions like (err as Type).property
+        const objName = objNode ? getRootObject(objNode, code) : "";
+        
+        // Special case: member_expression inside JSX-misparsed context
+        // This happens with: <button aria-label="Close" role="button">
+        // where 'role' becomes property_identifier in member_expression inside assignment_expression
+        // Check if we're in a JSX-like context
+        let isInJsxContext = false;
+        let ancestor: Parser.SyntaxNode | null = parent.parent;
+        while (ancestor) {
+          if (ancestor.type === "ERROR") {
+            // Check if this ERROR looks like it came from JSX parsing
+            isInJsxContext = true;
+            break;
+          }
+          // Check for JSX-misparsed patterns
+          // Pattern: binary_expression containing type_assertion followed by - followed by assignment_expression
+          // This is the structure from: <button aria-label="..." role="...">
+          if (ancestor.type === "binary_expression") {
+            const grandparent = ancestor.parent;
+            if (grandparent) {
+              const ancestorIndex = grandparent.children.indexOf(ancestor);
+              // Check if binary_expression is at the right position
+              if (ancestorIndex >= 0) {
+                // Check if binary_expression contains: type_assertion, -, assignment_expression
+                const typeAssertChild = ancestor.children.find(c => c.type === "type_assertion");
+                const dashChild = ancestor.children.find(c => c.type === "-" || c.text === "-");
+                const assignChild = ancestor.children.find(c => c.type === "assignment_expression");
+                
+                if (typeAssertChild && dashChild && assignChild) {
+                  isInJsxContext = true;
+                  break;
+                }
+              }
+            }
+          }
+          if (ancestor.type === "jsx_expression" || ancestor.type === "jsx_element") {
+            // Real JSX context - don't skip here, let the jsx_attribute check handle it
+            isInJsxContext = false;
+            break;
+          }
+          ancestor = ancestor.parent;
+        }
+        
+        if (isInJsxContext) {
+          // Skip this property_identifier - it's likely a JSX attribute name
+          // that got misparsed as member_expression due to parser confusion
+          break;
+        }
         
         // Detect store property access: state.hallucination
         if (objName === "state") {
@@ -896,6 +977,231 @@ export function extractJSUsages(
       // 2. Skip if it's a field name in an object literal ({ NAME: val })
       if (parent.type === "pair" && parent.childForFieldName("key") === node)
         break;
+
+      // 2a. Skip if it's a property name in an interface or type literal
+      // e.g., interface Foo { bar: string } or type Foo = { bar: string }
+      // The property name is a definition, not a usage of an external variable
+      if (parent.type === "property_signature" && parent.childForFieldName("name") === node)
+        break;
+
+      // 2b. Skip if it's a class field declaration (public/private/protected property)
+      // e.g., class Foo { private bar: string }
+      // TypeScript uses public_field_definition, private_field_definition, etc.
+      // Note: property_identifier is used as the name node for class fields
+      if ((parent.type === "property_definition" || 
+           parent.type === "public_field_definition" ||
+           parent.type === "private_field_definition" ||
+           parent.type === "protected_field_definition" ||
+           parent.type === "field_definition") && 
+          parent.childForFieldName("name") === node)
+        break;
+
+      // 2c. Skip if it's a JSX attribute name (e.g., <div className="foo" />)
+      // These are HTML/SVG/React props, not variable references
+      // JSX attributes have the name as the first child (property_identifier or jsx_identifier)
+      if (parent.type === "jsx_attribute" && parent.children[0] === node)
+        break;
+      
+      // 2d. Skip property_identifier when it's used as a JSX attribute name
+      // This handles cases where JSX parsing produces different AST structures
+      // e.g., <img src={url} /> where 'src' might be parsed as property_identifier
+      // or <button role="..."> where 'role' is parsed as property_identifier in member_expression
+      if (node.type === "property_identifier") {
+        // Check if this property_identifier is inside a JSX attribute context
+        let ancestor: Parser.SyntaxNode | null = parent;
+        while (ancestor) {
+          if (ancestor.type === "jsx_attribute") {
+            // This property_identifier is the attribute name
+            if (ancestor.children[0] === node || 
+                (ancestor.childForFieldName("name") === node)) {
+              return; // Skip - this is a JSX attribute name, not a variable reference
+            }
+          }
+          // Also check for ERROR nodes that might contain JSX attributes
+          if (ancestor.type === "ERROR") {
+            // Check if this property_identifier is followed by = in an ERROR node
+            // by looking at the parent's siblings
+            const grandparent = ancestor.parent;
+            if (grandparent) {
+              const ancestorIndex = grandparent.children.indexOf(ancestor);
+              if (ancestorIndex >= 0) {
+                const nextAtAncestorLevel = grandparent.children[ancestorIndex + 1];
+                if (nextAtAncestorLevel && nextAtAncestorLevel.type === "=") {
+                  return; // This looks like a JSX attribute name in an ERROR node
+                }
+              }
+            }
+            
+            // Special case: property_identifier inside member_expression inside ERROR
+            // This happens with: <button aria-label="Close" role="button">
+            // where 'role' becomes property_identifier in member_expression
+            if (parent.type === "member_expression") {
+              // Check if the member_expression is followed by = in the ERROR node
+              const memberExprIndex = ancestor.children.indexOf(parent);
+              if (memberExprIndex >= 0) {
+                const nextAfterMember = ancestor.children[memberExprIndex + 1];
+                if (nextAfterMember && nextAfterMember.type === "=") {
+                  return; // This looks like a JSX attribute name (role=)
+                }
+              }
+            }
+          }
+          ancestor = ancestor.parent;
+        }
+        
+        // Additional check: property_identifier in member_expression that's part of
+        // a JSX-like pattern even without ERROR nodes
+        // This handles: <button aria-label="Close menu" role="button">
+        // where 'role' is property_identifier in member_expression in assignment_expression
+        if (parent.type === "member_expression") {
+          // Check if this member_expression has a specific pattern suggesting JSX misparsing
+          // Pattern: string + ?. + property_identifier followed by = 
+          // This is "value"?.property = something
+          const objNode = parent.childForFieldName("object");
+          const propNode = parent.childForFieldName("property");
+          
+          if (objNode?.type === "string" && propNode === node) {
+            // The member_expression looks like "string"?.property
+            // Check if parent of member_expression is followed by =
+            const grandparent = parent.parent;
+            if (grandparent) {
+              const parentIndex = grandparent.children.indexOf(parent);
+              if (parentIndex >= 0) {
+                const nextAfterParent = grandparent.children[parentIndex + 1];
+                if (nextAfterParent && nextAfterParent.type === "=") {
+                  // This looks like "value"?.attr = value pattern from JSX parsing
+                  return; // Skip - this is a JSX attribute name
+                }
+              }
+            }
+          }
+        }
+      }
+      
+      // 2e. Skip identifiers/type_identifiers that are actually JSX attribute names
+      // This handles cases where JSX parsing produces type-related AST nodes
+      // e.g., <img src={url} /> where 'src' might be parsed as type_identifier
+      // or <Tag attr={val} /> where 'attr' is an identifier inside an ERROR node
+      if (node.type === "identifier" || node.type === "type_identifier") {
+        // First check: is this identifier directly followed by = in its parent?
+        // This handles: <Tag attr={val} /> where attr is an identifier child of ERROR
+        const nodeIndexInParent = parent.children.indexOf(node as any);
+        if (nodeIndexInParent >= 0) {
+          const nextSibling = parent.children[nodeIndexInParent + 1];
+          if (nextSibling && (
+            nextSibling.type === "=" || 
+            nextSibling.text === "="
+          )) {
+            return; // Skip - this is attr= pattern (JSX attribute name)
+          }
+          
+          // Handle hyphenated attributes like aria-label, data-testid
+          // Pattern: attr-name= (identifier, -, identifier, =)
+          if (nextSibling && (
+            nextSibling.type === "-" || 
+            nextSibling.text === "-"
+          )) {
+            const nextNextSibling = parent.children[nodeIndexInParent + 2];
+            const nextNextNextSibling = parent.children[nodeIndexInParent + 3];
+            if (nextNextSibling && nextNextSibling.type === "identifier") {
+              // Check if after the second part there's an = 
+              if (nextNextNextSibling && (
+                nextNextNextSibling.type === "=" || 
+                nextNextNextSibling.text === "="
+              )) {
+                return; // Skip - this is aria-label= pattern (JSX attribute name)
+              }
+            }
+          }
+          
+          // Handle identifiers in type_assertion that are actually JSX attribute names
+          // Pattern: <button aria-label="..."> where 'aria' is parsed as type_assertion's expression
+          // The structure is: type_assertion (type_arguments + identifier) - assignment_expression
+          if (parent.type === "type_assertion") {
+            // Check if type_assertion is followed by - (aria- pattern)
+            const parentIndex = parent.parent?.children.indexOf(parent);
+            if (parentIndex !== undefined && parentIndex >= 0 && parent.parent) {
+              const nextAfterParent = parent.parent.children[parentIndex + 1];
+              if (nextAfterParent && (
+                nextAfterParent.type === "-" || 
+                nextAfterParent.text === "-"
+              )) {
+                return; // Skip - this looks like aria-label pattern
+              }
+            }
+          }
+        }
+        
+        // Check if this is inside a JSX-like context (ERROR node or type_parameters)
+        // where the identifier is followed by = or has JSX-like structure
+        let ancestor: Parser.SyntaxNode | null = parent;
+        while (ancestor) {
+          // Check if we're inside what looks like a JSX element
+          if (ancestor.type === "ERROR" || ancestor.type === "type_parameters" || 
+              ancestor.type === "type_arguments") {
+            
+            // For type_identifiers inside type_parameter (e.g., src={val} parsed as type)
+            // Structure: type_parameter -> type_identifier (attr name) -> default_type (=value)
+            if (parent.type === "type_parameter") {
+              // Check if there's a default_type (the =value part) after this type_identifier
+              const nodeIndex = parent.children.indexOf(node as any);
+              if (nodeIndex >= 0) {
+                const nextSibling = parent.children[nodeIndex + 1];
+                if (nextSibling && nextSibling.type === "default_type") {
+                  return; // Skip - this looks like attr={value} pattern
+                }
+              }
+            }
+            
+            // Handle identifiers inside ERROR nodes that are inside type_parameter
+            // This happens with: <Tag type="file" /> where 'type' is parsed as type_identifier
+            // Structure: type_parameter -> ERROR (only child is identifier "type") -> default_type
+            if (parent.type === "ERROR") {
+              const grandparent = parent.parent;
+              
+              // Case 1: ERROR is inside type_parameter, and ERROR only contains this identifier
+              // This is the "type" in <input type="file" ...>
+              if (grandparent && grandparent.type === "type_parameter") {
+                // Check if ERROR only has one child (this identifier)
+                if (parent.children.length === 1 && parent.children[0] === node) {
+                  // Check if the ERROR is followed by default_type in type_parameter
+                  const errorIndex = grandparent.children.indexOf(parent);
+                  if (errorIndex >= 0) {
+                    const nextAfterError = grandparent.children[errorIndex + 1];
+                    if (nextAfterError && nextAfterError.type === "default_type") {
+                      return; // Skip - this is a JSX attribute name
+                    }
+                  }
+                }
+              }
+              
+              // Case 2: ERROR is inside default_type, containing multiple identifiers
+              // This is "multiple" or "accept" in <input type="file" multiple accept="..." />
+              const greatGrandparent = grandparent?.parent;
+              if (grandparent?.type === "default_type" && greatGrandparent?.type === "type_parameter") {
+                // This ERROR contains multiple identifiers and/or literal_types
+                // Check if this identifier follows a literal_type (boolean attr after value)
+                const nodeIndex = parent.children.indexOf(node as any);
+                const prevSibling = nodeIndex > 0 ? parent.children[nodeIndex - 1] : null;
+                
+                if (prevSibling && (
+                  prevSibling.type === "literal_type" ||
+                  prevSibling.type === "identifier"
+                )) {
+                  return; // Skip - this looks like a boolean JSX attribute after a value
+                }
+              }
+            }
+          }
+          
+          // Check if we're inside a jsx_expression - this is the {value} part, not the attribute name
+          if (ancestor.type === "jsx_expression") {
+            break; // Don't skip - identifiers inside { } are actual variable references
+          }
+          
+          ancestor = ancestor.parent;
+        }
+      }
 
       // 3. Skip if it's a function/class/variable declaration name
       if (
@@ -938,13 +1244,6 @@ export function extractJSUsages(
       if (
         parent.type === "import_specifier" ||
         parent.type === "export_specifier"
-      )
-        break;
-
-      // 8. Skip if it's a JSX attribute name
-      if (
-        parent.type === "jsx_attribute" &&
-        parent.childForFieldName("name") === node
       )
         break;
 
@@ -1476,4 +1775,69 @@ function countArgs(argsNode: Parser.SyntaxNode | null): number {
     }
   }
   return count;
+}
+
+/**
+ * Extract the root object identifier from a complex expression.
+ * Handles cases like:
+ * - (err as Type) -> err (unwraps parenthesized expressions and type assertions)
+ * - obj.property -> obj
+ * - arr[index] -> arr
+ * - identifier -> identifier
+ * 
+ * @param node - The AST node representing the object in a member expression
+ * @param code - The source code string
+ * @returns The root object text (variable name)
+ */
+function getRootObject(node: Parser.SyntaxNode, code: string): string {
+  if (!node) return "";
+  
+  // Handle parenthesized expressions: (expr)
+  // This includes type assertions like (err as Error) or (err satisfies Error)
+  if (node.type === "parenthesized_expression") {
+    // Find the inner expression (skip the parentheses)
+    for (const child of node.children) {
+      if (child.type !== "(" && child.type !== ")") {
+        return getRootObject(child, code);
+      }
+    }
+  }
+  
+  // Handle type assertion expressions: expr as Type, expr satisfies Type
+  if (node.type === "as_expression" || node.type === "satisfies_expression") {
+    const leftNode = node.childForFieldName("left") || node.children[0];
+    if (leftNode) {
+      return getRootObject(leftNode, code);
+    }
+  }
+  
+  // Handle non-null assertion expressions: expr!
+  if (node.type === "non_null_expression") {
+    const expression = node.children[0];
+    if (expression) {
+      return getRootObject(expression, code);
+    }
+  }
+  
+  // Handle call expressions: fn() - extract the function name
+  if (node.type === "call_expression" || node.type === "new_expression") {
+    const funcNode = node.childForFieldName("function") || node.childForFieldName("constructor");
+    if (funcNode) {
+      return getRootObject(funcNode, code);
+    }
+  }
+  
+  // Handle member expressions: obj.prop - return the full text (includes property access)
+  // We don't recurse here because we want to preserve the object chain
+  if (node.type === "member_expression") {
+    return getText(node, code);
+  }
+  
+  // Handle subscript expressions: arr[index] - return the full text
+  if (node.type === "subscript_expression") {
+    return getText(node, code);
+  }
+  
+  // Base case: identifier or simple expression
+  return getText(node, code);
 }

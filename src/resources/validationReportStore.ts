@@ -105,8 +105,11 @@ class ValidationReportStore {
 
   /**
    * Store a validation report
+   * 
+   * IMPORTANT: This method is async and waits for the report to be written to disk.
+   * This ensures the file exists immediately when the method resolves.
    */
-  store(jobId: string, projectPath: string, report: Omit<StoredReport, 'jobId' | 'createdAt' | 'expiresAt'>): string {
+  async store(jobId: string, projectPath: string, report: Omit<StoredReport, 'jobId' | 'createdAt' | 'expiresAt'>): Promise<string> {
     const now = Date.now();
     const storedReport: StoredReport = {
       jobId,
@@ -117,14 +120,18 @@ class ValidationReportStore {
 
     this.reports.set(jobId, storedReport);
     
-    // Save to the specific project path
+    // Save to the specific project path and wait for it to complete
+    // This ensures the file exists immediately when the method returns
     if (projectPath) {
-      this.saveReportToDisk(projectPath, storedReport).catch(err => 
-        logger.error(`Async save to ${projectPath} failed:`, err)
-      );
+      try {
+        await this.saveReportToDisk(projectPath, storedReport);
+      } catch (err) {
+        logger.error(`Failed to save report to ${projectPath}:`, err);
+        // Don't throw - we still have the report in memory
+      }
     }
     
-    logger.info(`Stored validation report for job ${jobId} (in-memory)`);
+    logger.info(`Stored validation report for job ${jobId}`);
 
     return this.getReportUri(jobId);
   }

@@ -102,7 +102,7 @@ export async function getRelevantAntiPatterns(
     nonExistentImport: ["maintainability"],
     nonExistentClass: ["maintainability"],
     unusedImport: ["dead-code"],
-    dependencyHallucination: ["maintainability"],
+    // dependencyHallucination intentionally excluded - no relevant anti-pattern exists
     deadCode: ["dead-code"],
     highComplexity: ["complexity"],
     longFunction: ["complexity"],

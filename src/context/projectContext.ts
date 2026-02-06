@@ -452,6 +452,16 @@ export async function getProjectContext(
   );
   const startTime = Date.now();
 
+  // Create .codeguardian directory early so users see immediate feedback
+  // This ensures the directory exists before the potentially long context build
+  try {
+    const cacheDir = path.join(projectPath, CACHE_DIR_NAME);
+    await fs.mkdir(cacheDir, { recursive: true });
+    logger.debug(`Created ${CACHE_DIR_NAME} directory at ${cacheDir}`);
+  } catch (err) {
+    logger.warn(`Failed to create ${CACHE_DIR_NAME} directory: ${err}`);
+  }
+
   const context = await buildProjectContext(projectPath, {
     language,
     includeTests,

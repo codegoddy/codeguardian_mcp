@@ -344,8 +344,8 @@ export const validateCodeTool: ToolDefinition = {
       // Generate a unique ID for this validation run to store it in resources
       const validationId = `sync_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       
-      // Store CONFIRMED issues in report store
-      validationReportStore.store(validationId, projectPath, {
+      // Store CONFIRMED issues in report store (wait for disk write to complete)
+      await validationReportStore.store(validationId, projectPath, {
         summary: generateStructuredExplanation(confirmedIssues, confirmedDeadCode),
         stats: {
           filesScanned: projectContext.totalFiles,

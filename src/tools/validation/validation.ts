@@ -71,7 +71,8 @@ export async function validateManifest(
     if (!imp.isExternal) continue;
 
     // Get the base package name (e.g., @tanstack/react-query -> @tanstack/react-query)
-    const pkgName = getPackageName(imp.module);
+    // For Python, this extracts just the root package from dot-notation submodules
+    const pkgName = getPackageName(imp.module, language);
 
     // Skip Node.js built-ins
     // Also skip "bun", "deno", etc. if we supported them, but node: is standard
@@ -128,17 +129,26 @@ export async function validateManifest(
 
 /**
  * Extract package name from import path.
- * Handles scoped packages correctly.
+ * Handles scoped packages correctly and Python submodules.
  *
- * @param importPath - The import path (e.g., '@scope/package/path' or 'package/path')
+ * @param importPath - The import path (e.g., '@scope/package/path' or 'package/path' or 'package.submodule')
+ * @param language - Programming language to determine submodule handling (optional)
  * @returns The base package name
  */
-function getPackageName(importPath: string): string {
+function getPackageName(importPath: string, language?: string): string {
   // Handle scoped packages: @scope/package/path -> @scope/package
   if (importPath.startsWith("@")) {
     const parts = importPath.split("/");
     return parts.length >= 2 ? `${parts[0]}/${parts[1]}` : importPath;
   }
+  
+  // For Python, handle dot notation for submodules: package.submodule -> package
+  // This is critical because Python uses dots for submodules (e.g., fastapi.middleware.cors)
+  // while JavaScript/TypeScript uses slashes (e.g., package/submodule)
+  if (language === "python") {
+    return importPath.split(".")[0];
+  }
+  
   // Regular packages: package/path -> package
   return importPath.split("/")[0];
 }
@@ -761,7 +771,53 @@ export function validateSymbols(
       }
     } else if (used.type === "methodCall") {
       // 0. Skip whitelisted objects and chains (e.g., 'this.*', 'window.*', 'z.*', 'smthRef.current.*')
-      const rootObject = used.object?.split(".")[0]?.split("(")[0];
+      // Extract the root object, handling complex expressions like:
+      // - obj.property -> obj
+      // - obj?.property -> obj (optional chaining)
+      // - obj.method() -> obj
+      // - arr[index] -> arr
+      // - arr[index].property -> arr
+      // - fn().property -> fn
+      // - (expr as Type).property -> expr
+      function extractRootObject(obj: string): string {
+        if (!obj) return "";
+        
+        // Handle parenthesized expressions at the start: (expr).prop -> extract from expr
+        if (obj.startsWith("(")) {
+          // Find the matching closing parenthesis
+          let depth = 1;
+          let i = 1;
+          while (i < obj.length && depth > 0) {
+            if (obj[i] === "(") depth++;
+            else if (obj[i] === ")") depth--;
+            i++;
+          }
+          if (depth === 0) {
+            // Extract the content inside the outermost parentheses
+            const innerExpr = obj.slice(1, i - 1).trim();
+            // Check if it's a type assertion (expr as Type) or (expr satisfies Type)
+            const asMatch = innerExpr.match(/^(.+?)\s+as\s+.+$/s);
+            if (asMatch) {
+              return extractRootObject(asMatch[1].trim());
+            }
+            const satisfiesMatch = innerExpr.match(/^(.+?)\s+satisfies\s+.+$/s);
+            if (satisfiesMatch) {
+              return extractRootObject(satisfiesMatch[1].trim());
+            }
+            // Not a type assertion, extract from the inner expression
+            return extractRootObject(innerExpr);
+          }
+        }
+        
+        // Split on delimiters and take the first part
+        return obj
+          .split("?.")[0]
+          .split(".")[0]
+          .split("[")[0]
+          .split("(")[0];
+      }
+      
+      const rootObject = extractRootObject(used.object || "");
 
       // CRITICAL FIX: Skip ALL 'this' method calls - we can't validate class scope
       // The 'this' keyword is always in scope within a class/function context
@@ -850,8 +906,10 @@ export function validateSymbols(
 
       // If the object doesn't exist at all, flag it as a hallucination
       if (!objExists) {
+        // Use rootObject for checking (handles complex expressions like arr[index].method())
+        const objectToCheck = rootObject || used.object;
         // ... (existing undefinedVariable check) ...
-        const suggestion = suggestSimilar(used.object!, [
+        const suggestion = suggestSimilar(objectToCheck!, [
           ...validClasses.keys(),
           ...validVariables.keys(),
           ...validFunctions.keys(),
@@ -859,19 +917,19 @@ export function validateSymbols(
         const similarSymbols = extractSimilarSymbols(suggestion);
         const { confidence, reasoning } = calculateConfidence({
           issueType: "undefinedVariable",
-          symbolName: used.object!,
+          symbolName: objectToCheck!,
           similarSymbols,
           existsInProject:
-            projectClasses.has(used.object!) ||
-            projectVariables.has(used.object!) ||
-            projectFunctions.has(used.object!),
+            projectClasses.has(objectToCheck!) ||
+            projectVariables.has(objectToCheck!) ||
+            projectFunctions.has(objectToCheck!),
           strictMode,
         });
 
         issues.push({
           type: "undefinedVariable",
           severity: "critical",
-          message: `Object '${used.object}' is not defined or imported (used in ${used.object}.${used.name}())`,
+          message: `Object '${objectToCheck}' is not defined or imported (used in ${used.object}.${used.name}())`,
           line: used.line,
           file: filePath,
           code: used.code,
@@ -898,19 +956,30 @@ export function validateSymbols(
           if (missingPackages.has(imp.module)) {
             shouldCheck = true; // Hallucinated import - definitely flag usages!
           } else if (!imp.isExternal) {
-            // For internal imports, only check if we have class/method/variable info
-            // This prevents skipping validation for instances (const logger = new Logger())
-            const objClass =
-              validClasses.get(used.object!) ||
-              validVariables.get(used.object!);
+            // For internal imports, only check if we have CLASS info (not just variable info)
+            // This prevents false positives on imported const objects like React Query keys:
+            //   import { contractKeys } from "./keys";
+            //   contractKeys.all  // Don't flag - we don't know the shape of plain objects
+            // But DO validate actual class instances:
+            //   import { MyClass } from "./class";
+            //   const instance = new MyClass();
+            //   instance.method()  // Can validate if we have method info
+            //
+            // IMPORTANT: Use projectClasses, not validClasses, because validClasses
+            // contains ALL imported symbols (added as fallback), not just actual classes
+            const objClass = projectClasses.get(used.object!);
             if (objClass) {
-              shouldCheck = true; // We have symbol info, so we can validate methods
+              shouldCheck = true; // We have class info, so we can validate methods
             }
+            // Note: We intentionally DON'T check based on projectVariables
+            // because plain object imports (like query key factories) should
+            // not have their property access validated
           }
         } else {
           // Objects not from imports (locally defined)
           // ONLY check if we have class info, otherwise we don't know the type enough to flag it
-          const objClass = validClasses.get(used.object!) || validClasses.get(rootObject!);
+          // Use projectClasses (actual class definitions), not validClasses (which includes all imports)
+          const objClass = projectClasses.get(used.object!) || projectClasses.get(rootObject!);
 
           if (objClass && objClass.file !== "(new code)") {
             shouldCheck = true;
@@ -1041,6 +1110,7 @@ export function validateSymbols(
           (language === "python" && isPythonBuiltin(used.name)) ||
           ((language === "javascript" || language === "typescript") &&
             (isJSBuiltin(used.name) ||
+              isTSBuiltinType(used.name) ||
               [
                 "this",
                 "props",

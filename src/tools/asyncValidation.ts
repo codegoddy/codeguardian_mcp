@@ -247,7 +247,8 @@ export const getValidationResultsTool: ToolDefinition = {
         const job = jobQueue.getJob(args.jobId);
         const projectPath = (job?.input as any)?.projectPath || "";
         
-        validationReportStore.store(args.jobId, projectPath, {
+        // Wait for the report to be written to disk
+        await validationReportStore.store(args.jobId, projectPath, {
           summary: fullResult.summary,
           stats: fullResult.stats,
           hallucinations: fullResult.hallucinations || [],
