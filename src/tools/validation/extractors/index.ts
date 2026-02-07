@@ -149,6 +149,11 @@ export function extractUsagesAST(
   for (const imp of imports) {
     for (const name of imp.names) {
       importedSymbols.add(name.local);
+      // For Python dotted imports (e.g., `import concurrent.futures`),
+      // also add the base module name since Python makes it available as a variable
+      if (language === "python" && name.local.includes(".")) {
+        importedSymbols.add(name.local.split(".")[0]);
+      }
     }
   }
 

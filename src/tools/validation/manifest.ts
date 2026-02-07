@@ -528,9 +528,35 @@ async function loadRequirementsTxt(
   projectPath: string,
   result: ManifestDependencies,
 ): Promise<void> {
+  // Search upward for requirements.txt (like loadPackageJson does for package.json)
+  let currentPath = projectPath;
+  let reqPath = path.join(currentPath, "requirements.txt");
+  let found = false;
+  let depth = 0;
+  const MAX_DEPTH = 5;
+
+  while (depth < MAX_DEPTH) {
+    try {
+      await fs.access(reqPath);
+      found = true;
+      break;
+    } catch {
+      const parent = path.dirname(currentPath);
+      if (parent === currentPath) break; // Reached filesystem root
+      currentPath = parent;
+      reqPath = path.join(currentPath, "requirements.txt");
+      depth++;
+    }
+  }
+
+  if (!found) {
+    logger.info(`No requirements.txt found at or above ${projectPath} (searched ${depth + 1} levels)`);
+    return;
+  }
+
   try {
-    const reqPath = path.join(projectPath, "requirements.txt");
     const content = await fs.readFile(reqPath, "utf-8");
+    let packageCount = 0;
 
     for (const line of content.split("\n")) {
       const trimmed = line.trim();
@@ -551,6 +577,7 @@ async function loadRequirementsTxt(
         result.all.add(pkgName.replace(/-/g, "_"));
         // Handle known package name -> import name mappings
         addPythonPackageAliases(pkgName, result);
+        packageCount++;
 
         // Extract extras: passlib[bcrypt] -> add bcrypt as a dependency
         const extrasMatch = trimmed.match(/\[([^\]]+)\]/);
@@ -565,8 +592,10 @@ async function loadRequirementsTxt(
         }
       }
     }
-  } catch {
-    // requirements.txt not found, that's okay
+
+    logger.info(`Loaded ${packageCount} packages from requirements.txt at ${reqPath}`);
+  } catch (err) {
+    logger.warn(`Failed to read requirements.txt at ${reqPath}: ${err}`);
   }
 }
 

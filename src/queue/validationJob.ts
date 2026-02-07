@@ -12,6 +12,7 @@ import { orchestrateContext } from "../context/contextOrchestrator.js";
 import {
   extractUsagesAST,
   extractImportsAST,
+  extractTypeReferencesAST,
 } from "../tools/validation/extractors/index.js";
 import {
   loadManifestDependencies,
@@ -457,6 +458,7 @@ export async function processBatch(
       batchIssues.push(...manifestIssues);
 
       const usages = extractUsagesAST(content, language, imports);
+      const typeReferences = extractTypeReferencesAST(content, language);
       
       const missingPackages = new Set<string>();
       for (const issue of manifestIssues) {
@@ -476,7 +478,8 @@ export async function processBatch(
         pythonExports,
         context,
         filePath,
-        missingPackages
+        missingPackages,
+        typeReferences,
       );
       batchIssues.push(...symbolIssues);
     } catch (error) {

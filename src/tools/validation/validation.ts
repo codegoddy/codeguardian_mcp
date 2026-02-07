@@ -16,6 +16,7 @@
  * @format
  */
 
+import * as path from "path";
 import type { ProjectContext } from "../../context/projectContext.js";
 import type {
   ValidationIssue,
@@ -67,60 +68,83 @@ export async function validateManifest(
 ): Promise<ValidationIssue[]> {
   const issues: ValidationIssue[] = [];
 
+  // Phase 1: Collect all unknown packages that need registry lookup
+  const unknownPackages: Array<{ imp: ASTImport; pkgName: string; scopedName: string }> = [];
+
   for (const imp of imports) {
     if (!imp.isExternal) continue;
 
-    // Get the base package name (e.g., @tanstack/react-query -> @tanstack/react-query)
-    // For Python, this extracts just the root package from dot-notation submodules
     const pkgName = getPackageName(imp.module, language);
 
     // Skip Node.js built-ins
-    // Also skip "bun", "deno", etc. if we supported them, but node: is standard
     if (imp.module.startsWith("node:") || NODE_BUILTIN_MODULES.has(pkgName)) {
       continue;
     }
 
     // Check if package is in manifest
     if (!manifest.all.has(pkgName)) {
-      // Also check scoped packages
       const scopedName =
         imp.module.startsWith("@") ?
           imp.module.split("/").slice(0, 2).join("/")
         : pkgName;
 
       if (!manifest.all.has(scopedName)) {
-        // Vibe Check: Is this a missing dependency or a hallucination?
-        const existsInRegistry = await checkPackageRegistry(pkgName, language);
-
-        if (existsInRegistry) {
-          // It's a real package, just missing from package.json
-          // Vibe-Centric Severity: Low / Missing Dependency
-          issues.push({
-            type: "missingDependency", // New type preferred, fallback to dependencyHallucination handled downstream if needed
-            severity: "low",
-            message: `Package '${pkgName}' is not installed (but exists on registry)`,
-            line: imp.line,
-            file: filePath,
-            code: getLineFromCode(newCode, imp.line),
-            suggestion: `Run: npm install ${pkgName} (or add to requirements.txt)`,
-            confidence: 100,
-            reasoning: `Package not found in manifest, but verified to exist on ${language} registry. Safe to install.`,
-          });
-        } else {
-          // It's NOT a real package - Critical Hallucination
-          issues.push({
-            type: "dependencyHallucination",
-            severity: "critical",
-            message: `Package '${imp.module}' does not exist on ${language} registry`,
-            line: imp.line,
-            file: filePath,
-            code: getLineFromCode(newCode, imp.line),
-            suggestion: `Did you mean: ${suggestSimilar(pkgName, Array.from(manifest.all)) || "unknown"}?`,
-            confidence: 99,
-            reasoning: `Package not found in manifest AND lookup failed on registry. This is likely a hallucination.`,
-          });
-        }
+        unknownPackages.push({ imp, pkgName, scopedName });
       }
+    }
+  }
+
+  if (unknownPackages.length === 0) return issues;
+
+  // Phase 2: Batch registry lookups — deduplicate and check in parallel
+  const uniquePkgNames = [...new Set(unknownPackages.map(u => u.pkgName))];
+  const REGISTRY_BATCH_SIZE = 10;
+  const registryResults = new Map<string, boolean>();
+
+  for (let i = 0; i < uniquePkgNames.length; i += REGISTRY_BATCH_SIZE) {
+    const batch = uniquePkgNames.slice(i, i + REGISTRY_BATCH_SIZE);
+    const results = await Promise.all(
+      batch.map(async (pkgName) => ({
+        pkgName,
+        exists: await checkPackageRegistry(pkgName, language),
+      }))
+    );
+    for (const { pkgName, exists } of results) {
+      registryResults.set(pkgName, exists);
+    }
+  }
+
+  // Phase 3: Build issues from cached results
+  for (const { imp, pkgName } of unknownPackages) {
+    const existsInRegistry = registryResults.get(pkgName) ?? false;
+
+    if (existsInRegistry) {
+      const installCmd = language === "python"
+        ? `Run: pip install ${pkgName} (or add to requirements.txt)`
+        : `Run: npm install ${pkgName}`;
+      issues.push({
+        type: "missingDependency",
+        severity: "low",
+        message: `Package '${pkgName}' is not installed (but exists on registry)`,
+        line: imp.line,
+        file: filePath,
+        code: getLineFromCode(newCode, imp.line),
+        suggestion: installCmd,
+        confidence: 100,
+        reasoning: `Package not found in manifest, but verified to exist on ${language} registry. Safe to install.`,
+      });
+    } else {
+      issues.push({
+        type: "dependencyHallucination",
+        severity: "critical",
+        message: `Package '${imp.module}' does not exist on ${language} registry`,
+        line: imp.line,
+        file: filePath,
+        code: getLineFromCode(newCode, imp.line),
+        suggestion: `Did you mean: ${suggestSimilar(pkgName, Array.from(manifest.all)) || "unknown"}?`,
+        confidence: 99,
+        reasoning: `Package not found in manifest AND lookup failed on registry. This is likely a hallucination.`,
+      });
     }
   }
 
@@ -480,8 +504,8 @@ export function validateSymbols(
             }
             if (remainder) {
               const modPath = remainder.replace(/\./g, "/");
-              const pyFile = `${baseDir}/${modPath}.py`;
-              const pyInit = `${baseDir}/${modPath}/__init__.py`;
+              const pyFile = path.join(baseDir, `${modPath}.py`);
+              const pyInit = path.join(baseDir, modPath, "__init__.py");
               if (context.files.has(pyFile)) {
                 resolvedFile = pyFile;
               } else if (context.files.has(pyInit)) {
@@ -489,7 +513,7 @@ export function validateSymbols(
               }
             } else {
               // "from . import X" — resolve to current package's __init__.py
-              const pyInit = `${baseDir}/__init__.py`;
+              const pyInit = path.join(baseDir, "__init__.py");
               if (context.files.has(pyInit)) {
                 resolvedFile = pyInit;
               }
@@ -498,8 +522,8 @@ export function validateSymbols(
             // Absolute import: from app.core.config import X
             const modulePath = imp.module.replace(/\./g, "/");
             const basePath = context.projectPath;
-            const pyFile = `${basePath}/${modulePath}.py`;
-            const pyInit = `${basePath}/${modulePath}/__init__.py`;
+            const pyFile = path.join(basePath, `${modulePath}.py`);
+            const pyInit = path.join(basePath, modulePath, "__init__.py");
             if (context.files.has(pyFile)) {
               resolvedFile = pyFile;
             } else if (context.files.has(pyInit)) {
@@ -535,10 +559,10 @@ export function validateSymbols(
                 // e.g., "from app.api import auth" where app/api/auth.py exists
                 if (language === "python" && context) {
                   const resolvedDir = resolvedFile.endsWith("__init__.py")
-                    ? resolvedFile.slice(0, -"__init__.py".length)
-                    : resolvedFile.substring(0, resolvedFile.lastIndexOf("/") + 1);
-                  const subModPy = `${resolvedDir}${name.imported}.py`;
-                  const subModInit = `${resolvedDir}${name.imported}/__init__.py`;
+                    ? path.dirname(resolvedFile)
+                    : path.dirname(resolvedFile);
+                  const subModPy = path.join(resolvedDir, `${name.imported}.py`);
+                  const subModInit = path.join(resolvedDir, name.imported, "__init__.py");
                   if (context.files.has(subModPy) || context.files.has(subModInit)) {
                     // Valid sub-module import
                     continue;
@@ -674,8 +698,8 @@ export function validateSymbols(
           if (context) {
             const moduleDir = imp.module.replace(/^\.+/, "").replace(/\./g, "/");
             const basePath = context.projectPath;
-            const subModPy = `${basePath}/${moduleDir}/${name.imported}.py`;
-            const subModInit = `${basePath}/${moduleDir}/${name.imported}/__init__.py`;
+            const subModPy = path.join(basePath, moduleDir, `${name.imported}.py`);
+            const subModInit = path.join(basePath, moduleDir, name.imported, "__init__.py");
             if (context.files.has(subModPy) || context.files.has(subModInit)) {
               // Valid sub-module import, skip __all__ check
               validVariables.set(name.local, projectSym);
@@ -726,8 +750,8 @@ export function validateSymbols(
           if (language === "python" && context) {
             const modulePath = imp.module.replace(/^\.+/, "").replace(/\./g, "/");
             const basePath = context.projectPath;
-            const subModulePy = `${basePath}/${modulePath}/${name.imported}.py`;
-            const subModuleInit = `${basePath}/${modulePath}/${name.imported}/__init__.py`;
+            const subModulePy = path.join(basePath, modulePath, `${name.imported}.py`);
+            const subModuleInit = path.join(basePath, modulePath, name.imported, "__init__.py");
             const isSubModule = context.files.has(subModulePy) || context.files.has(subModuleInit);
             if (isSubModule) {
               // It's a valid sub-module import — treat as a module variable
@@ -781,6 +805,16 @@ export function validateSymbols(
         validVariables.set(name.local, extSym);
         validFunctions.set(name.local, { ...extSym, type: "function" });
         validClasses.set(name.local, { ...extSym, type: "class" });
+
+        // For Python dotted imports (e.g., `import concurrent.futures`),
+        // also register the base module name as valid since Python makes it available
+        if (language === "python" && name.local.includes(".")) {
+          const baseName = name.local.split(".")[0];
+          const baseSym = { ...extSym, name: baseName };
+          validVariables.set(baseName, baseSym);
+          validFunctions.set(baseName, { ...baseSym, type: "function" });
+          validClasses.set(baseName, { ...baseSym, type: "class" });
+        }
       }
     }
   }
@@ -791,6 +825,10 @@ export function validateSymbols(
   for (const imp of imports) {
     for (const name of imp.names) {
       allImportedNames.add(name.local);
+      // For Python dotted imports: `import concurrent.futures` → also add `concurrent`
+      if (language === "python" && name.local.includes(".")) {
+        allImportedNames.add(name.local.split(".")[0]);
+      }
     }
   }
 
@@ -1534,6 +1572,26 @@ export function validateSymbols(
     currentModuleAllExports = pythonExports.get(pyModPath) || null;
   }
 
+  // For Python: Build a set of symbol names that appear in the code text as word boundaries
+  // This catches usages in type annotations, decorators, attribute access, etc. that the
+  // AST-based extractor might miss (e.g., `def foo(x: Optional[str])`, `logging.DEBUG`)
+  let codeWordSet: Set<string> | null = null;
+  if (language === "python") {
+    codeWordSet = new Set<string>();
+    // Extract all word-like tokens from the code (excluding comment/string lines for accuracy)
+    const lines = newCode.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      // Skip pure comment lines (but still scan lines with inline code + comments)
+      if (line.startsWith("#")) continue;
+      // Extract all identifiers from the line
+      const words = line.match(/\b[a-zA-Z_][a-zA-Z0-9_]*\b/g);
+      if (words) {
+        for (const w of words) codeWordSet.add(w);
+      }
+    }
+  }
+
   for (const imp of imports) {
     for (const name of imp.names) {
       if (name.local === "*" || name.imported === "*") continue; // Skip wildcards
@@ -1546,6 +1604,24 @@ export function validateSymbols(
       if (currentModuleAllExports && currentModuleAllExports.has(name.local)) continue;
 
       if (!usedNames.has(name.local)) {
+        // Python fallback: Check if any non-import line in the code contains the symbol name
+        // This catches type annotations, decorators, attribute access, etc. that AST misses
+        if (language === "python" && codeWordSet) {
+          // The symbol must appear in the code AND not only on import lines
+          if (codeWordSet.has(name.local)) {
+            // Verify it appears on at least one non-import line
+            const importLineText = getLineFromCode(newCode, imp.line);
+            const appearsElsewhere = newCode.split("\n").some((line, idx) => {
+              if (idx + 1 === imp.line) return false; // Skip the import line itself
+              const trimmed = line.trim();
+              if (trimmed.startsWith("#")) return false; // Skip comments
+              if (trimmed.startsWith("import ") || trimmed.startsWith("from ")) return false; // Skip other imports
+              return new RegExp(`\\b${name.local.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(line);
+            });
+            if (appearsElsewhere) continue; // Used in code, skip the unused import warning
+          }
+        }
+
         const { confidence, reasoning } = calculateConfidence({
           issueType: "unusedImport",
           symbolName: name.local,

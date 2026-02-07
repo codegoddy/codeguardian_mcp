@@ -448,6 +448,7 @@ export async function detectDeadCode(
 
   // Track JSX and Wildcard usage
   const wildcardImportedModules = new Map<string, string>(); // Local Name -> Module Path
+  const allFileKeysEarly = Array.from(context.files.keys()); // Cache once for all resolveImport calls
 
   for (const [filePath, fileInfo] of context.files) {
     for (const imp of fileInfo.imports) {
@@ -462,7 +463,7 @@ export async function detectDeadCode(
 
       // Track Wildcard imports: import * as utils from './utils'
       if (imp.namespaceImport) {
-          const resolved = resolveImport(imp.source, filePath, Array.from(context.files.keys()));
+          const resolved = resolveImport(imp.source, filePath, allFileKeysEarly);
           if (resolved) {
               wildcardImportedModules.set(imp.namespaceImport, resolved);
           }
@@ -486,25 +487,39 @@ export async function detectDeadCode(
     }
   }
 
-  // Use cached imports from context for wildcard usage tracking
-  // instead of re-parsing AST for every file
+  // OPTIMIZED: Use cached imports from context for wildcard usage tracking
+  // Pre-build a reverse index: import_source → Set<namedImport> (single O(n) pass)
+  // This replaces the previous O(n²) nested loop over all files
+  const sourceToNamedImports = new Map<string, Set<string>>();
+  for (const [, fileInfo] of context.files) {
+    for (const imp of fileInfo.imports) {
+      if (imp.namedImports.length > 0) {
+        if (!sourceToNamedImports.has(imp.source)) {
+          sourceToNamedImports.set(imp.source, new Set());
+        }
+        const set = sourceToNamedImports.get(imp.source)!;
+        for (const sym of imp.namedImports) {
+          set.add(sym);
+        }
+      }
+    }
+  }
+
+  // Now resolve namespace imports using the pre-built index (O(n) pass)
+  const allFileKeys = Array.from(context.files.keys()); // Cache to avoid repeated Array.from
   for (const [filePath, fileInfo] of context.files) {
     for (const imp of fileInfo.imports) {
       if (imp.namespaceImport) {
-        const resolved = resolveImport(imp.source, filePath, Array.from(context.files.keys()));
+        const resolved = resolveImport(imp.source, filePath, allFileKeys);
         if (resolved) {
-          // Track potential wildcard usage by looking at other imports from same module
-          for (const [otherPath, otherInfo] of context.files) {
-            if (otherPath === filePath) continue;
-            for (const otherImp of otherInfo.imports) {
-              if (otherImp.source === imp.source && otherImp.namedImports.length > 0) {
-                for (const sym of otherImp.namedImports) {
-                  if (!symbolsImportedFromFile.has(resolved)) {
-                    symbolsImportedFromFile.set(resolved, new Set());
-                  }
-                  symbolsImportedFromFile.get(resolved)!.add(sym);
-                }
-              }
+          const namedImports = sourceToNamedImports.get(imp.source);
+          if (namedImports && namedImports.size > 0) {
+            if (!symbolsImportedFromFile.has(resolved)) {
+              symbolsImportedFromFile.set(resolved, new Set());
+            }
+            const importSet = symbolsImportedFromFile.get(resolved)!;
+            for (const sym of namedImports) {
+              importSet.add(sym);
             }
           }
         }
@@ -756,6 +771,47 @@ export async function detectDeadCode(
       fileInfo.exports.length > 0 || fileInfo.symbols.some((s) => s.exported);
 
     if (importers.length === 0 && hasExports) {
+      // Python-specific: Check if this file is re-exported via __init__.py
+      // In Python, files exported through __init__.py are NOT orphaned
+      if (context.language === "python") {
+        const dir = path.dirname(filePath);
+        const initPy = path.join(dir, "__init__.py");
+        const initInfo = context.files.get(initPy);
+        if (initInfo) {
+          // Check if __init__.py imports from this module
+          const moduleName = path.basename(filePath, ".py");
+          const isReExported = initInfo.imports.some(
+            (imp) =>
+              imp.source === `.${moduleName}` ||
+              imp.source === `./${moduleName}` ||
+              imp.source === moduleName ||
+              imp.source.endsWith(`.${moduleName}`) ||
+              imp.namedImports.some((n) =>
+                fileInfo.symbols.some((s) => s.name === n && s.exported)
+              ),
+          );
+          if (isReExported) continue; // Not orphaned — re-exported via __init__.py
+
+          // Also check if __init__.py content references this module via text scan
+          // Handles: from .module import *, import patterns in __init__.py
+          const initContent = fileContentCache.get(initPy);
+          if (initContent) {
+            const regex = new RegExp(`\\b${moduleName}\\b`);
+            if (regex.test(initContent)) continue;
+          } else {
+            // Try to read __init__.py to check
+            try {
+              const content = await fs.readFile(initPy, "utf-8");
+              fileContentCache.set(initPy, content);
+              const regex = new RegExp(`\\b${moduleName}\\b`);
+              if (regex.test(content)) continue;
+            } catch {
+              // Can't read, proceed with orphan check
+            }
+          }
+        }
+      }
+
       // Double-check: are ANY of this file's exports used anywhere?
       let anyExportUsed = false;
       for (const exp of fileInfo.exports) {

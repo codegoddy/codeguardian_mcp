@@ -174,6 +174,35 @@ export function collectPythonLocalDefinitions(
   if (!node) return;
 
   switch (node.type) {
+    // Local imports: `import concurrent.futures` inside a function defines `concurrent`
+    case "import_statement": {
+      const nameNode = node.childForFieldName("name");
+      if (nameNode) {
+        const module = getText(nameNode, code);
+        // `import concurrent.futures` makes `concurrent` available
+        const baseName = module.split(".")[0];
+        definitions.add(baseName);
+      }
+      break;
+    }
+    // Local from-imports: `from X import Y` inside a function defines `Y`
+    case "import_from_statement": {
+      for (const child of node.children) {
+        if (!child) continue;
+        if (child.type === "dotted_name" && child !== node.childForFieldName("module_name")) {
+          definitions.add(getText(child, code));
+        } else if (child.type === "aliased_import") {
+          const aliasNode = child.childForFieldName("alias");
+          const nameNode = child.childForFieldName("name");
+          if (aliasNode) {
+            definitions.add(getText(aliasNode, code));
+          } else if (nameNode) {
+            definitions.add(getText(nameNode, code));
+          }
+        }
+      }
+      break;
+    }
     case "identifier": {
       const name = getText(node, code);
       const parent = node.parent;
@@ -360,8 +389,10 @@ export function extractPythonUsages(
       // Skip comprehension variables (x for x in items)
       if (parent.type === "for_in_clause" && parent.childForFieldName("left")?.id === node.id) break;
 
-      // Skip decorator identifiers (handled separately)
-      if (parent.type === "decorator") break;
+      // Decorators: @contextmanager, @app.route("/"), etc.
+      // These ARE usages of the imported symbol, so we don't skip them.
+      // For simple decorators like @contextmanager, the identifier is direct child of decorator
+      // For complex ones like @app.route, the identifier is inside an attribute/call
 
       // Skip if it's the left side of an annotated assignment (x: int = 5)
       if (parent.type === "type" && parent.parent?.type === "assignment") break;
