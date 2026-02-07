@@ -1167,6 +1167,10 @@ export function validateSymbols(
         allImportedNames.has(rootObject!) ||
         // Check if the object is a locally-defined variable (function params, assignments, loop vars, etc.)
         localDefinitions.has(rootObject!) ||
+        // Python: Check if rootObject is the base of a dotted import (e.g., `import concurrent.futures` → `concurrent`)
+        (language === "python" && imports.some(imp =>
+          imp.names.some(n => n.local.startsWith(rootObject + "."))
+        )) ||
         // Always trust common short variable names in non-strict mode
         (!strictMode &&
           [
