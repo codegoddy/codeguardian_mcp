@@ -15,7 +15,7 @@ tests/
 ## Running Tests
 
 ```bash
-npm test                    # Run all tests
-npm test -- --watch         # Watch mode
-npm test -- validateCode    # Run specific test
+pnpm test                    # Run all tests
+pnpm test -- --watch         # Watch mode
+pnpm test -- validateCode    # Run specific test
 ```

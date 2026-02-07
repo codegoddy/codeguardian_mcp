@@ -365,7 +365,7 @@ jobs:
           node-version: '18'
       
       - name: Install CodeGuardian
-        run: npm install -g codeguardian
+        run: pnpm install -g codeguardian
       
       - name: Validate API Contracts
         run: codeguardian validate-api-contracts

@@ -68,10 +68,10 @@ git clone https://github.com/yourusername/codeguardian-mcp.git
 cd codeguardian-mcp
 
 # Install dependencies
-npm install
+pnpm install
 
 # Build the project
-npm run build
+pnpm run build
 ```
 
 ### MCP Client Configuration
