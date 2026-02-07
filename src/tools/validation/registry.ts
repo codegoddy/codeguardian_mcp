@@ -92,22 +92,54 @@ async function checkNPM(pkgName: string): Promise<boolean> {
   }
 }
 
-async function checkPyPI(pkgName: string): Promise<boolean> {
-  const url = `https://pypi.org/pypi/${pkgName}/json`;
-  
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 2000); // 2s timeout
+// Known import name -> PyPI package name mappings
+// Used when the import name differs from the PyPI package name
+const IMPORT_TO_PYPI: Record<string, string> = {
+  dateutil: "python-dateutil",
+  pythonjsonlogger: "python-json-logger",
+  yaml: "pyyaml",
+  cv2: "opencv-python",
+  PIL: "pillow",
+  bs4: "beautifulsoup4",
+  sklearn: "scikit-learn",
+  dotenv: "python-dotenv",
+  jose: "python-jose",
+  decouple: "python-decouple",
+  attr: "attrs",
+  gi: "pygobject",
+  serial: "pyserial",
+  usb: "pyusb",
+  wx: "wxpython",
+  sentry_sdk: "sentry-sdk",
+};
 
-  try {
-    const response = await fetch(url, {
-      method: 'HEAD',
-      signal: controller.signal
-    });
+async function checkPyPI(pkgName: string): Promise<boolean> {
+  // Try the direct name first
+  const namesToTry = [pkgName];
+  // If there's a known mapping, try the real PyPI name too
+  const mapped = IMPORT_TO_PYPI[pkgName];
+  if (mapped) namesToTry.push(mapped);
+  // Also try with python- prefix (common pattern)
+  if (!pkgName.startsWith("python-")) namesToTry.push(`python-${pkgName}`);
+
+  for (const name of namesToTry) {
+    const url = `https://pypi.org/pypi/${name}/json`;
     
-    return response.status === 200;
-  } finally {
-    clearTimeout(timeoutId);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2000);
+
+    try {
+      const response = await fetch(url, {
+        method: 'HEAD',
+        signal: controller.signal
+      });
+      
+      if (response.status === 200) return true;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
+  return false;
 }
 
 async function checkGoProxy(pkgName: string): Promise<boolean> {

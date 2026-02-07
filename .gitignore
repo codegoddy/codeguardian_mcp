@@ -164,3 +164,16 @@ cython_debug/
 #Testing Reports
 report/
 report.json
+
+# API Contract test results
+api-contract-results.txt
+
+# Debug/test scripts (temporary development files)
+/debug-*.ts
+/debug-*.js
+/test-*.ts
+/test-*.js
+/test-*.mjs
+
+# Qodo AI files
+.qodo/

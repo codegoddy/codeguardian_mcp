@@ -456,7 +456,7 @@ export async function processBatch(
       const manifestIssues = await validateManifest(imports, manifest, content, language, filePath);
       batchIssues.push(...manifestIssues);
 
-      const usages = extractUsagesAST(content, language, []);
+      const usages = extractUsagesAST(content, language, imports);
       
       const missingPackages = new Set<string>();
       for (const issue of manifestIssues) {

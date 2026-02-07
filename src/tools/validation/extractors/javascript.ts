@@ -751,8 +751,8 @@ export function extractJSUsages(
 
             // Skip built-in objects (console, window, etc.) but NOT imported symbols
             // We need to track method calls on imported symbols for validation
-            // The imported object methods can be validated against the project symbol table
-            if (isJSBuiltin(obj)) {
+            // e.g., screen from @testing-library/react shadows the browser's window.screen
+            if (isJSBuiltin(obj) && !externalSymbols.has(obj)) {
               // Skip method calls on built-in objects (Array.map, String.split, etc.)
               // These are standard library methods we don't need to validate
             } else {
@@ -807,7 +807,7 @@ export function extractJSUsages(
         const parent = node.parent;
         if (
           parent?.type === "member_expression" &&
-          parent.childForFieldName("object") === node
+          parent.childForFieldName("object")?.id === node.id
         ) {
           break; // Skip this identifier
         }
@@ -870,6 +870,10 @@ export function extractJSUsages(
       // Also skip ERROR nodes inside JSX (parser errors from invalid JSX characters like &)
       let ancestor: Parser.SyntaxNode | null = parent;
       while (ancestor) {
+        // template_substitution (${...}) is real code inside a template string
+        // Don't skip identifiers inside substitution expressions
+        if (ancestor.type === "template_substitution") break;
+
         if (
           ancestor.type === "string" ||
           ancestor.type === "template_string" ||
@@ -903,7 +907,7 @@ export function extractJSUsages(
       if (
         (parent.type === "member_expression" ||
           parent.type === "jsx_member_expression") &&
-        parent.childForFieldName("property") === node
+        parent.childForFieldName("property")?.id === node.id
       ) {
         const objNode = parent.childForFieldName("object");
         // Use getRootObject to handle complex expressions like (err as Type).property
@@ -975,13 +979,13 @@ export function extractJSUsages(
       }
 
       // 2. Skip if it's a field name in an object literal ({ NAME: val })
-      if (parent.type === "pair" && parent.childForFieldName("key") === node)
+      if (parent.type === "pair" && parent.childForFieldName("key")?.id === node.id)
         break;
 
       // 2a. Skip if it's a property name in an interface or type literal
       // e.g., interface Foo { bar: string } or type Foo = { bar: string }
       // The property name is a definition, not a usage of an external variable
-      if (parent.type === "property_signature" && parent.childForFieldName("name") === node)
+      if (parent.type === "property_signature" && parent.childForFieldName("name")?.id === node.id)
         break;
 
       // 2b. Skip if it's a class field declaration (public/private/protected property)
@@ -993,13 +997,13 @@ export function extractJSUsages(
            parent.type === "private_field_definition" ||
            parent.type === "protected_field_definition" ||
            parent.type === "field_definition") && 
-          parent.childForFieldName("name") === node)
+          parent.childForFieldName("name")?.id === node.id)
         break;
 
       // 2c. Skip if it's a JSX attribute name (e.g., <div className="foo" />)
       // These are HTML/SVG/React props, not variable references
       // JSX attributes have the name as the first child (property_identifier or jsx_identifier)
-      if (parent.type === "jsx_attribute" && parent.children[0] === node)
+      if (parent.type === "jsx_attribute" && parent.children[0]?.id === node.id)
         break;
       
       // 2d. Skip property_identifier when it's used as a JSX attribute name
@@ -1012,8 +1016,8 @@ export function extractJSUsages(
         while (ancestor) {
           if (ancestor.type === "jsx_attribute") {
             // This property_identifier is the attribute name
-            if (ancestor.children[0] === node || 
-                (ancestor.childForFieldName("name") === node)) {
+            if (ancestor.children[0]?.id === node.id || 
+                (ancestor.childForFieldName("name")?.id === node.id)) {
               return; // Skip - this is a JSX attribute name, not a variable reference
             }
           }
@@ -1163,7 +1167,7 @@ export function extractJSUsages(
               // This is the "type" in <input type="file" ...>
               if (grandparent && grandparent.type === "type_parameter") {
                 // Check if ERROR only has one child (this identifier)
-                if (parent.children.length === 1 && parent.children[0] === node) {
+                if (parent.children.length === 1 && parent.children[0]?.id === node.id) {
                   // Check if the ERROR is followed by default_type in type_parameter
                   const errorIndex = grandparent.children.indexOf(parent);
                   if (errorIndex >= 0) {
@@ -1211,7 +1215,7 @@ export function extractJSUsages(
           parent.type === "method_definition" ||
           parent.type === "interface_declaration" ||
           parent.type === "type_alias_declaration") &&
-        parent.childForFieldName("name") === node
+        parent.childForFieldName("name")?.id === node.id
       )
         break;
 
@@ -1221,9 +1225,23 @@ export function extractJSUsages(
       // NOT a reference to an external variable
       // Note: Tree-sitter uses "function_expression" for function expressions, not "function"
       if ((parent.type === "function" || parent.type === "function_expression") && 
-          parent.childForFieldName("name") === node) {
+          parent.childForFieldName("name")?.id === node.id) {
         break;
       }
+
+      // 3b. Skip TypeScript generic type parameter declarations
+      // e.g., <T> in function foo<T>(...) — T is declared here, not a reference
+      if (parent.type === "type_parameter" || parent.type === "type_parameters")
+        break;
+
+      // 3c. Skip generic type parameter USAGES (T, P, K, V, etc.) in type positions
+      // These are single-letter uppercase identifiers used in type annotations/arguments
+      // that were declared as generic params, not imported symbols
+      if (node.type === "type_identifier" && /^[A-Z]$/.test(name)) break;
+
+      // 3d. Skip type_identifier that is the property part of a qualified type name
+      // e.g., ErrorInfo in React.ErrorInfo — this is a namespace property, not a standalone reference
+      if (node.type === "type_identifier" && parent.type === "nested_type_identifier") break;
 
       // 4. Skip if it's a formal parameter (including rest parameters)
       if (
@@ -1240,11 +1258,10 @@ export function extractJSUsages(
         // This IS a usage.
       }
 
-      // 6. Skip if it's part of an import/export statement (handled separately)
-      if (
-        parent.type === "import_specifier" ||
-        parent.type === "export_specifier"
-      )
+      // 6. Skip if it's part of an import statement (handled separately)
+      // Note: export_specifier is NOT skipped — re-exports like `export type { Project }`
+      // should count as usages so the original import isn't flagged as unused
+      if (parent.type === "import_specifier")
         break;
 
       // 7. If we reach here, it's likely a reference (usage as a value)

@@ -157,20 +157,107 @@ export function extractPythonSymbols(
 }
 
 /**
+ * Collect all locally-defined identifier names in a Python AST.
+ * This pre-pass collects assignment targets, function parameters, for-loop variables,
+ * with-as targets, except-as targets, comprehension variables, and function/class names.
+ * Used to prevent false positives when these names appear as references later in the code.
+ *
+ * @param node - The root AST node to walk
+ * @param code - The source code string
+ * @param definitions - Set to accumulate locally-defined names
+ */
+export function collectPythonLocalDefinitions(
+  node: Parser.SyntaxNode,
+  code: string,
+  definitions: Set<string>,
+): void {
+  if (!node) return;
+
+  switch (node.type) {
+    case "identifier": {
+      const name = getText(node, code);
+      const parent = node.parent;
+      if (!parent) break;
+
+      // Assignment target: x = ...
+      if (parent.type === "assignment" && parent.childForFieldName("left")?.id === node.id) {
+        definitions.add(name);
+      }
+      // Augmented assignment: x += ...
+      if (parent.type === "augmented_assignment" && parent.childForFieldName("left")?.id === node.id) {
+        definitions.add(name);
+      }
+      // Function/class definition name
+      if ((parent.type === "function_definition" || parent.type === "class_definition") &&
+          parent.childForFieldName("name")?.id === node.id) {
+        definitions.add(name);
+      }
+      // Function parameters (all types)
+      if (parent.type === "parameters" || parent.type === "typed_parameter" ||
+          parent.type === "default_parameter" || parent.type === "typed_default_parameter" ||
+          parent.type === "list_splat_pattern" || parent.type === "dictionary_splat_pattern") {
+        definitions.add(name);
+      }
+      // Lambda parameters
+      if (parent.type === "lambda_parameters") {
+        definitions.add(name);
+      }
+      // For-loop variable: for x in ...
+      if (parent.type === "for_statement" && parent.childForFieldName("left")?.id === node.id) {
+        definitions.add(name);
+      }
+      // Tuple/pattern unpacking targets
+      if (parent.type === "pattern_list" || parent.type === "tuple_pattern") {
+        definitions.add(name);
+      }
+      // With-as / except-as target
+      if (parent.type === "as_pattern_target") {
+        definitions.add(name);
+      }
+      // Comprehension variable
+      if (parent.type === "for_in_clause" && parent.childForFieldName("left")?.id === node.id) {
+        definitions.add(name);
+      }
+      // Walrus operator target
+      if (parent.type === "named_expression" && parent.childForFieldName("name")?.id === node.id) {
+        definitions.add(name);
+      }
+      // Global/nonlocal declarations
+      if (parent.type === "global_statement" || parent.type === "nonlocal_statement") {
+        definitions.add(name);
+      }
+      // Unpacking target in assignment
+      if (isUnpackingTarget(node)) {
+        definitions.add(name);
+      }
+      break;
+    }
+  }
+
+  for (const child of node.children) {
+    if (child) {
+      collectPythonLocalDefinitions(child, code, definitions);
+    }
+  }
+}
+
+/**
  * Extract all symbol usages from Python AST.
  * Finds function calls, method calls, and attribute access.
- * Skips imported symbols and built-in functions to avoid false positives.
+ * Skips imported symbols, built-in functions, and locally-defined variables to avoid false positives.
  *
  * @param node - The AST node to extract usages from
  * @param code - The source code string
  * @param usages - Array to accumulate extracted usages
  * @param externalSymbols - Set of imported symbol names to skip
+ * @param localDefinitions - Set of locally-defined names to skip (from collectPythonLocalDefinitions)
  */
 export function extractPythonUsages(
   node: Parser.SyntaxNode,
   code: string,
   usages: ASTUsage[],
   externalSymbols: Set<string>,
+  localDefinitions?: Set<string>,
 ): void {
   if (!node) return;
 
@@ -201,15 +288,28 @@ export function extractPythonUsages(
               const obj = getText(objNode, code);
               const method = getText(attrNode, code);
 
-              usages.push({
-                name: method,
-                type: "methodCall",
-                object: obj,
-                line: node.startPosition.row + 1,
-                column: node.startPosition.column,
-                code: getLineText(code, node.startPosition.row),
-                argCount,
-              });
+              // Only track method calls with simple object references (identifier, attribute, subscript)
+              // Skip complex expressions like (end - start).total_seconds() where the "object"
+              // is a binary expression — these produce meaningless object names for validation
+              const simpleObjTypes = new Set([
+                "identifier", "attribute", "subscript", "call",
+                "parenthesized_expression",
+              ]);
+              const isSimpleObj = simpleObjTypes.has(objNode.type) && 
+                (objNode.type !== "parenthesized_expression" || 
+                 objNode.namedChildren[0]?.type === "identifier");
+
+              if (isSimpleObj) {
+                usages.push({
+                  name: method,
+                  type: "methodCall",
+                  object: obj,
+                  line: node.startPosition.row + 1,
+                  column: node.startPosition.column,
+                  code: getLineText(code, node.startPosition.row),
+                  argCount,
+                });
+              }
             }
         }
       }
@@ -222,20 +322,64 @@ export function extractPythonUsages(
       const parent = node.parent;
       if (!parent) break;
 
-      // Skip if it's an attribute name (obj.NAME)
-      if (parent.type === "attribute" && parent.childForFieldName("attribute") === node) break;
+      // Skip if it's an attribute name (obj.NAME) — handled by methodCall extraction
+      if (parent.type === "attribute" && parent.childForFieldName("attribute")?.id === node.id) break;
 
-      // Skip if it's a function/class definition
+      // Skip if it's a function/class definition name
       if ((parent.type === "function_definition" || parent.type === "class_definition") && 
-          parent.childForFieldName("name") === node) break;
+          parent.childForFieldName("name")?.id === node.id) break;
 
-      // Skip if it's a parameter
-      if (parent.type === "parameters" || parent.type === "typed_parameter" || parent.type === "default_parameter") break;
+      // Skip if it's a parameter definition (function params, lambda params)
+      if (parent.type === "parameters" || parent.type === "typed_parameter" || parent.type === "default_parameter" ||
+          parent.type === "typed_default_parameter" || parent.type === "list_splat_pattern" || parent.type === "dictionary_splat_pattern" ||
+          parent.type === "lambda_parameters") break;
 
-      // Skip if it's part of an import
-      if (parent.type === "dotted_name" || parent.type === "aliased_import") break;
+      // Skip if it's part of an import statement
+      if (parent.type === "dotted_name" || parent.type === "aliased_import" ||
+          parent.type === "import_statement" || parent.type === "import_from_statement") break;
 
-      // If we reach here, it's a reference
+      // Skip assignment targets (left side of =) — these are definitions, not usages
+      if (parent.type === "assignment" && parent.childForFieldName("left")?.id === node.id) break;
+      if (parent.type === "augmented_assignment" && parent.childForFieldName("left")?.id === node.id) break;
+
+      // Skip if it's the target in a for loop (for x in items)
+      if (parent.type === "for_statement" && parent.childForFieldName("left")?.id === node.id) break;
+      // Also handle tuple unpacking in for loops: for k, v in items
+      if (parent.type === "pattern_list" || parent.type === "tuple_pattern") break;
+
+      // Skip if it's the variable in a with statement (with open() as f)
+      // or except clause (except Exception as e)
+      // Tree-sitter wraps the alias identifier in an as_pattern_target node
+      if (parent.type === "as_pattern_target") break;
+      if (parent.type === "as_pattern" && parent.childForFieldName("alias")?.id === node.id) break;
+      if (parent.type === "except_clause") break;
+
+      // Skip keyword argument names (func(key=value) — skip "key")
+      if (parent.type === "keyword_argument" && parent.childForFieldName("name")?.id === node.id) break;
+
+      // Skip comprehension variables (x for x in items)
+      if (parent.type === "for_in_clause" && parent.childForFieldName("left")?.id === node.id) break;
+
+      // Skip decorator identifiers (handled separately)
+      if (parent.type === "decorator") break;
+
+      // Skip if it's the left side of an annotated assignment (x: int = 5)
+      if (parent.type === "type" && parent.parent?.type === "assignment") break;
+
+      // Skip walrus operator target (:= )
+      if (parent.type === "named_expression" && parent.childForFieldName("name")?.id === node.id) break;
+
+      // Skip global/nonlocal declarations
+      if (parent.type === "global_statement" || parent.type === "nonlocal_statement") break;
+
+      // Skip if it's a tuple/list unpacking target in assignment
+      if (isUnpackingTarget(node)) break;
+
+      // Skip locally-defined variables (function params, assignment targets, loop vars, etc.)
+      // These are local scope — CodeGuardian only validates project-level symbols
+      if (localDefinitions?.has(name)) break;
+
+      // If we reach here, it's a genuine reference usage
       const exists = usages.some(u => u.line === node.startPosition.row + 1 && u.column === node.startPosition.column);
       if (!exists) {
         usages.push({
@@ -252,7 +396,7 @@ export function extractPythonUsages(
 
   for (const child of node.children) {
     if (child) {
-      extractPythonUsages(child, code, usages, externalSymbols);
+      extractPythonUsages(child, code, usages, externalSymbols, localDefinitions);
     }
   }
 }
@@ -641,6 +785,45 @@ function countArgs(argsNode: Parser.SyntaxNode | null): number {
     }
   }
   return count;
+}
+
+/**
+ * Check if an identifier node is an unpacking target in an assignment.
+ * Handles: a, b = func()  /  [x, y] = items  /  (a, b) = items
+ * Also handles nested unpacking in for loops: for (a, b) in items
+ *
+ * @param node - The identifier node to check
+ * @returns true if the identifier is an unpacking target (definition, not usage)
+ */
+function isUnpackingTarget(node: Parser.SyntaxNode): boolean {
+  let current = node.parent;
+  while (current) {
+    // If we hit a tuple/list that is the left side of an assignment, it's an unpacking target
+    if (current.type === "pattern_list" || current.type === "tuple_pattern" || current.type === "list_pattern") {
+      const grandparent = current.parent;
+      if (grandparent) {
+        if (grandparent.type === "assignment" && grandparent.childForFieldName("left")?.id === current.id) return true;
+        if (grandparent.type === "for_statement" && grandparent.childForFieldName("left")?.id === current.id) return true;
+        if (grandparent.type === "for_in_clause" && grandparent.childForFieldName("left")?.id === current.id) return true;
+      }
+    }
+    // Also check expression_list (Python uses this for tuple unpacking without parens)
+    if (current.type === "expression_list") {
+      const grandparent = current.parent;
+      if (grandparent) {
+        if (grandparent.type === "assignment" && grandparent.childForFieldName("left")?.id === current.id) return true;
+        if (grandparent.type === "for_statement" && grandparent.childForFieldName("left")?.id === current.id) return true;
+        if (grandparent.type === "for_in_clause" && grandparent.childForFieldName("left")?.id === current.id) return true;
+      }
+    }
+    // Don't traverse too far up
+    if (current.type === "assignment" || current.type === "for_statement" || current.type === "for_in_clause" ||
+        current.type === "function_definition" || current.type === "class_definition" || current.type === "module") {
+      break;
+    }
+    current = current.parent;
+  }
+  return false;
 }
 
 /**

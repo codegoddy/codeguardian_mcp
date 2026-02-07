@@ -102,6 +102,7 @@ function getPythonStdLib(): Set<string> {
     "hmac",
     "secrets",
     // Generic OS Services
+    "time",
     "sys",
     "sysconfig",
     "builtins",
@@ -550,6 +551,18 @@ async function loadRequirementsTxt(
         result.all.add(pkgName.replace(/-/g, "_"));
         // Handle known package name -> import name mappings
         addPythonPackageAliases(pkgName, result);
+
+        // Extract extras: passlib[bcrypt] -> add bcrypt as a dependency
+        const extrasMatch = trimmed.match(/\[([^\]]+)\]/);
+        if (extrasMatch) {
+          for (const extra of extrasMatch[1].split(",")) {
+            const extraName = extra.trim().toLowerCase();
+            if (extraName) {
+              result.all.add(extraName);
+              result.all.add(extraName.replace(/-/g, "_"));
+            }
+          }
+        }
       }
     }
   } catch {
@@ -680,6 +693,26 @@ function addPythonPackageAliases(
     "google-cloud-storage": ["google.cloud.storage"],
     "google-cloud-bigquery": ["google.cloud.bigquery"],
     protobuf: ["google.protobuf"],
+    "nats-py": ["nats"],
+    "python-jose": ["jose"],
+    "python-json-logger": ["pythonjsonlogger"],
+    "python-multipart": ["multipart"],
+    "python-decouple": ["decouple"],
+    uvloop: ["uvloop"],
+    aiofiles: ["aiofiles"],
+    httpx: ["httpx"],
+    starlette: ["starlette"],
+    fastapi: ["fastapi", "starlette"],
+    celery: ["celery"],
+    "redis-py": ["redis"],
+    redis: ["redis"],
+    bcrypt: ["bcrypt"],
+    passlib: ["passlib"],
+    pyjwt: ["jwt"],
+    "stripe-python": ["stripe"],
+    "sentry-sdk": ["sentry_sdk"],
+    "opentelemetry-api": ["opentelemetry"],
+    "opentelemetry-sdk": ["opentelemetry"],
   };
 
   const pkgAliases = aliases[pkgName];

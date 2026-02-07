@@ -225,9 +225,34 @@ function validatePathCompatibility(
   const frontendParams = extractPathParams(frontendPath);
   const backendParams = extractPathParams(backendPath);
 
-  // Check for missing parameters in frontend
+  // Check for missing/extra parameters, but account for positional equivalence
+  // e.g., {id} in frontend is equivalent to {project_id} in backend if at the same position
+  const frontendSegments = frontendPath.split('/');
+  const backendSegments = backendPath.split('/');
+  
+  // Build positional param map: match params by their position in the path
+  const positionallyMatched = new Set<string>();
+  const positionallyMatchedBackend = new Set<string>();
+  
+  if (frontendSegments.length === backendSegments.length) {
+    for (let i = 0; i < frontendSegments.length; i++) {
+      const fSeg = frontendSegments[i];
+      const bSeg = backendSegments[i];
+      if (isPathParam(fSeg) && isPathParam(bSeg)) {
+        // Both are path params at the same position — they're equivalent
+        const fParam = fSeg.replace(/[\${}]/g, '').split(':')[0];
+        const bParam = bSeg.replace(/[\${}]/g, '').split(':')[0];
+        // Convert camelCase frontend param to snake_case for comparison
+        const fParamSnake = fParam.replace(/[A-Z]/g, (letter: string) => `_${letter.toLowerCase()}`);
+        positionallyMatched.add(fParamSnake);
+        positionallyMatchedBackend.add(bParam);
+      }
+    }
+  }
+
+  // Check for missing parameters in frontend (skip positionally matched ones)
   for (const param of backendParams) {
-    if (!frontendParams.includes(param)) {
+    if (!frontendParams.includes(param) && !positionallyMatchedBackend.has(param)) {
       issues.push({
         type: "apiPathMismatch",
         severity: "high",
@@ -241,9 +266,9 @@ function validatePathCompatibility(
     }
   }
 
-  // Check for extra parameters in frontend (warning only)
+  // Check for extra parameters in frontend (skip positionally matched ones)
   for (const param of frontendParams) {
-    if (!backendParams.includes(param)) {
+    if (!backendParams.includes(param) && !positionallyMatched.has(param)) {
       issues.push({
         type: "apiPathMismatch",
         severity: "medium",
@@ -284,16 +309,21 @@ function validateRequestResponseTypes(
         // Check if there's a type mapping for this
         const typeMapping = apiContract.typeMappings.get(frontendRequestType);
         if (!typeMapping || typeMapping.backend?.name !== backendRequestModel) {
-          issues.push({
-            type: "apiTypeMismatch",
-            severity: "high",
-            message: `Request body type mismatch: frontend sends '${frontendRequestType}', backend expects '${backendRequestModel}'`,
-            file: mapping.frontend.file,
-            line: mapping.frontend.line,
-            endpoint,
-            suggestion: `Ensure frontend type '${frontendRequestType}' matches backend model '${backendRequestModel}'`,
-            confidence: 85,
-          });
+          // Check if FE sends an array type that the BE wraps in a model
+          // e.g., FE sends PaymentMilestoneCreate[] → BE expects PaymentScheduleSetup { milestones: List[PaymentMilestoneCreate] }
+          const isWrappedArray = isArrayTypeWrappedInModel(frontendRequestType, backendRequestModel, apiContract);
+          if (!isWrappedArray) {
+            issues.push({
+              type: "apiTypeMismatch",
+              severity: "high",
+              message: `Request body type mismatch: frontend sends '${frontendRequestType}', backend expects '${backendRequestModel}'`,
+              file: mapping.frontend.file,
+              line: mapping.frontend.line,
+              endpoint,
+              suggestion: `Ensure frontend type '${frontendRequestType}' matches backend model '${backendRequestModel}'`,
+              confidence: 85,
+            });
+          }
         }
       }
     }
@@ -818,26 +848,58 @@ function isComplexType(type: string): boolean {
 
 /**
  * Check if two type names are similar (e.g., Client vs ClientResponse)
+ * But NOT if they differ by operation type (Create vs Update vs Delete)
  */
 function areSimilarTypeNames(type1: string, type2: string): boolean {
-  // Remove common suffixes/prefixes
-  const clean1 = type1.replace(/(response|request|create|update|delete|model|entity|dto)$/i, '');
-  const clean2 = type2.replace(/(response|request|create|update|delete|model|entity|dto)$/i, '');
+  // If both have different CRUD operation suffixes, they're NOT similar
+  // (e.g., ClientCreate vs ClientUpdate are different request body types)
+  const crudSuffixes = ['create', 'update', 'delete', 'patch'];
+  const suffix1 = crudSuffixes.find(s => type1.endsWith(s));
+  const suffix2 = crudSuffixes.find(s => type2.endsWith(s));
+  if (suffix1 && suffix2 && suffix1 !== suffix2) {
+    return false;
+  }
+
+  // Remove common non-CRUD suffixes
+  const clean1 = type1.replace(/(response|request|model|entity|dto|schema)$/i, '');
+  const clean2 = type2.replace(/(response|request|model|entity|dto|schema)$/i, '');
   
   // If one contains the other, they're likely related
   if (clean1.includes(clean2) || clean2.includes(clean1)) {
     return true;
   }
   
-  // Check for common patterns
-  const commonPrefixes = ['api', 'app', 'user', 'client', 'project', 'item', 'data'];
-  for (const prefix of commonPrefixes) {
-    if ((type1.startsWith(prefix) && type2.startsWith(prefix)) ||
-        (type1.endsWith(prefix) && type2.endsWith(prefix))) {
+  return false;
+}
+
+/**
+ * Check if a frontend array type is wrapped in a backend model
+ * e.g., FE sends PaymentMilestoneCreate[] → BE expects PaymentScheduleSetup { milestones: List[PaymentMilestoneCreate] }
+ */
+function isArrayTypeWrappedInModel(
+  frontendType: string,
+  backendModelName: string,
+  apiContract: ApiContractContext,
+): boolean {
+  // Only applies when frontend type is an array
+  if (!frontendType.endsWith('[]')) return false;
+
+  const elementType = frontendType.replace(/\[\]$/, '');
+  const backendModel = apiContract.backendModels.find(m => m.name === backendModelName);
+  if (!backendModel) return false;
+
+  // Check if the backend model has a field whose type is a list of the element type
+  for (const field of backendModel.fields) {
+    const fieldType = field.type.toLowerCase();
+    const elementLower = elementType.toLowerCase();
+    // Match patterns like List[PaymentMilestoneCreate], list[PaymentMilestoneCreate], Sequence[...]
+    if (fieldType.includes(`list[${elementLower}]`) ||
+        fieldType.includes(`sequence[${elementLower}]`) ||
+        fieldType === `${elementLower}[]`) {
       return true;
     }
   }
-  
+
   return false;
 }
 
@@ -845,8 +907,11 @@ function checkProblematicTypePairs(tsType: string, pyType: string): { compatible
   const normalizedTs = normalizeType(tsType);
   const normalizedPy = normalizeType(pyType);
 
-  // UUID handling
-  if (normalizedPy === "uuid" && normalizedTs !== "string") {
+  // UUID handling - UUID serializes to string in JSON, so string is compatible
+  if (normalizedPy === "uuid") {
+    if (normalizedTs === "string" || normalizedTs === "string_or_null") {
+      return null; // Compatible — no issue
+    }
     return {
       compatible: false,
       severity: "medium",
@@ -865,8 +930,11 @@ function checkProblematicTypePairs(tsType: string, pyType: string): { compatible
     };
   }
 
-  // DateTime handling
-  if ((normalizedPy === "datetime" || normalizedPy === "date") && normalizedTs !== "string") {
+  // DateTime handling - datetime serializes to ISO string in JSON, so string is compatible
+  if (normalizedPy === "datetime" || normalizedPy === "date") {
+    if (normalizedTs === "string" || normalizedTs === "string_or_null") {
+      return null; // Compatible — no issue
+    }
     return {
       compatible: false,
       severity: "high",
@@ -910,6 +978,7 @@ function checkProblematicTypePairs(tsType: string, pyType: string): { compatible
 
 function normalizeType(type: string): string {
   return type
+    .replace(/^[\s:]+/, "") // Strip leading colons/whitespace from extraction artifacts
     .toLowerCase()
     .replace(/\s+/g, "")
     .replace(/\[\]/g, "array")

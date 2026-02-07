@@ -11,7 +11,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import { FileWatcher, FileChangeEvent } from "./fileWatcher.js";
 import { orchestrateContext } from "../context/contextOrchestrator.js";
-import { invalidateContext, refreshFileContext } from "../context/projectContext.js";
+import { refreshFileContext, markGuardianActive, markGuardianInactive } from "../context/projectContext.js";
 import {
   extractUsagesAST,
   extractImportsAST,
@@ -138,6 +138,10 @@ export class AutoValidator {
     });
     const context = orchestration.projectContext;
     logger.info("Context built.");
+
+    // Mark this project as guardian-managed — all tools will now
+    // use this cached context without TTL/staleness rebuilds
+    markGuardianActive(this.projectPath);
 
     // Detect project type
     this.projectFileCount = context.files?.size || 0;
@@ -426,6 +430,7 @@ export class AutoValidator {
     this.watcher.stop();
     this.debounceTimers.forEach((timer) => clearTimeout(timer));
     this.debounceTimers.clear();
+    markGuardianInactive(this.projectPath);
   }
 
   private handleFileChange(event: FileChangeEvent): void {
@@ -434,8 +439,7 @@ export class AutoValidator {
       this.newFilesTracked.add(event.path);
       this.projectFileCount++;
       
-      // IMPORTANT: Refresh context when new files are added
-      // This ensures new symbols are available for validation in other files
+      // Refresh context when new files are added
       logger.debug(`New file detected: ${event.path} - refreshing context...`);
       refreshFileContext(this.projectPath, event.path, { language: this.language }).catch((err) => {
         logger.warn(`Failed to refresh context for new file ${event.path}:`, err);
@@ -446,13 +450,21 @@ export class AutoValidator {
         // Only switch if we were previously in learning mode (implied by auto + threshold)
         // But for simplicity, we just let the next detectProjectMode call handle it
       }
+    } else if (event.type === "change") {
+      // Refresh context when files are modified so symbols/imports stay current
+      logger.debug(`File modified: ${event.path} - refreshing context...`);
+      refreshFileContext(this.projectPath, event.path, { language: this.language }).catch((err) => {
+        logger.warn(`Failed to refresh context for modified file ${event.path}:`, err);
+      });
     } else if (event.type === "unlink") {
       this.newFilesTracked.delete(event.path);
       this.projectFileCount = Math.max(0, this.projectFileCount - 1);
       
-      // Invalidate context when files are deleted
-      logger.debug(`File deleted: ${event.path} - invalidating context...`);
-      invalidateContext(this.projectPath);
+      // Incrementally remove deleted file from context (not a full invalidation)
+      logger.debug(`File deleted: ${event.path} - removing from context...`);
+      refreshFileContext(this.projectPath, event.path, { language: this.language }).catch((err) => {
+        logger.warn(`Failed to remove deleted file ${event.path} from context:`, err);
+      });
     }
 
     // Debounce rapid changes to the same file

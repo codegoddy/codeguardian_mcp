@@ -18,6 +18,7 @@ import type {
   ApiTypeDefinition,
   ApiRouteDefinition,
   ApiModelDefinition,
+  ApiParameter,
 } from "./projectContext.js";
 
 // ============================================================================
@@ -106,8 +107,8 @@ function extractServiceFromCall(
     const argumentsNode = node.childForFieldName("arguments");
     if (!argumentsNode) return null;
 
-    const endpoint = extractEndpointFromArguments(argumentsNode, content);
-    if (!endpoint) return null;
+    const extracted = extractEndpointFromArguments(argumentsNode, content);
+    if (!extracted) return null;
 
     // Try to find the enclosing function/method name
     const enclosingFunction = findEnclosingFunction(node, content);
@@ -116,11 +117,12 @@ function extractServiceFromCall(
     const { requestType, responseType } = extractTypesFromEnclosingFunction(node, content);
 
     return {
-      name: enclosingFunction || `${methodName}_${endpoint.replace(/[^a-zA-Z0-9]/g, "_")}`,
+      name: enclosingFunction || `${methodName}_${extracted.endpoint.replace(/[^a-zA-Z0-9]/g, "_")}`,
       method: httpMethod,
-      endpoint,
+      endpoint: extracted.endpoint,
       requestType,
       responseType,
+      queryParams: extracted.queryParams.length > 0 ? extracted.queryParams : undefined,
       file: filePath,
       line: node.startPosition.row + 1,
     };
@@ -141,30 +143,34 @@ function mapToHttpMethod(methodName: string): ApiServiceDefinition["method"] | n
   return methodMap[methodName.toLowerCase()] || null;
 }
 
-function extractEndpointFromArguments(argumentsNode: any, content: string): string | null {
+function extractEndpointFromArguments(argumentsNode: any, content: string): { endpoint: string; queryParams: ApiParameter[] } | null {
   // First argument should be the endpoint
   for (const child of argumentsNode.children || []) {
     if (child.type === "string" || child.type === "template_string") {
-      return extractStringValue(child, content);
+      const result = extractStringValue(child, content);
+      if (result) return result;
     }
   }
   return null;
 }
 
-function extractStringValue(node: any, content: string): string | null {
+function extractStringValue(node: any, content: string): { endpoint: string; queryParams: ApiParameter[] } | null {
   if (node.type === "string") {
     const text = getNodeText(node, content);
-    // Remove quotes and strip query parameters
-    return text.replace(/^["']|["']$/g, "").split("?")[0];
+    const cleaned = text.replace(/^["']|["']$/g, "");
+    const queryParams = extractQueryParamsFromUrl(cleaned);
+    return { endpoint: cleaned.split("?")[0], queryParams };
   }
 
   if (node.type === "template_string") {
     // For template strings like `/api/clients/${id}`, extract the full path with placeholders
     const text = getNodeText(node, content);
     // Remove backticks first
-    let result = text.replace(/^`/, "").replace(/`$/, "");
+    let fullUrl = text.replace(/^`/, "").replace(/`$/, "");
+    // Extract query params before stripping them
+    const queryParams = extractQueryParamsFromUrl(fullUrl);
     // Strip query parameters (anything after ?)
-    result = result.split("?")[0];
+    let result = fullUrl.split("?")[0];
     // Replace ${...} with {varName} to match backend format
     // But skip variables that are likely query string builders (at end of path, named query/params)
     result = result.replace(/\$\{([^}]+)\}/g, (match, varName) => {
@@ -176,10 +182,37 @@ function extractStringValue(node: any, content: string): string | null {
       const snakeCase = varName.replace(/[A-Z]/g, (letter: string) => `_${letter.toLowerCase()}`);
       return `{${snakeCase}}`;
     });
-    return result;
+    return { endpoint: result, queryParams };
   }
 
   return null;
+}
+
+/**
+ * Extract query parameter names from a URL string (plain or template literal)
+ * e.g., "/api/pr-status?pr_url=${encodeURIComponent(prUrl)}&provider=${provider}"
+ * returns [{name: "pr_url", ...}, {name: "provider", ...}]
+ */
+function extractQueryParamsFromUrl(url: string): ApiParameter[] {
+  const queryStart = url.indexOf("?");
+  if (queryStart === -1) return [];
+
+  const queryString = url.substring(queryStart + 1);
+  const params: ApiParameter[] = [];
+
+  // Split on & to get individual param pairs
+  const pairs = queryString.split("&");
+  for (const pair of pairs) {
+    const eqIndex = pair.indexOf("=");
+    if (eqIndex > 0) {
+      const name = pair.substring(0, eqIndex).trim();
+      if (name && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+        params.push({ name, type: "string", required: true });
+      }
+    }
+  }
+
+  return params;
 }
 
 function findEnclosingFunction(node: any, content: string): string | null {

@@ -26,7 +26,7 @@ import type {
   ASTTypeReference,
 } from "./types.js";
 import { resolveImport } from "../../context/projectContext.js";
-import { extractSymbolsAST } from "./extractors/index.js";
+import { extractSymbolsAST, collectLocalDefinitionsAST } from "./extractors/index.js";
 import { suggestSimilar, extractSimilarSymbols } from "./scoring.js";
 import { isPythonSymbolExported } from "./manifest.js";
 import {
@@ -464,6 +464,49 @@ export function validateSymbols(
           filePath,
           Array.from(context.files.keys()),
         );
+
+        // Python-specific: convert dot notation to path separators
+        if (!resolvedFile && language === "python") {
+          if (imp.module.startsWith(".")) {
+            // Relative import: from ..models.deliverable import X
+            // Count leading dots to determine how many directories to go up
+            const dotMatch = imp.module.match(/^(\.+)/);
+            const dotCount = dotMatch ? dotMatch[1].length : 0;
+            const remainder = imp.module.slice(dotCount);
+            // Go up (dotCount) directories from current file's package directory
+            let baseDir = filePath.substring(0, filePath.lastIndexOf("/"));
+            for (let i = 1; i < dotCount; i++) {
+              baseDir = baseDir.substring(0, baseDir.lastIndexOf("/"));
+            }
+            if (remainder) {
+              const modPath = remainder.replace(/\./g, "/");
+              const pyFile = `${baseDir}/${modPath}.py`;
+              const pyInit = `${baseDir}/${modPath}/__init__.py`;
+              if (context.files.has(pyFile)) {
+                resolvedFile = pyFile;
+              } else if (context.files.has(pyInit)) {
+                resolvedFile = pyInit;
+              }
+            } else {
+              // "from . import X" — resolve to current package's __init__.py
+              const pyInit = `${baseDir}/__init__.py`;
+              if (context.files.has(pyInit)) {
+                resolvedFile = pyInit;
+              }
+            }
+          } else {
+            // Absolute import: from app.core.config import X
+            const modulePath = imp.module.replace(/\./g, "/");
+            const basePath = context.projectPath;
+            const pyFile = `${basePath}/${modulePath}.py`;
+            const pyInit = `${basePath}/${modulePath}/__init__.py`;
+            if (context.files.has(pyFile)) {
+              resolvedFile = pyFile;
+            } else if (context.files.has(pyInit)) {
+              resolvedFile = pyInit;
+            }
+          }
+        }
       }
 
       for (const name of imp.names) {
@@ -482,18 +525,58 @@ export function validateSymbols(
             if (!hasExport) {
               // Double check against all symbols in file marked as exported
               // (sometimes exports are implicit in simple extractors)
-              // Note: SymbolInfo does not have 'isDefault', so we assume default export matches default logic elsewhere
+              // For Python: ALL module-level names are importable (no export keyword)
               const symExport = fileInfo.symbols.find(
-                (s) => s.exported && s.name === name.imported,
+                (s) => (language === "python" || s.exported) && s.name === name.imported,
               );
 
               if (!symExport) {
+                // For Python: check if the imported name is a sub-module file
+                // e.g., "from app.api import auth" where app/api/auth.py exists
+                if (language === "python" && context) {
+                  const resolvedDir = resolvedFile.endsWith("__init__.py")
+                    ? resolvedFile.slice(0, -"__init__.py".length)
+                    : resolvedFile.substring(0, resolvedFile.lastIndexOf("/") + 1);
+                  const subModPy = `${resolvedDir}${name.imported}.py`;
+                  const subModInit = `${resolvedDir}${name.imported}/__init__.py`;
+                  if (context.files.has(subModPy) || context.files.has(subModInit)) {
+                    // Valid sub-module import
+                    continue;
+                  }
+                }
+
+                // For Python: check pythonExports (__all__) for the module
+                if (language === "python") {
+                  // Convert resolved file to module path for pythonExports lookup
+                  const basePath = context?.projectPath || "";
+                  const relPath = resolvedFile.startsWith(basePath)
+                    ? resolvedFile.slice(basePath.length + 1)
+                    : resolvedFile;
+                  // Convert file path to Python module path: app/utils/git_providers/__init__.py -> app.utils.git_providers
+                  const pyModPath = relPath
+                    .replace(/__init__\.py$/, "")
+                    .replace(/\.py$/, "")
+                    .replace(/\//g, ".")
+                    .replace(/\.$/, "");
+                  const moduleAllExports = pythonExports.get(pyModPath);
+                  if (moduleAllExports && moduleAllExports.has(name.imported)) {
+                    continue; // Symbol is in __all__
+                  }
+                  if (!moduleAllExports) {
+                    // No __all__ defined — all names are importable in Python
+                    continue;
+                  }
+                  // __all__ exists but symbol not in it — still importable, just not in __all__
+                  // Python allows importing any module-level name regardless of __all__
+                  continue;
+                }
+
                 // This is a TRUE hallucination - module exists, but export doesn't
                 const allExports = exports
                   .map((e) => e.name)
                   .concat(
                     fileInfo.symbols
-                      .filter((s) => s.exported)
+                      .filter((s) => language === "python" || s.exported)
                       .map((s) => s.name),
                   );
                 const suggestion = suggestSimilar(name.imported, allExports);
@@ -585,7 +668,21 @@ export function validateSymbols(
           projectVariables.get(name.local);
 
         // For Python, also check if the symbol is in __all__ of the module
+        // But skip this check if the imported name is a sub-module file
         if (language === "python" && projectSym) {
+          // First check if it's a sub-module file (sub-modules don't need __all__)
+          if (context) {
+            const moduleDir = imp.module.replace(/^\.+/, "").replace(/\./g, "/");
+            const basePath = context.projectPath;
+            const subModPy = `${basePath}/${moduleDir}/${name.imported}.py`;
+            const subModInit = `${basePath}/${moduleDir}/${name.imported}/__init__.py`;
+            if (context.files.has(subModPy) || context.files.has(subModInit)) {
+              // Valid sub-module import, skip __all__ check
+              validVariables.set(name.local, projectSym);
+              continue;
+            }
+          }
+
           const modulePath = imp.module
             .replace(/^\.+/, "")
             .replace(/[/\\]/g, ".");
@@ -624,6 +721,25 @@ export function validateSymbols(
           else if (projectSym.type === "variable")
             validVariables.set(name.local, projectSym);
         } else {
+          // For Python: check if the imported name is a sub-module file
+          // e.g., "from app.api import auth" where app/api/auth.py exists
+          if (language === "python" && context) {
+            const modulePath = imp.module.replace(/^\.+/, "").replace(/\./g, "/");
+            const basePath = context.projectPath;
+            const subModulePy = `${basePath}/${modulePath}/${name.imported}.py`;
+            const subModuleInit = `${basePath}/${modulePath}/${name.imported}/__init__.py`;
+            const isSubModule = context.files.has(subModulePy) || context.files.has(subModuleInit);
+            if (isSubModule) {
+              // It's a valid sub-module import — treat as a module variable
+              validVariables.set(name.local, {
+                name: name.local,
+                type: "variable" as const,
+                file: subModulePy,
+              });
+              continue;
+            }
+          }
+
           // Symbol not found in project - this is a hallucinated import!
           const allNames = Array.from(projectFunctions.keys())
             .concat(Array.from(projectClasses.keys()))
@@ -669,6 +785,20 @@ export function validateSymbols(
     }
   }
 
+  // Build set of ALL imported names (including ones that failed resolution)
+  // This prevents double-flagging: nonExistentImport + undefinedVariable for the same symbol
+  const allImportedNames = new Set<string>();
+  for (const imp of imports) {
+    for (const name of imp.names) {
+      allImportedNames.add(name.local);
+    }
+  }
+
+  // For Python: collect locally-defined names (function params, assignments, loop vars, etc.)
+  // These are local scope variables that won't appear in the project symbol table
+  // but are valid identifiers — prevents false undefinedVariable on method calls like db.execute()
+  const localDefinitions = language === "python" ? collectLocalDefinitionsAST(newCode, language) : new Set<string>();
+
   // Validate each used symbol
   for (const used of usedSymbols) {
     if (used.type === "call") {
@@ -677,6 +807,12 @@ export function validateSymbols(
       const method = validMethods.get(used.name);
 
       if (!func && !cls && !method) {
+        // Skip imported names — validated via import checks, not function existence
+        if (allImportedNames.has(used.name)) continue;
+
+        // Skip locally-defined functions (nested defs, local assignments that hold callables)
+        if (localDefinitions.has(used.name)) continue;
+
         // Built-in check (Tier 1.5) - handles browser globals, standard libraries
         if (
           (language === "python" && isPythonBuiltin(used.name)) ||
@@ -819,10 +955,12 @@ export function validateSymbols(
       
       const rootObject = extractRootObject(used.object || "");
 
-      // CRITICAL FIX: Skip ALL 'this' method calls - we can't validate class scope
-      // The 'this' keyword is always in scope within a class/function context
-      // TypeScript/ESLint handle class method validation, not CodeGuardian
-      if (used.object === "this" || used.object?.startsWith("this.")) {
+      // CRITICAL FIX: Skip ALL 'this'/'self'/'cls' method calls - we can't validate class scope
+      // The 'this' keyword (JS/TS) and 'self'/'cls' (Python) are always in scope within a class context
+      // TypeScript/ESLint/mypy handle class method validation, not CodeGuardian
+      if (used.object === "this" || used.object?.startsWith("this.") ||
+          used.object === "self" || used.object?.startsWith("self.") ||
+          used.object === "cls" || used.object?.startsWith("cls.")) {
         continue; // Trust class scope - this is not a hallucination risk
       }
 
@@ -831,6 +969,7 @@ export function validateSymbols(
         used.object?.includes(".current") ||
         (rootObject &&
           [
+            // JavaScript/TypeScript globals
             "window",
             "navigator",
             "document",
@@ -852,11 +991,103 @@ export function validateSymbols(
             "api",
             "client",
             "auth",
+            // Python standard library modules (commonly used as objects for method calls)
+            "os",
+            "sys",
+            "json",
+            "re",
+            "math",
+            "logging",
+            "datetime",
+            "time",
+            "pathlib",
+            "collections",
+            "itertools",
+            "functools",
+            "typing",
+            "abc",
+            "io",
+            "hashlib",
+            "hmac",
+            "secrets",
+            "base64",
+            "urllib",
+            "http",
+            "email",
+            "html",
+            "xml",
+            "csv",
+            "sqlite3",
+            "subprocess",
+            "threading",
+            "asyncio",
+            "uuid",
+            "copy",
+            "shutil",
+            "tempfile",
+            "glob",
+            "fnmatch",
+            "pickle",
+            "struct",
+            "traceback",
+            "inspect",
+            "importlib",
+            "contextlib",
+            "dataclasses",
+            "enum",
+            "string",
+            "textwrap",
+            "random",
+            "statistics",
+            "decimal",
+            "fractions",
+            "operator",
+            "warnings",
+            "unittest",
+            "pytest",
+            "pprint",
+            // Python common third-party module objects
+            "logger",
+            "app",
+            "request",
+            "response",
+            "session",
+            "cursor",
+            "conn",
+            "connection",
+            "engine",
+            "metadata",
+            "router",
+            "schema",
+            "serializer",
+            "queryset",
+            "manager",
+            "admin",
+            "signals",
+            "celery",
+            "redis",
+            "cache",
+            "config",
+            "settings",
+            "flask",
+            "django",
+            "fastapi",
+            "sqlalchemy",
+            "pydantic",
+            "httpx",
+            "requests",
+            "aiohttp",
+            "np",
+            "pd",
+            "plt",
+            "tf",
+            "torch",
+            "sk",
           ].includes(rootObject))
       ) {
         // Special Case: Still validate the method name itself if it's NOT a known builtin
         // This ensures we catch true hallucinations like toast.hallucinatedMethod()
-        if (isJSBuiltin(used.name)) {
+        if (isJSBuiltin(used.name) || isPythonBuiltin(used.name)) {
           continue;
         }
         // If the method is NOT whitelisted, we still proceed to check if it exists in the project
@@ -876,6 +1107,11 @@ export function validateSymbols(
         continue;
       }
 
+      // 2b. Skip Python common methods on any object to avoid false positives
+      if (language === "python" && isPythonBuiltin(used.name)) {
+        continue;
+      }
+
       // SMART TEST RELAXATION:
       // Skip method checks in test files (mocks/spies often have magic methods)
       if (isTestFile(filePath) && !strictMode) {
@@ -888,9 +1124,15 @@ export function validateSymbols(
         validVariables.has(rootObject!) ||
         validFunctions.has(rootObject!) ||
         isJSBuiltin(rootObject!) ||
+        (language === "python" && isPythonBuiltin(rootObject!)) ||
+        // Check if the object is an imported name (including failed imports — avoids double-flagging)
+        allImportedNames.has(rootObject!) ||
+        // Check if the object is a locally-defined variable (function params, assignments, loop vars, etc.)
+        localDefinitions.has(rootObject!) ||
         // Always trust common short variable names in non-strict mode
         (!strictMode &&
           [
+            // JS/TS common
             "z",
             "t",
             "db",
@@ -900,8 +1142,44 @@ export function validateSymbols(
             "res",
             "e",
             "i",
-            "req",
-            "res",
+            // Python common
+            "self",
+            "cls",
+            "logger",
+            "app",
+            "session",
+            "cursor",
+            "conn",
+            "connection",
+            "engine",
+            "router",
+            "config",
+            "settings",
+            "request",
+            "response",
+            "client",
+            "server",
+            "cache",
+            "registry",
+            "factory",
+            "builder",
+            "handler",
+            "manager",
+            "service",
+            "controller",
+            "serializer",
+            "validator",
+            "middleware",
+            "schema",
+            "model",
+            "form",
+            "view",
+            "template",
+            "context",
+            "fixture",
+            "mock",
+            "patch",
+            "monkeypatch",
           ].includes(rootObject!));
 
       // If the object doesn't exist at all, flag it as a hallucination
@@ -1001,6 +1279,33 @@ export function validateSymbols(
       const methodMatches = methodSym && (!methodSym.scope || methodSym.scope === used.object);
       const funcMatches = funcSym && (!funcSym.scope || funcSym.scope === used.object);
 
+      // Skip well-known inherited methods from common frameworks
+      // These methods exist on base classes (Pydantic BaseModel, SQLAlchemy Model, etc.)
+      // and won't appear in the project symbol table
+      const FRAMEWORK_METHODS = new Set([
+        // Pydantic BaseModel methods (v1 + v2)
+        "model_validate", "model_dump", "model_json_schema", "model_copy",
+        "model_validate_json", "model_dump_json", "model_fields_set",
+        "model_construct", "model_post_init", "model_rebuild",
+        "dict", "json", "parse_obj", "parse_raw", "parse_file",
+        "from_orm", "schema", "schema_json", "validate", "update_forward_refs",
+        "copy", "construct",
+        // SQLAlchemy Model/Query methods
+        "query", "filter", "filter_by", "all", "first", "one", "one_or_none",
+        "get", "count", "delete", "update", "order_by", "limit", "offset",
+        "join", "outerjoin", "group_by", "having", "distinct", "subquery",
+        "scalar", "scalars", "execute", "add", "flush", "commit", "rollback",
+        "refresh", "expire", "expunge", "merge", "close",
+        // Django ORM methods
+        "objects", "create", "get_or_create", "update_or_create",
+        "bulk_create", "bulk_update", "values", "values_list",
+        "annotate", "aggregate", "exists", "exclude", "select_related",
+        "prefetch_related", "defer", "only", "using", "raw",
+        "save", "full_clean", "clean", "clean_fields",
+      ]);
+
+      if (FRAMEWORK_METHODS.has(used.name)) continue;
+
       if (!methodMatches && !funcMatches) {
         const objClass =
           validClasses.get(used.object!) || validVariables.get(used.object!);
@@ -1094,10 +1399,12 @@ export function validateSymbols(
         });
       }
     } else if (used.type === "reference") {
-      // CRITICAL FIX: Skip property access on 'this' (e.g., this.ws, this.data)
+      // CRITICAL FIX: Skip property access on 'this'/'self'/'cls' (e.g., this.ws, self.data, cls._client)
       // These are class properties and should not be validated as standalone variables
-      if (used.object === "this" || used.object?.startsWith("this.")) {
-        continue; // Trust class scope - properties are validated by TypeScript
+      if (used.object === "this" || used.object?.startsWith("this.") ||
+          used.object === "self" || used.object?.startsWith("self.") ||
+          used.object === "cls" || used.object?.startsWith("cls.")) {
+        continue; // Trust class scope - properties are validated by TypeScript/mypy
       }
 
       const func = validFunctions.get(used.name);
@@ -1105,6 +1412,12 @@ export function validateSymbols(
       const variable = validVariables.get(used.name);
 
       if (!func && !cls && !variable) {
+        // Skip imported names — they are validated separately via import checks
+        if (allImportedNames.has(used.name)) continue;
+
+        // Skip locally-defined variables (function params, assignments, loop vars, etc.)
+        if (localDefinitions.has(used.name)) continue;
+
         // Built-in check (Tier 1.5)
         if (
           (language === "python" && isPythonBuiltin(used.name)) ||
@@ -1210,10 +1523,27 @@ export function validateSymbols(
     usedNames.add(typeRef.name);
   }
 
+  // For Python __init__.py files, all imports are re-exports — skip unused detection
+  const isInitPy = language === "python" && filePath.endsWith("__init__.py");
+  // Also build a set of names in __all__ for the current file's module
+  let currentModuleAllExports: Set<string> | null = null;
+  if (language === "python" && filePath && pythonExports.size > 0) {
+    const basePath = context?.projectPath || "";
+    const relPath = filePath.startsWith(basePath) ? filePath.slice(basePath.length + 1) : filePath;
+    const pyModPath = relPath.replace(/__init__\.py$/, "").replace(/\.py$/, "").replace(/\//g, ".").replace(/\.$/, "");
+    currentModuleAllExports = pythonExports.get(pyModPath) || null;
+  }
+
   for (const imp of imports) {
     for (const name of imp.names) {
       if (name.local === "*" || name.imported === "*") continue; // Skip wildcards
       if (name.imported.startsWith("React")) continue; // Skip React imports
+
+      // Skip unused import checks for Python __init__.py re-export files
+      if (isInitPy) continue;
+
+      // Skip if the import is listed in the module's __all__ (it's a re-export)
+      if (currentModuleAllExports && currentModuleAllExports.has(name.local)) continue;
 
       if (!usedNames.has(name.local)) {
         const { confidence, reasoning } = calculateConfidence({

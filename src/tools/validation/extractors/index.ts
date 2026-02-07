@@ -23,6 +23,7 @@ import {
   extractPythonUsages,
   extractPythonImports,
   extractPythonTypeReferences,
+  collectPythonLocalDefinitions,
 } from "./python.js";
 import {
   extractJSSymbols,
@@ -152,7 +153,11 @@ export function extractUsagesAST(
   }
 
   if (language === "python") {
-    extractPythonUsages(tree.rootNode, code, usages, importedSymbols);
+    // Pre-pass: collect all locally-defined names (assignments, params, loop vars, etc.)
+    // to prevent local variable references from being flagged as undefinedVariable
+    const localDefinitions = new Set<string>();
+    collectPythonLocalDefinitions(tree.rootNode, code, localDefinitions);
+    extractPythonUsages(tree.rootNode, code, usages, importedSymbols, localDefinitions);
   } else {
     // JavaScript and TypeScript use the same extractor
     // Cast to any to handle type mismatch between tree-sitter and web-tree-sitter
@@ -219,6 +224,26 @@ export function extractImportsAST(code: string, language: string): ASTImport[] {
  * console.log(typeRefs); // [{ name: 'MyType', context: 'returnType', ... }]
  * ```
  */
+/**
+ * Collect all locally-defined identifier names from Python code.
+ * This includes assignment targets, function parameters, for-loop variables,
+ * with-as targets, except-as targets, comprehension variables, and function/class names.
+ * Used by the validator to prevent false positives on local variable method calls.
+ *
+ * @param code - The source code string to analyze
+ * @param language - Programming language (only 'python' is supported)
+ * @returns Set of locally-defined identifier names
+ */
+export function collectLocalDefinitionsAST(code: string, language: string): Set<string> {
+  const definitions = new Set<string>();
+  if (language !== "python") return definitions;
+
+  const parser = getParser(language);
+  const tree = parser.parse(code);
+  collectPythonLocalDefinitions(tree.rootNode, code, definitions);
+  return definitions;
+}
+
 export function extractTypeReferencesAST(
   code: string,
   language: string,

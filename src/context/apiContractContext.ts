@@ -534,6 +534,15 @@ function extractFastAPIRouteDetails(
         j++;
         signature += " " + lines[j].trim();
       }
+      // Strip inline comments to avoid regex matching comment text as parameters
+      signature = signature.replace(/#.*$/gm, "");
+
+      // Extract path parameter names from the route path (e.g., {project_id} -> "project_id")
+      const pathParamNames = new Set<string>();
+      const pathParamMatches = path.matchAll(/\{(\w+)(?::\w+)?\}/g);
+      for (const pm of pathParamMatches) {
+        pathParamNames.add(pm[1]);
+      }
 
       // Extract request model from parameter type hint (non-primitive types are request bodies)
       const paramMatches = signature.matchAll(/(\w+)\s*:\s*(\w+)(?:\s*=\s*([^,\)]+))?/g);
@@ -547,7 +556,12 @@ function extractFastAPIRouteDetails(
           continue;
         }
 
-        // Check if it's a query parameter (primitive type with default value)
+        // Skip path parameters — they are NOT query parameters
+        if (pathParamNames.has(paramName)) {
+          continue;
+        }
+
+        // Check if it's a query parameter (primitive type)
         const primitiveTypes = ["str", "int", "float", "bool", "uuid", "datetime", "date"];
         if (primitiveTypes.includes(paramType.toLowerCase())) {
           if (!queryParams) queryParams = [];
@@ -566,6 +580,28 @@ function extractFastAPIRouteDetails(
       const returnMatch = signature.match(/-\s*>\s*(\w+)/);
       if (returnMatch && !["str", "int", "float", "bool", "dict", "list", "none"].includes(returnMatch[1].toLowerCase())) {
         responseModel = returnMatch[1];
+      }
+
+      // If no request model found from params (e.g., function reads request.json() manually),
+      // scan the function body for Pydantic model instantiation patterns:
+      //   ModelName(**body_json)  or  ModelName.model_validate(body)  or  ModelName.parse_obj(body)
+      if (!requestModel && (method.toUpperCase() === "POST" || method.toUpperCase() === "PUT" || method.toUpperCase() === "PATCH")) {
+        const bodySearchEnd = Math.min(decoratorLine + 40, lines.length);
+        for (let k = i + 1; k < bodySearchEnd; k++) {
+          const bodyLine = lines[k];
+          // Match: variable = ModelName(**anything)
+          const instantiationMatch = bodyLine.match(/=\s*([A-Z]\w+)\s*\(\s*\*\*/);
+          if (instantiationMatch) {
+            requestModel = instantiationMatch[1];
+            break;
+          }
+          // Match: variable = ModelName.model_validate(anything) or .parse_obj(anything)
+          const validateMatch = bodyLine.match(/=\s*([A-Z]\w+)\s*\.(?:model_validate|parse_obj)\s*\(/);
+          if (validateMatch) {
+            requestModel = validateMatch[1];
+            break;
+          }
+        }
       }
 
       break;
@@ -704,35 +740,36 @@ async function extractBackendModels(context: ProjectContext, backendPath: string
 }
 
 function extractModelsFromPythonContent(content: string, filePath: string): ApiModelDefinition[] {
-  const models: ApiModelDefinition[] = [];
   const lines = content.split("\n");
 
-  let currentModel: Partial<ApiModelDefinition> | null = null;
+  // Pass 1: Extract all classes with their directly declared fields and base class names
+  const rawModels: (Partial<ApiModelDefinition> & { parentName?: string })[] = [];
+  let currentModel: (Partial<ApiModelDefinition> & { parentName?: string }) | null = null;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // Class definition: class ClientCreate(BaseModel):
-    const classMatch = line.match(/class\s+(\w+)\s*\(\s*(\w+)\s*\)/);
+    // Class definition: class ClientCreate(BaseModel): or class ClientCreate(ClientBase):
+    const classMatch = line.match(/class\s+(\w+)\s*\(\s*([\w.]+)\s*\)/);
     if (classMatch) {
       if (currentModel) {
-        models.push(currentModel as ApiModelDefinition);
+        rawModels.push(currentModel);
         currentModel = null;
       }
 
       const className = classMatch[1];
       const baseClass = classMatch[2];
 
-      // Only process Pydantic models
-      if (["BaseModel", "BaseConfig", "RootModel"].includes(baseClass)) {
-        currentModel = {
-          name: className,
-          fields: [],
-          file: filePath,
-          line: i + 1,
-          baseClasses: [baseClass],
-        };
-      }
+      // Track all classes that could be Pydantic models
+      // We'll resolve inheritance in pass 2 to determine which are real models
+      currentModel = {
+        name: className,
+        fields: [],
+        file: filePath,
+        line: i + 1,
+        baseClasses: [baseClass],
+        parentName: baseClass,
+      };
       continue;
     }
 
@@ -743,7 +780,7 @@ function extractModelsFromPythonContent(content: string, filePath: string): ApiM
       const isComment = line.trim().startsWith("#");
 
       if (!isIndented && !isEmpty && !isComment) {
-        models.push(currentModel as ApiModelDefinition);
+        rawModels.push(currentModel);
         currentModel = null;
         continue;
       }
@@ -778,7 +815,55 @@ function extractModelsFromPythonContent(content: string, filePath: string): ApiM
   }
 
   if (currentModel) {
-    models.push(currentModel as ApiModelDefinition);
+    rawModels.push(currentModel);
+  }
+
+  // Pass 2: Resolve Pydantic inheritance
+  // Build a map of class names to their raw models for lookup
+  const PYDANTIC_BASES = ["BaseModel", "BaseConfig", "RootModel"];
+  const modelMap = new Map<string, typeof rawModels[0]>();
+  for (const m of rawModels) {
+    if (m.name) modelMap.set(m.name, m);
+  }
+
+  // Check if a class is a Pydantic model (directly or transitively)
+  function isPydanticModel(className: string, visited = new Set<string>()): boolean {
+    if (PYDANTIC_BASES.includes(className)) return true;
+    if (visited.has(className)) return false;
+    visited.add(className);
+    const model = modelMap.get(className);
+    if (!model || !model.parentName) return false;
+    return isPydanticModel(model.parentName, visited);
+  }
+
+  // Collect inherited fields by walking up the chain
+  function getInheritedFields(className: string, visited = new Set<string>()): ApiModelDefinition["fields"] {
+    if (PYDANTIC_BASES.includes(className) || visited.has(className)) return [];
+    visited.add(className);
+    const model = modelMap.get(className);
+    if (!model) return [];
+    // Get parent fields first, then own fields (own fields override parent)
+    const parentFields = model.parentName ? getInheritedFields(model.parentName, visited) : [];
+    const ownFieldNames = new Set((model.fields || []).map(f => f.name));
+    // Include parent fields that aren't overridden
+    const inherited = parentFields.filter(f => !ownFieldNames.has(f.name));
+    return [...inherited, ...(model.fields || [])];
+  }
+
+  // Build final models with inherited fields
+  const models: ApiModelDefinition[] = [];
+  for (const raw of rawModels) {
+    if (!raw.name || !raw.parentName) continue;
+    if (!isPydanticModel(raw.parentName)) continue;
+
+    const allFields = getInheritedFields(raw.name);
+    models.push({
+      name: raw.name,
+      fields: allFields,
+      file: raw.file || filePath,
+      line: raw.line || 0,
+      baseClasses: raw.baseClasses,
+    } as ApiModelDefinition);
   }
 
   return models;
@@ -819,7 +904,8 @@ function buildContractMappings(
         return normalizedRoute === normalizedService;
       });
       
-      endpointMappings.set(service.endpoint, {
+      const mapKey = `${service.method} ${service.endpoint}`;
+      endpointMappings.set(mapKey, {
         frontend: service,
         backend: matchResult.route,
         score: finalScore,
@@ -949,15 +1035,31 @@ function calculateEndpointMatchScore(service: ApiServiceDefinition, route: ApiRo
 }
 
 function findMatchingModel(type: ApiTypeDefinition, models: ApiModelDefinition[]): ApiModelDefinition | undefined {
-  // Try exact name match first
+  // Try exact name match first, but validate field overlap to avoid
+  // matching types that share a name but are semantically different
+  // (e.g., FE TimeEntryResponse = action response vs BE TimeEntryResponse = data model)
   const exactMatch = models.find((m) => m.name === type.name);
-  if (exactMatch) return exactMatch;
+  if (exactMatch) {
+    const fieldOverlap = calculateFieldSimilarity(type, exactMatch);
+    if (type.fields.length > 0 && exactMatch.fields.length > 0 && fieldOverlap < 0.10) {
+      // Very low overlap despite same name — likely different concepts, skip
+    } else {
+      return exactMatch;
+    }
+  }
 
-  // Try normalized name match
+  // Try normalized name match with same field overlap guard
   const normalizedTypeName = normalizeName(type.name);
   const normalizedMatch = models.find((m) => normalizeName(m.name) === normalizedTypeName);
 
-  if (normalizedMatch) return normalizedMatch;
+  if (normalizedMatch) {
+    const fieldOverlap = calculateFieldSimilarity(type, normalizedMatch);
+    if (type.fields.length > 0 && normalizedMatch.fields.length > 0 && fieldOverlap < 0.10) {
+      // Very low overlap despite similar name — skip
+    } else {
+      return normalizedMatch;
+    }
+  }
 
   // Try fuzzy match based on field similarity
   let bestMatch: ApiModelDefinition | undefined;

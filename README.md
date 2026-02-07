@@ -1,24 +1,80 @@
 # CodeGuardian MCP
 
-> **Catches AI hallucinations before they break your code**
+<p align="center">
+  <img src="https://img.shields.io/badge/TypeScript-007ACC?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/JavaScript-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black" alt="JavaScript">
+  <img src="https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/MCP%20Server-FF6B6B?style=for-the-badge&logo=server&logoColor=white" alt="MCP Server">
+</p>
 
-An MCP server that validates AI-generated code against your actual codebase. It catches the #1 problem with vibe coding - LLMs confidently generating code that calls functions, classes, and methods that don't exist in your project.
+<p align="center">
+  <img src="https://img.shields.io/badge/AI%20Hallucination%20Detection-00C853?style=for-the-badge&logo=artificial-intelligence&logoColor=white" alt="AI Hallucination Detection">
+  <img src="https://img.shields.io/badge/Dead%20Code%20Detection-FF9800?style=for-the-badge&logo=code&logoColor=white" alt="Dead Code Detection">
+  <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License">
+</p>
+
+<p align="center">
+  <b>Catches AI hallucinations before they break your code</b>
+</p>
+
+<p align="center">
+  <a href="#installation">Installation</a> &bull;
+  <a href="#features">Features</a> &bull;
+  <a href="#how-it-works">How It Works</a> &bull;
+  <a href="#tools">Tools</a> &bull;
+  <a href="#contributing">Contributing</a>
+</p>
+
+---
 
 ## The Problem
 
-AI coding assistants hallucinate. They generate code that:
-- Calls `getUserById()` when your codebase has `findUserById()`
-- Uses methods that aren't on your classes
-- Imports from modules that don't export what they claim
-- Creates dead code that nothing ever uses
+AI coding assistants hallucinate. They generate code that **compiles fine but breaks at runtime**:
 
-These errors often compile fine but break at runtime. CodeGuardian catches them before you run.
+```typescript
+// [X] AI generates this:
+const user = getUserById(id);  // Function doesn't exist!
+
+// [OK] Your codebase has:
+const user = findUserById(id);  // Correct function name
+```
+
+**Common AI Hallucinations:**
+- [CRITICAL] Calling `getUserById()` when your codebase has `findUserById()`
+- [CRITICAL] Using methods that aren't on your classes
+- [CRITICAL] Importing from modules that don't export what they claim
+- [CRITICAL] Creating dead code that nothing ever uses
+
+## The Solution
+
+CodeGuardian validates AI-generated code against your **actual codebase** before you run it.
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│  AI Generates   │────▶│  CodeGuardian    │────▶│  Issues Found   │
+│     Code        │     │   Validates      │     │  + Suggestions  │
+└─────────────────┘     └──────────────────┘     └─────────────────┘
+         │                       │                         │
+         ▼                       ▼                         ▼
+   Vibe Coding              AST Parsing              Fix Before
+   Confidently              Symbol Matching          Runtime
+```
 
 ## Installation
 
 ```bash
-npm install && npm run build
+# Clone the repository
+git clone https://github.com/yourusername/codeguardian-mcp.git
+cd codeguardian-mcp
+
+# Install dependencies
+npm install
+
+# Build the project
+npm run build
 ```
+
+### MCP Client Configuration
 
 Add to your MCP client (Claude Desktop, Kiro, Cursor, etc.):
 
@@ -33,21 +89,37 @@ Add to your MCP client (Claude Desktop, Kiro, Cursor, etc.):
 }
 ```
 
-## Agent Integration (The Vibe Guard Protocol)
+## Features
 
-We recommend a "Dual-Mode" strategy for agents integrating with CodeGuardian:
+### AI Hallucination Detection
+Catches non-existent functions, classes, and methods with **95% confidence**
 
-| Agent Type | Tool | When to Use | Goal |
-| :--- | :--- | :--- | :--- |
-| **Self-Correcting Agent** | `validate_code` | **Immediately** after generating any code. | Catch hallucinations (imports/functions) before showing the user. |
-| **Guardian Agent** | `validate_code` logic | On **File Save** / Watch. | Real-time "red squiggly" feedback and "Blast Radius" alerts. |
-| **Auditor Agent** | `start_validation` | On **Demand** / Review. | Full project health check, finding dead code, or reviewing legacy code. |
+### Confidence Scoring
+Every issue includes a confidence score (0-100%) and detailed reasoning
+
+| Score | Level | Action |
+|-------|-------|--------|
+| 0-49 | Critical | **REJECT** - Major hallucinations detected |
+| 50-69 | Low | **REVIEW** - Multiple issues need attention |
+| 70-89 | Medium | **CAUTION** - Minor issues, review suggested |
+| 90-100 | High | **ACCEPT** - Code is safe to use |
+
+### Dead Code Detection
+Finds exported functions and classes that nothing imports
+
+### Multi-Language Support
+- **TypeScript / JavaScript** [SUPPORTED]
+- **Python** [SUPPORTED]
+- **Go** (partial)
+
+### Real-Time Validation
+Validates code immediately after generation with sub-second response times
 
 ## Tools
 
 ### `validate_code`
 
-The main tool. Validates AI-generated code snippets against your project's actual symbols with confidence scoring and reasoning. Best for small code snippets or individual files.
+The main tool. Validates AI-generated code snippets against your project's actual symbols.
 
 ```typescript
 // Basic validation
@@ -73,7 +145,7 @@ validate_code({
 })
 ```
 
-**What it returns:**
+**Example Output:**
 ```json
 {
   "score": 50,
@@ -93,142 +165,39 @@ validate_code({
   "recommendation": {
     "verdict": "REJECT",
     "riskLevel": "critical",
-    "message": "❌ DO NOT USE - 1 hallucination(s): references to non-existent code",
+    "message": "DO NOT USE - 1 hallucination(s): references to non-existent code",
     "action": "Fix all critical issues before using this code"
   }
 }
 ```
 
-**New Features:**
-- **Confidence Scores** (0-100%): How certain we are about each issue
-- **Reasoning**: Explains WHY something is flagged
-- **Score Interpretation**: 90-100 (safe), 70-89 (review), 50-69 (fix), <50 (critical)
-- **Verdict Levels**: REJECT, REVIEW, CAUTION, ACCEPT
-
 ### `validate_code_batch`
 
-**NEW:** Validates entire codebases without timeouts. Processes files in batches to stay under MCP timeout limits while providing comprehensive validation.
-
-**Use this when:**
-- Validating large codebases (100+ files)
-- Getting timeout errors with `validate_code`
-- Need comprehensive validation of all project files
+**NEW:** Validates entire codebases without timeouts. Perfect for large projects (100+ files).
 
 ```typescript
 // Validate entire frontend directory
 validate_code_batch({
   projectPath: "/path/to/frontend",
   language: "typescript",
-  batchSize: 50  // Process 50 files at a time (default)
-})
-
-// Smaller batches for very large projects
-validate_code_batch({
-  projectPath: ".",
-  language: "typescript",
-  batchSize: 25,
-  includeTests: false  // Skip test files
+  batchSize: 50
 })
 ```
-
-**What it returns:**
-```json
-{
-  "score": 85,
-  "hallucinationDetected": true,
-  "deadCodeDetected": false,
-  "hallucinations": [...],  // All issues found across codebase
-  "deadCode": [...],
-  "summary": {
-    "totalIssues": 12,
-    "criticalIssues": 3,
-    "highIssues": 5,
-    "mediumIssues": 4,
-    "deadCodeIssues": 0
-  },
-  "stats": {
-    "filesScanned": 202,
-    "filesProcessed": 202,
-    "batchCount": 5,
-    "batchSize": 50,
-    "symbolsInProject": 1911,
-    "contextBuildTime": "20500ms",
-    "validationTime": "8200ms",
-    "totalTime": "28700ms"
-  }
-}
-```
-
-**How it works:**
-1. Builds project context once (indexes all symbols)
-2. Processes files in configurable batches
-3. Aggregates results across all batches
-4. Returns comprehensive report with all issues
 
 **Performance:**
-- 200-file codebase: ~30 seconds
-- 500-file codebase: ~60 seconds
-- 1000-file codebase: ~120 seconds
-
-### `build_context`
-
-Pre-builds project index for faster validation. Called automatically by `validate_code`, but useful for:
-- Forcing rebuild after major changes (`forceRebuild: true`)
-- Pre-warming cache before batch validations
-
-```typescript
-build_context({
-  projectPath: ".",
-  forceRebuild: true
-})
-```
+- 200 files: ~30 seconds
+- 500 files: ~60 seconds
+- 1000 files: ~120 seconds
 
 ### `get_dependency_graph`
 
-Shows what files depend on what. Useful for understanding impact of changes.
+Shows what files depend on what. Understand the impact of changes.
 
 ```typescript
 get_dependency_graph({
   target: "src/auth/login.ts",
   language: "typescript"
 })
-```
-
-Returns imports, importedBy, and external dependencies.
-
-## Prompts
-
-CodeGuardian provides multiple validation prompts based on prompt engineering best practices:
-
-### Available Prompts
-
-1. **`validate`** - Basic validation (zero-shot)
-   - Quick check for hallucinations
-   - Best for: Simple code snippets
-
-2. **`validate-detailed`** - Chain-of-thought reasoning
-   - Step-by-step validation with detailed reasoning
-   - Best for: Complex code requiring analysis
-
-3. **`validate-with-examples`** - Few-shot learning
-   - Validation with examples of common AI mistakes
-   - Best for: Learning patterns and improving over time
-
-4. **`validate-comprehensive`** - Multi-perspective analysis
-   - Validates from multiple angles (symbols, dependencies, logic)
-   - Best for: Critical code requiring thorough review
-
-5. **`validate-structured`** - Structured output
-   - Explicit format for automated processing
-   - Best for: CI/CD integration
-
-### Usage
-
-Prompts are used by AI assistants (Claude, ChatGPT, etc.) to guide validation:
-
-```
-Use the validate-detailed prompt to check this code:
-[your code here]
 ```
 
 ## What It Catches
@@ -244,34 +213,81 @@ Use the validate-detailed prompt to check this code:
 | Dead export | Exported function nothing imports | Medium | 85% |
 | Hardcoded credentials | `API_KEY = 'sk_live_...'` | Critical | 85% |
 
-## What It Skips (No False Positives)
-
-- External packages (npm/pip) - not your code
-- Built-ins (`console.log`, `print`, `Math.random`)
-- New code being created in the same snippet
-- Entry points (`index.ts`, `main.py`)
-- Test files
-
-## Supported Languages
-
-- TypeScript / JavaScript
-- Python
-- Go (partial)
-
 ## How It Works
 
-1. **AST Parsing** - Uses tree-sitter to parse your codebase and extract all symbols (functions, classes, methods, exports)
-2. **Context Building** - Builds a searchable index of your project's symbols with caching
-3. **Validation** - Compares AI-generated code against the index, flags anything that doesn't exist
-4. **Suggestions** - Uses fuzzy matching to suggest what the LLM probably meant
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    CodeGuardian Pipeline                     │
+├─────────────────────────────────────────────────────────────┤
+│  1. AST Parsing                                              │
+│     └─> Uses tree-sitter to parse your codebase              │
+│     └─> Extracts all symbols (functions, classes, methods)   │
+│                                                              │
+│  2. Context Building                                         │
+│     └─> Builds searchable index of project symbols           │
+│     └─> Caches for fast subsequent validations               │
+│                                                              │
+│  3. Validation                                               │
+│     └─> Compares AI-generated code against index             │
+│     └─> Flags anything that doesn't exist                    │
+│                                                              │
+│  4. Suggestions                                              │
+│     └─> Uses fuzzy matching to suggest corrections           │
+│     └─> Provides confidence scores and reasoning             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Agent Integration (Vibe Guard Protocol)
+
+We recommend a **"Dual-Mode"** strategy for agents:
+
+| Agent Type | Tool | When to Use | Goal |
+| :--- | :--- | :--- | :--- |
+| **Self-Correcting Agent** | `validate_code` | **Immediately** after generating code | Catch hallucinations before showing user |
+| **Guardian Agent** | `validate_code` logic | On **File Save** / Watch | Real-time "red squiggly" feedback |
+| **Auditor Agent** | `start_validation` | On **Demand** / Review | Full project health check |
+
+## Prompts
+
+CodeGuardian provides validation prompts based on prompt engineering best practices:
+
+1. **`validate`** - Quick zero-shot validation for simple snippets
+2. **`validate-detailed`** - Chain-of-thought reasoning for complex code
+3. **`validate-with-examples`** - Few-shot learning with common AI mistakes
+4. **`validate-comprehensive`** - Multi-perspective analysis for critical code
+5. **`validate-structured`** - Structured output for CI/CD integration
+
+## What It Skips (No False Positives)
+
+- [OK] External packages (npm/pip) - not your code
+- [OK] Built-ins (`console.log`, `print`, `Math.random`)
+- [OK] New code being created in the same snippet
+- [OK] Entry points (`index.ts`, `main.py`)
+- [OK] Test files
 
 ## Limitations
 
 - Doesn't catch logic errors (that's still on you)
 - Dynamic code (`eval`, reflection) can't be tracked
 - Method calls on untyped objects may be skipped to avoid false positives
-- Very large monorepos (>1000 files) should use `validate_code_batch` with appropriate batch sizes
+- Very large monorepos (>1000 files) should use `validate_code_batch`
+
+## Contributing
+
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
 ## License
 
-MIT
+MIT License - see [LICENSE](LICENSE) file for details.
+
+---
+
+<p align="center">
+  <b>Made by developers who are tired of AI hallucinations</b>
+</p>
+
+<p align="center">
+  <a href="https://github.com/yourusername/codeguardian-mcp">Star us on GitHub</a> &bull;
+  <a href="https://github.com/yourusername/codeguardian-mcp/issues">Report Issues</a> &bull;
+  <a href="https://github.com/yourusername/codeguardian-mcp/discussions">Discussions</a>
+</p>

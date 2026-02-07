@@ -126,6 +126,31 @@ function detectBackendPresence(context: ProjectContext): boolean {
   return false;
 }
 
+/**
+ * Check if a file is relevant to API contract validation.
+ * When these files change, the API contract context should be refreshed.
+ */
+function isApiContractRelevantFile(filePath: string): boolean {
+  const normalized = filePath.toLowerCase();
+  // Frontend service files (API calls)
+  if (normalized.includes('/services/') && (normalized.endsWith('.ts') || normalized.endsWith('.tsx') || normalized.endsWith('.js'))) {
+    return true;
+  }
+  // Backend route/API files
+  if ((normalized.includes('/api/') || normalized.includes('/routes/') || normalized.includes('/routers/')) && normalized.endsWith('.py')) {
+    return true;
+  }
+  // Backend schema/model files (Pydantic models)
+  if (normalized.includes('/schemas/') && normalized.endsWith('.py')) {
+    return true;
+  }
+  // Frontend type definition files
+  if ((normalized.includes('/types/') || normalized.includes('/interfaces/')) && (normalized.endsWith('.ts') || normalized.endsWith('.tsx'))) {
+    return true;
+  }
+  return false;
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -372,6 +397,29 @@ const QUICK_CHECK_SAMPLE_SIZE = 20; // Number of files to sample for quick stale
 const CACHE_DIR_NAME = ".codeguardian";
 const CACHE_FILE_NAME = "context_cache.json";
 
+// Track projects with an active guardian — skips TTL/staleness checks since
+// the file watcher keeps context fresh via refreshFileContext
+const guardianActiveProjects = new Set<string>();
+
+/**
+ * Mark a project as having an active guardian.
+ * While active, getProjectContext skips TTL/staleness checks and returns
+ * the cached context directly (file watcher keeps it fresh).
+ */
+export function markGuardianActive(projectPath: string): void {
+  guardianActiveProjects.add(projectPath);
+  logger.info(`Guardian active for ${projectPath} — context cache will be kept fresh by file watcher`);
+}
+
+/**
+ * Mark a project's guardian as stopped.
+ * Resumes normal TTL/staleness checks for cache validity.
+ */
+export function markGuardianInactive(projectPath: string): void {
+  guardianActiveProjects.delete(projectPath);
+  logger.info(`Guardian stopped for ${projectPath} — resuming normal cache TTL`);
+}
+
 // ============================================================================
 // Main API
 // ============================================================================
@@ -406,6 +454,23 @@ export async function getProjectContext(
     gitInfo,
   );
   const cached = contextCache.get(cacheKey);
+
+  // If guardian is actively watching this project, trust the cache —
+  // the file watcher keeps it fresh via refreshFileContext.
+  // Check ALL cache keys for this project (different tools may use different language params)
+  if (!forceRebuild && guardianActiveProjects.has(projectPath)) {
+    if (cached) {
+      logger.debug(`Using guardian-managed context for ${projectPath} (exact key match)`);
+      return cached.context;
+    }
+    // Try to find any cached context for this project path (different language key)
+    for (const [key, entry] of contextCache.entries()) {
+      if (key.startsWith(projectPath + ":")) {
+        logger.debug(`Using guardian-managed context for ${projectPath} (cross-language key match)`);
+        return entry.context;
+      }
+    }
+  }
 
   // Check if cache exists and is potentially valid
   if (!forceRebuild && cached) {
@@ -524,8 +589,18 @@ export async function refreshFileContext(
   const gitInfo = await getGitInfo(projectPath);
   const cacheKey = generateCacheKey(projectPath, language, includeTests, gitInfo);
   
-  // Try memory cache first
+  // Try memory cache first (exact key match)
   let cached = contextCache.get(cacheKey);
+  
+  // If exact key missed but guardian is active, try cross-language key match
+  if (!cached && guardianActiveProjects.has(projectPath)) {
+    for (const [key, entry] of contextCache.entries()) {
+      if (key.startsWith(projectPath + ":")) {
+        cached = entry;
+        break;
+      }
+    }
+  }
   
   // If not in memory, try disk
   if (!cached) {
@@ -543,6 +618,17 @@ export async function refreshFileContext(
 
   // Update the file in the context
   await updateFileInContext(cached.context, filePath, projectPath);
+
+  // If the changed file is relevant to API contracts (services, routes, schemas),
+  // rebuild the API contract context so all tools see fresh data
+  if (cached.context.apiContract && isApiContractRelevantFile(filePath)) {
+    try {
+      logger.debug(`API contract relevant file changed: ${filePath} — refreshing API contract context...`);
+      cached.context.apiContract = await extractApiContractContext(cached.context);
+    } catch (err) {
+      logger.warn(`Failed to refresh API contract context: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   // Update file hashes in cached record
   try {
@@ -630,6 +716,16 @@ async function reconcileContextWithDisk(
       includeCoOccurrence: true,
       minCoOccurrenceCount: 2,
     });
+
+    // 5b. Refresh API contract context if any changed files are API-relevant
+    if (cached.context.apiContract && toUpdate.some(f => isApiContractRelevantFile(f))) {
+      try {
+        logger.info(`Refreshing API contract context after offline reconciliation...`);
+        cached.context.apiContract = await extractApiContractContext(cached.context);
+      } catch (err) {
+        logger.warn(`Failed to refresh API contract context during reconciliation: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
 
     // 6. Update metadata and save
     cached.timestamp = Date.now();
@@ -799,15 +895,7 @@ async function buildProjectContext(
   // Find source files (excluding tests if requested)
   const files = await findProjectFiles(projectPath, language, includeTests);
   
-  // Log ignored files for transparency
-  const totalFiles = await glob(`${projectPath}/**/*`, {
-    ignore: ["**/node_modules/**", "**/venv/**", "**/.git/**", "**/dist/**"],
-    nodir: true,
-  });
-  const ignoredCount = totalFiles.length - files.length;
-  if (ignoredCount > 0) {
-    logger.info(`PROTOTYPE: Ignoring ${ignoredCount} unsupported files (Go, Java, etc.) - focusing on TypeScript/JavaScript/Python`);
-  }
+  logger.info(`Found ${files.length} source files (${language}) to analyze`);
   
   const filesToProcess = files.slice(0, maxFiles);
 
