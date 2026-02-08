@@ -44,6 +44,27 @@ import { glob } from "glob";
 import * as fs from "fs/promises";
 import * as path from "path";
 
+/**
+ * Detect language from file extension for per-file validation.
+ * Ensures each file is validated with the correct parser regardless
+ * of the project-level language setting.
+ */
+function detectFileLanguage(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  const map: Record<string, string> = {
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".mts": "typescript",
+    ".cts": "typescript",
+    ".py": "python",
+  };
+  return map[ext] || "unknown";
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -161,11 +182,16 @@ async function handleValidationJob(
     message: "Loading manifest dependencies...",
   });
 
-  const manifest = await loadManifestDependencies(projectPath, language);
+  // Load manifests — for "all" (full-stack), load both TS and Python manifests
+  const manifest = await loadManifestDependencies(projectPath, language === "all" ? "typescript" : language);
 
   let pythonExports = new Map<string, Set<string>>();
-  if (language === "python") {
+  if (language === "python" || language === "all") {
     pythonExports = await loadPythonModuleExports(projectPath);
+    // Also load Python manifest if full-stack
+    if (language === "all") {
+      await loadManifestDependencies(projectPath, "python");
+    }
   }
 
   // Phase 2.5: Build symbol table with relevance filtering
@@ -451,14 +477,21 @@ export async function processBatch(
     const filePath = files[i];
 
     try {
+      // Detect the correct language for THIS file (handles full-stack projects)
+      const fileLang = detectFileLanguage(filePath);
+      if (fileLang === "unknown") {
+        logger.debug(`Skipping unknown language file: ${filePath}`);
+        continue;
+      }
+
       const content = await fs.readFile(filePath, "utf-8");
 
-      const imports = extractImportsAST(content, language);
-      const manifestIssues = await validateManifest(imports, manifest, content, language, filePath);
+      const imports = extractImportsAST(content, fileLang);
+      const manifestIssues = await validateManifest(imports, manifest, content, fileLang, filePath);
       batchIssues.push(...manifestIssues);
 
-      const usages = extractUsagesAST(content, language, imports);
-      const typeReferences = extractTypeReferencesAST(content, language);
+      const usages = extractUsagesAST(content, fileLang, imports);
+      const typeReferences = extractTypeReferencesAST(content, fileLang);
       
       const missingPackages = new Set<string>();
       for (const issue of manifestIssues) {
@@ -472,7 +505,7 @@ export async function processBatch(
         usages,
         symbolTable,
         content,
-        language,
+        fileLang,
         strictMode,
         imports,
         pythonExports,
@@ -505,12 +538,15 @@ async function getSourceFiles(
     typescript: [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx"], // Include JS in TS projects
     python: [".py"],
     go: [".go"],
+    all: [".js", ".jsx", ".ts", ".tsx", ".py"], // Full-stack: both TS/JS and Python
   };
 
   const exts = extensions[language] || extensions.typescript;
   
   // Intelligence: Auto-detect source roots (src, app, pages, etc.)
-  const commonDirs = language === "python" ? ["app", "src", "server"] : ["src", "app", "pages", "lib", "components"];
+  const commonDirs = language === "python" ? ["app", "src", "server"] 
+    : language === "all" ? ["app", "src", "server", "pages", "lib", "components", "frontend", "backend", "client"]
+    : ["src", "app", "pages", "lib", "components"];
   const foundDirs: string[] = [];
   
   for (const dir of commonDirs) {

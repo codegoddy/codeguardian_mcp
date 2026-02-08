@@ -79,6 +79,9 @@ export class AutoValidator {
   private pythonExports: Map<string, Set<string>> = new Map();
   private agentName: string;
   private projectStructure?: { frontend?: string; backend?: string };
+  private isFullStack: boolean = false;
+  private tsManifest: ManifestDependencies | null = null;
+  private pyManifest: ManifestDependencies | null = null;
 
   // Thresholds for smart mode
   private static readonly NEW_PROJECT_THRESHOLD = 5; // Less than 5 files = new project
@@ -96,6 +99,25 @@ export class AutoValidator {
   private static readonly SHARED_PATTERNS = [
     '/shared/', '/common/', '/types/', '/interfaces/', '/utils/'
   ];
+
+  /**
+   * Detect language from file extension for per-file validation
+   */
+  private static detectFileLanguage(filePath: string): string {
+    const ext = path.extname(filePath).toLowerCase();
+    const map: Record<string, string> = {
+      ".js": "javascript",
+      ".jsx": "javascript",
+      ".mjs": "javascript",
+      ".cjs": "javascript",
+      ".ts": "typescript",
+      ".tsx": "typescript",
+      ".mts": "typescript",
+      ".cts": "typescript",
+      ".py": "python",
+    };
+    return map[ext] || "unknown";
+  }
 
   constructor(
     projectPath: string,
@@ -130,11 +152,16 @@ export class AutoValidator {
     });
     */
 
-    // Pre-build context for existing codebase (use cache by default)
+    // Pre-build context: detect full-stack and use "all" to include every language
     logger.info("Loading project context...");
+    this.isFullStack = await this.detectFullStackProject();
+    const contextLanguage = this.isFullStack ? "all" : this.language;
+    if (this.isFullStack) {
+      logger.info("Full-stack project detected — building unified multi-language context");
+    }
     const orchestration = await orchestrateContext({
       projectPath: this.projectPath,
-      language: this.language,
+      language: contextLanguage,
     });
     const context = orchestration.projectContext;
     logger.info("Context built.");
@@ -147,13 +174,22 @@ export class AutoValidator {
     this.projectFileCount = context.files?.size || 0;
     const detectedMode = this.detectProjectMode();
     logger.info(`VibeGuard Initialized: Found ${this.projectFileCount} files in ${this.projectPath}`);
-    logger.info(`Operating Mode: ${detectedMode} (Language: ${this.language})`);
+    logger.info(`Operating Mode: ${detectedMode} (Language: ${this.isFullStack ? "all (full-stack)" : this.language})`);
 
-    // Load manifest and Python exports
+    // Load manifests for all detected languages
     logger.info("Loading dependency manifests...");
-    this.manifest = await loadManifestDependencies(this.projectPath, this.language);
-    if (this.language === "python") {
+    if (this.isFullStack) {
+      // Full-stack: load both TS/JS and Python manifests
+      this.tsManifest = await loadManifestDependencies(this.projectPath, "typescript");
+      this.pyManifest = await loadManifestDependencies(this.projectPath, "python");
+      this.pythonExports = await loadPythonModuleExports(this.projectPath);
+      // Keep this.manifest as the "primary" for backward compat
+      this.manifest = this.language === "python" ? this.pyManifest : this.tsManifest;
+    } else {
+      this.manifest = await loadManifestDependencies(this.projectPath, this.language);
+      if (this.language === "python") {
         this.pythonExports = await loadPythonModuleExports(this.projectPath);
+      }
     }
 
     // Run initial health check on existing codebase (skip for new projects)
@@ -186,6 +222,66 @@ export class AutoValidator {
       return "learning";
     }
     return "strict";
+  }
+
+  /**
+   * Detect if this is a full-stack project with both frontend (TS/JS) and backend (Python) code.
+   * Checks for common directory structures and file extensions.
+   */
+  private async detectFullStackProject(): Promise<boolean> {
+    const fs = await import("fs/promises");
+    let hasPython = false;
+    let hasTypeScript = false;
+
+    // Quick heuristic: check for common full-stack markers
+    const markers = [
+      { path: "requirements.txt", lang: "python" },
+      { path: "pyproject.toml", lang: "python" },
+      { path: "Pipfile", lang: "python" },
+      { path: "package.json", lang: "typescript" },
+      { path: "tsconfig.json", lang: "typescript" },
+    ];
+
+    for (const marker of markers) {
+      try {
+        await fs.access(path.join(this.projectPath, marker.path));
+        if (marker.lang === "python") hasPython = true;
+        if (marker.lang === "typescript") hasTypeScript = true;
+      } catch {
+        // Not found
+      }
+    }
+
+    // Also check for backend/frontend directory patterns
+    const dirChecks = [
+      { path: "backend", lang: "python" },
+      { path: "server", lang: "python" },
+      { path: "frontend", lang: "typescript" },
+      { path: "client", lang: "typescript" },
+    ];
+
+    for (const check of dirChecks) {
+      try {
+        const stat = await fs.stat(path.join(this.projectPath, check.path));
+        if (stat.isDirectory()) {
+          if (check.lang === "python") hasPython = true;
+          if (check.lang === "typescript") hasTypeScript = true;
+        }
+      } catch {
+        // Not found
+      }
+    }
+
+    return hasPython && hasTypeScript;
+  }
+
+  /**
+   * Get the correct manifest for a given file language
+   */
+  private getManifestForLanguage(fileLang: string): ManifestDependencies | null {
+    if (!this.isFullStack) return this.manifest;
+    if (fileLang === "python") return this.pyManifest;
+    return this.tsManifest; // typescript, javascript
   }
 
   /**
@@ -341,7 +437,9 @@ export class AutoValidator {
       const deadCodeIssues = await detectDeadCode(context);
 
       // Verify findings to eliminate false positives
+      // Use "all" for full-stack projects so verification understands both languages
       let confirmedDeadCode = deadCodeIssues;
+      const verifyLang = this.isFullStack ? "all" : this.language;
       if (deadCodeIssues.length > 0) {
         logger.debug(`Verifying ${deadCodeIssues.length} dead code findings...`);
         const verificationResult = await verifyFindingsAutomatically(
@@ -349,7 +447,7 @@ export class AutoValidator {
           deadCodeIssues,
           context,
           this.projectPath,
-          this.language,
+          verifyLang,
         );
         confirmedDeadCode = getConfirmedFindings(verificationResult).deadCode;
         logger.debug(`Verification complete: ${confirmedDeadCode.length} confirmed (filtered ${verificationResult.stats.falsePositiveCount} false positives)`);
@@ -434,14 +532,18 @@ export class AutoValidator {
   }
 
   private handleFileChange(event: FileChangeEvent): void {
+    // Detect language for this specific file (full-stack aware)
+    const fileLang = AutoValidator.detectFileLanguage(event.path);
+    const refreshLang = this.isFullStack ? "all" : this.language;
+
     // Track new files and refresh context
     if (event.type === "add") {
       this.newFilesTracked.add(event.path);
       this.projectFileCount++;
       
       // Refresh context when new files are added
-      logger.debug(`New file detected: ${event.path} - refreshing context...`);
-      refreshFileContext(this.projectPath, event.path, { language: this.language }).catch((err) => {
+      logger.debug(`New file detected: ${event.path} (${fileLang}) - refreshing context...`);
+      refreshFileContext(this.projectPath, event.path, { language: refreshLang }).catch((err) => {
         logger.warn(`Failed to refresh context for new file ${event.path}:`, err);
       });
       
@@ -452,8 +554,8 @@ export class AutoValidator {
       }
     } else if (event.type === "change") {
       // Refresh context when files are modified so symbols/imports stay current
-      logger.debug(`File modified: ${event.path} - refreshing context...`);
-      refreshFileContext(this.projectPath, event.path, { language: this.language }).catch((err) => {
+      logger.debug(`File modified: ${event.path} (${fileLang}) - refreshing context...`);
+      refreshFileContext(this.projectPath, event.path, { language: refreshLang }).catch((err) => {
         logger.warn(`Failed to refresh context for modified file ${event.path}:`, err);
       });
     } else if (event.type === "unlink") {
@@ -461,8 +563,8 @@ export class AutoValidator {
       this.projectFileCount = Math.max(0, this.projectFileCount - 1);
       
       // Incrementally remove deleted file from context (not a full invalidation)
-      logger.debug(`File deleted: ${event.path} - removing from context...`);
-      refreshFileContext(this.projectPath, event.path, { language: this.language }).catch((err) => {
+      logger.debug(`File deleted: ${event.path} (${fileLang}) - removing from context...`);
+      refreshFileContext(this.projectPath, event.path, { language: refreshLang }).catch((err) => {
         logger.warn(`Failed to remove deleted file ${event.path} from context:`, err);
       });
     }
@@ -487,34 +589,43 @@ export class AutoValidator {
       const mode = this.detectProjectMode();
       const isLenient = mode === "learning" || isNewFile;
 
+      // Detect the correct language for THIS file (not the project-level language)
+      const fileLang = AutoValidator.detectFileLanguage(filePath);
+      if (fileLang === "unknown") {
+        logger.debug(`Skipping unknown language file: ${filePath}`);
+        return;
+      }
+
       const content = await fs.readFile(filePath, "utf-8");
       const relativePath = path.relative(this.projectPath, filePath);
 
-      logger.info(`Auto-validating (${isLenient ? "Lenient" : "Strict"}): ${relativePath}`);
+      logger.info(`Auto-validating (${isLenient ? "Lenient" : "Strict"}) [${fileLang}]: ${relativePath}`);
 
-      // Use orchestrateContext (Augment Secrets)
+      // Use orchestrateContext with "all" for full-stack, or the file's language
+      const contextLanguage = this.isFullStack ? "all" : this.language;
       const orchestration = await orchestrateContext({
         projectPath: this.projectPath,
-        language: this.language,
+        language: contextLanguage,
         currentFile: filePath,
       });
       const context = orchestration.projectContext;
 
-      // Extract symbols and imports from the changed file
-      const imports = extractImportsAST(content, this.language);
-      const usedSymbols = extractUsagesAST(content, this.language, imports);
+      // Extract symbols and imports using the FILE's language (not the project language)
+      const imports = extractImportsAST(content, fileLang);
+      const usedSymbols = extractUsagesAST(content, fileLang, imports);
       const symbolTable = buildSymbolTable(context, orchestration.relevantSymbols);
       
       // Extract type references for unused import detection
       // This is essential for TypeScript where imports might only be used as types
-      const typeReferences = this.language === "typescript" ? 
-        (await import("../tools/validation/extractors/index.js")).extractTypeReferencesAST(content, this.language) : 
+      const typeReferences = (fileLang === "typescript" || fileLang === "javascript") ? 
+        (await import("../tools/validation/extractors/index.js")).extractTypeReferencesAST(content, fileLang) : 
         [];
 
-      // Tier 0: Check manifest dependencies (if manifest loaded)
+      // Tier 0: Check manifest dependencies (use the correct manifest for this file's language)
       let manifestIssues: any[] = [];
-      if (this.manifest) {
-          manifestIssues = await validateManifest(imports, this.manifest, content, this.language, filePath);
+      const fileManifest = this.getManifestForLanguage(fileLang);
+      if (fileManifest) {
+          manifestIssues = await validateManifest(imports, fileManifest, content, fileLang, filePath);
       }
 
       // Tier 1: Validate symbols (hallucination detection)
@@ -522,7 +633,7 @@ export class AutoValidator {
         usedSymbols,
         symbolTable,
         content,
-        this.language,
+        fileLang,
         false, // strictMode
         imports,
         this.pythonExports,
@@ -538,7 +649,7 @@ export class AutoValidator {
       // Tier 1.5: Change Impact Analysis (Blast Radius) - Proactive Alerting
       let impactIssues: any[] = [];
       if (context.symbolGraph) {
-        const symbolsInFile = extractSymbolsAST(content, filePath, this.language);
+        const symbolsInFile = extractSymbolsAST(content, filePath, fileLang);
         for (const sym of symbolsInFile) {
           // Skip non-exported symbols and very short names to avoid noise
           if (!sym.isExported || sym.name.length <= 2) {
@@ -618,7 +729,7 @@ export class AutoValidator {
           allIssues.filter(i => i.type === 'deadCode' || i.type === 'unusedExport' || i.type === 'unusedFunction' || i.type === 'orphanedFile') as any,
           context,
           this.projectPath,
-          this.language,
+          fileLang,
         );
         
         // Replace with confirmed findings only
@@ -652,7 +763,7 @@ export class AutoValidator {
       }
 
       if (allIssues.length > 0) {
-        const alert = await this.formatAlert(filePath, allIssues);
+        const alert = await this.formatAlert(filePath, allIssues, fileLang);
         logger.warn(`Found ${allIssues.length} issues in ${relativePath}`);
 
         if (this.onAlert) {
@@ -676,11 +787,11 @@ export class AutoValidator {
     }
   }
 
-  private async formatAlert(filePath: string, issues: any[]): Promise<ValidationAlert> {
+  private async formatAlert(filePath: string, issues: any[], fileLang: string): Promise<ValidationAlert> {
     const relativePath = path.relative(this.projectPath, filePath);
 
     // Enrich issues with anti-pattern context (async)
-    const enrichedIssues = await enrichIssuesWithAntiPatterns(issues, this.language);
+    const enrichedIssues = await enrichIssuesWithAntiPatterns(issues, fileLang);
 
     // Format issues for LLM consumption
     const issueList = enrichedIssues.map((issue) => ({
@@ -693,7 +804,7 @@ export class AutoValidator {
     }));
 
     // Create a natural language message for the LLM (async for anti-pattern context)
-    const llmMessage = await this.createLLMMessage(relativePath, enrichedIssues);
+    const llmMessage = await this.createLLMMessage(relativePath, enrichedIssues, fileLang);
 
     return {
       file: relativePath,
@@ -703,7 +814,7 @@ export class AutoValidator {
     };
   }
 
-  private async createLLMMessage(file: string, issues: any[]): Promise<string> {
+  private async createLLMMessage(file: string, issues: any[], fileLang: string): Promise<string> {
     const critical = issues.filter((i) => i.severity === "critical" || i.severity === "high");
     const count = issues.length;
     
@@ -728,7 +839,7 @@ export class AutoValidator {
     }).join("\n");
 
     // Generate anti-pattern context for LLM
-    const antiPatternContext = await generateAntiPatternContext(issues, this.language);
+    const antiPatternContext = await generateAntiPatternContext(issues, fileLang);
     
     let message = `${constrainedMsg}\n\nDETECTED ISSUES:\n${issuesList}`;
     

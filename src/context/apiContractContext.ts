@@ -76,7 +76,7 @@ export async function extractApiContractContext(
       
       [backendRoutes, backendModels] = await Promise.all([
         extractBackendRoutes(context, backendPath, projectStructure.backend.framework, routerPrefixes),
-        extractBackendModels(context, backendPath),
+        extractBackendModels(context, backendPath, projectStructure.backend.framework),
       ]);
     }
 
@@ -361,12 +361,17 @@ async function extractFrontendServices(
   const services: ApiServiceDefinition[] = [];
 
   // Find service files using the context's file index
+  // Include /features/, /hooks/, /lib/ since many React projects make API calls there
   const serviceFiles = Array.from(context.files.values()).filter(
     (f) =>
       f.path.startsWith(frontendPath) &&
+      (f.path.endsWith(".ts") || f.path.endsWith(".tsx")) &&
       (f.path.includes("/services/") ||
         f.path.includes("/api/") ||
-        f.path.includes("/clients/")),
+        f.path.includes("/clients/") ||
+        f.path.includes("/features/") ||
+        f.path.includes("/hooks/") ||
+        f.path.includes("/lib/")),
   );
 
   console.log(`[API Contract] Found ${serviceFiles.length} service files in ${frontendPath}`);
@@ -397,12 +402,16 @@ async function extractFrontendTypes(
   const typeFiles = Array.from(context.files.values()).filter(
     (f) =>
       f.path.startsWith(frontendPath) &&
+      (f.path.endsWith(".ts") || f.path.endsWith(".tsx")) &&
       (f.path.includes("/types/") ||
         f.path.includes("/interfaces/") ||
         f.path.includes("/models/") ||
         f.path.includes("/services/") ||
         f.path.includes("/api/") ||
-        f.path.includes("/clients/")),
+        f.path.includes("/clients/") ||
+        f.path.includes("/features/") ||
+        f.path.includes("/hooks/") ||
+        f.path.includes("/lib/")),
   );
 
   console.log(`[API Contract] Found ${typeFiles.length} type files in ${frontendPath}`);
@@ -438,15 +447,37 @@ async function extractBackendRoutes(
   const routeFiles = Array.from(context.files.values()).filter((f) => f.path.startsWith(backendPath),
   );
 
-  for (const fileInfo of routeFiles) {
-    if (!fileInfo.path.endsWith(".py")) continue;
+  if (framework === "express" || framework === "nestjs") {
+    // Express/Node.js backend — process TS/JS files
+    for (const fileInfo of routeFiles) {
+      if (!fileInfo.path.endsWith(".ts") && !fileInfo.path.endsWith(".js")) continue;
+      // Only process route files (in routes/ or controllers/ directories, or files with .routes. or .controller. in name)
+      const isRouteFile = fileInfo.path.includes("/routes/") ||
+        fileInfo.path.includes("/controllers/") ||
+        fileInfo.path.includes(".routes.") ||
+        fileInfo.path.includes(".controller.");
+      if (!isRouteFile) continue;
 
-    try {
-      const content = await fs.readFile(fileInfo.path, "utf-8");
-      const fileRoutes = extractRoutesFromPythonContent(content, fileInfo.path, framework, routerPrefixes);
-      routes.push(...fileRoutes);
-    } catch (err) {
-      logger.debug(`Failed to extract routes from ${fileInfo.path}`);
+      try {
+        const content = await fs.readFile(fileInfo.path, "utf-8");
+        const fileRoutes = extractRoutesFromExpressContent(content, fileInfo.path, routerPrefixes);
+        routes.push(...fileRoutes);
+      } catch (err) {
+        logger.debug(`Failed to extract routes from ${fileInfo.path}`);
+      }
+    }
+  } else {
+    // Python backend — process .py files
+    for (const fileInfo of routeFiles) {
+      if (!fileInfo.path.endsWith(".py")) continue;
+
+      try {
+        const content = await fs.readFile(fileInfo.path, "utf-8");
+        const fileRoutes = extractRoutesFromPythonContent(content, fileInfo.path, framework, routerPrefixes);
+        routes.push(...fileRoutes);
+      } catch (err) {
+        logger.debug(`Failed to extract routes from ${fileInfo.path}`);
+      }
     }
   }
 
@@ -663,15 +694,114 @@ function extractFlaskRouteDetails(
   };
 }
 
+// ============================================================================
+// Express/TypeScript Backend Route Extraction
+// ============================================================================
+
+function extractRoutesFromExpressContent(
+  content: string,
+  filePath: string,
+  routerPrefixes: Map<string, string>,
+): ApiRouteDefinition[] {
+  const routes: ApiRouteDefinition[] = [];
+  const lines = content.split("\n");
+
+  // Determine the mount prefix for this file
+  // routerPrefixes maps file basenames (e.g. "scan.routes") -> mount prefix (e.g. "/api/scans")
+  const fileBasename = path.basename(filePath).replace(/\.(ts|js|mjs)$/, "");
+  const mountPrefix = routerPrefixes.get(fileBasename) || "";
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineNum = i + 1;
+
+    // Match Express route patterns:
+    //   router.get("/", handler)
+    //   router.post("/upload", requireAuth, uploadLimiter, upload.array("files", 100), async (req, res) => {
+    //   router.delete("/:id/sops/:sopId", async (req, res) => {
+    const routeMatch = line.match(
+      /router\.(get|post|put|patch|delete)\s*\(\s*["']([^"']*)["']/i,
+    );
+    if (!routeMatch) continue;
+
+    const method = routeMatch[1].toUpperCase();
+    const routePath = mountPrefix + routeMatch[2];
+
+    // Try to find handler name
+    let handler = "";
+
+    // Check if the handler is a named function reference on the same line
+    // Pattern: router.get("/", requireAuth, getEmployees);
+    // The handler is the last non-middleware argument
+    const argsAfterPath = line.substring(line.indexOf(routeMatch[2]) + routeMatch[2].length + 1);
+    const namedHandlerMatch = argsAfterPath.match(/,\s*(\w+)\s*\)\s*;?\s*$/);
+    if (namedHandlerMatch) {
+      handler = namedHandlerMatch[1];
+    }
+
+    // If no named handler found, check for inline async (req, res) => { pattern
+    if (!handler) {
+      const inlineMatch = line.match(/async\s*\(\s*\w+\s*,\s*\w+\s*\)/);
+      if (inlineMatch) {
+        // Use route path as handler name
+        handler = `${method.toLowerCase()}_${routePath.replace(/[^a-zA-Z0-9]/g, "_")}`;
+      }
+    }
+
+    // If handler still not found, search the next few lines
+    if (!handler) {
+      for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
+        const nextLine = lines[j];
+        const asyncMatch = nextLine.match(/async\s*\(\s*\w+\s*,\s*\w+\s*\)/);
+        if (asyncMatch) {
+          handler = `${method.toLowerCase()}_${routePath.replace(/[^a-zA-Z0-9]/g, "_")}`;
+          break;
+        }
+        const namedMatch = nextLine.match(/^\s*(\w+)\s*\)\s*;?\s*$/);
+        if (namedMatch) {
+          handler = namedMatch[1];
+          break;
+        }
+      }
+    }
+
+    if (!handler) {
+      handler = `${method.toLowerCase()}_${routePath.replace(/[^a-zA-Z0-9]/g, "_")}`;
+    }
+
+    routes.push({
+      method: method as ApiRouteDefinition["method"],
+      path: routePath,
+      handler,
+      file: filePath,
+      line: lineNum,
+    });
+  }
+
+  return routes;
+}
+
 /**
- * Extract router prefixes from main.py or app.py
+ * Extract router prefixes from main.py/app.py (Python) or app.ts/server.ts (Express)
  * This maps router module names to their URL prefixes
  */
 async function extractRouterPrefixes(backendPath: string): Promise<Map<string, string>> {
   const prefixes = new Map<string, string>();
 
-  // Try to find main.py or app.py
+  // Try to find the main entry file
   const mainFiles = [
+    // Express/Node.js
+    path.join(backendPath, "src/app.ts"),
+    path.join(backendPath, "src/server.ts"),
+    path.join(backendPath, "src/index.ts"),
+    path.join(backendPath, "app.ts"),
+    path.join(backendPath, "server.ts"),
+    path.join(backendPath, "index.ts"),
+    path.join(backendPath, "src/app.js"),
+    path.join(backendPath, "src/server.js"),
+    path.join(backendPath, "app.js"),
+    path.join(backendPath, "server.js"),
+    // Python
     path.join(backendPath, "app/main.py"),
     path.join(backendPath, "main.py"),
     path.join(backendPath, "app.py"),
@@ -689,7 +819,7 @@ async function extractRouterPrefixes(backendPath: string): Promise<Map<string, s
   }
 
   if (!mainFile) {
-    logger.debug("No main.py/app.py found for router prefix extraction");
+    logger.debug("No main entry file found for router prefix extraction");
     return prefixes;
   }
 
@@ -697,18 +827,66 @@ async function extractRouterPrefixes(backendPath: string): Promise<Map<string, s
     const content = await fs.readFile(mainFile, "utf-8");
     const lines = content.split("\n");
 
-    for (const line of lines) {
-      // Match: app.include_router(clients.router, prefix="/api", tags=["clients"])
-      // Match: app.include_router(contracts.router, prefix="/api/contracts", tags=["contracts"])
-      const match = line.match(
-        /app\.include_router\(\s*(\w+)\.router\s*,\s*prefix\s*=\s*["']([^"']+)["']/,
-      );
+    if (mainFile.endsWith(".py")) {
+      // Python: app.include_router(clients.router, prefix="/api", tags=["clients"])
+      for (const line of lines) {
+        const match = line.match(
+          /app\.include_router\(\s*(\w+)\.router\s*,\s*prefix\s*=\s*["']([^"']+)["']/,
+        );
+        if (match) {
+          const moduleName = match[1];
+          const prefix = match[2];
+          prefixes.set(moduleName, prefix);
+          logger.debug(`Found router prefix: ${moduleName} -> ${prefix}`);
+        }
+      }
+    } else {
+      // Express: app.use("/api/scans", scanRoutes);
+      // Also need to build a map from import variable name -> source file basename
+      const importMap = new Map<string, string>();
 
-      if (match) {
-        const moduleName = match[1];
-        const prefix = match[2];
-        prefixes.set(moduleName, prefix);
-        logger.debug(`Found router prefix: ${moduleName} -> ${prefix}`);
+      for (const line of lines) {
+        // Match: import scanRoutes from "./routes/scan.routes";
+        // Match: import authRoutes from "./routes/auth.routes";
+        // Match: const scanRoutes = require("./routes/scan.routes");
+        const importMatch = line.match(
+          /import\s+(\w+)\s+from\s+["']([^"']+)["']/,
+        );
+        if (importMatch) {
+          const varName = importMatch[1];
+          const importPath = importMatch[2];
+          // Extract basename without extension: "./routes/scan.routes" -> "scan.routes"
+          const basename = path.basename(importPath).replace(/\.(ts|js|mjs)$/, "");
+          importMap.set(varName, basename);
+        }
+      }
+
+      for (const line of lines) {
+        // Match: app.use("/api/scans", scanRoutes);
+        // Match: app.use("/api/auth", authLimiter, authRoutes);
+        // The route variable is the LAST identifier before the closing paren
+        const useMatch = line.match(
+          /app\.use\(\s*["']([^"']+)["']\s*,(.+)\)/,
+        );
+        if (useMatch) {
+          const mountPrefix = useMatch[1];
+          const argsStr = useMatch[2].trim();
+          // The route handler is the last argument: split by comma, take last, trim
+          const args = argsStr.split(",").map(a => a.trim());
+          const routeVar = args[args.length - 1];
+
+          if (routeVar && /^\w+$/.test(routeVar)) {
+            // Map both the variable name AND the source file basename to the prefix
+            // so we can match route files by their filename
+            const sourceBasename = importMap.get(routeVar);
+            if (sourceBasename) {
+              prefixes.set(sourceBasename, mountPrefix);
+              logger.debug(`Found Express router prefix: ${sourceBasename} -> ${mountPrefix}`);
+            }
+            // Also store by variable name as fallback
+            prefixes.set(routeVar, mountPrefix);
+          }
+        }
       }
     }
   } catch (err) {
@@ -718,21 +896,59 @@ async function extractRouterPrefixes(backendPath: string): Promise<Map<string, s
   return prefixes;
 }
 
-async function extractBackendModels(context: ProjectContext, backendPath: string): Promise<ApiModelDefinition[]> {
+async function extractBackendModels(context: ProjectContext, backendPath: string, framework?: string): Promise<ApiModelDefinition[]> {
   const models: ApiModelDefinition[] = [];
 
-  // Find model files using the context's file index
-  const modelFiles = Array.from(context.files.values()).filter(
-    (f) => f.path.startsWith(backendPath) && f.path.endsWith(".py"),
-  );
+  if (framework === "express" || framework === "nestjs") {
+    // For TS backends, extract types/interfaces from type definition files, schema files, etc.
+    const modelFiles = Array.from(context.files.values()).filter(
+      (f) => f.path.startsWith(backendPath) &&
+        (f.path.endsWith(".ts") || f.path.endsWith(".js")) &&
+        (f.path.includes("/types/") ||
+          f.path.includes("/models/") ||
+          f.path.includes("/schemas/") ||
+          f.path.includes("/interfaces/") ||
+          f.path.includes("/db/") ||
+          f.path.includes(".types.") ||
+          f.path.includes(".schema.") ||
+          f.path.includes(".model.")),
+    );
 
-  for (const fileInfo of modelFiles) {
-    try {
-      const content = await fs.readFile(fileInfo.path, "utf-8");
-      const fileModels = extractModelsFromPythonContent(content, fileInfo.path);
-      models.push(...fileModels);
-    } catch (err) {
-      logger.debug(`Failed to extract models from ${fileInfo.path}`);
+    for (const fileInfo of modelFiles) {
+      try {
+        // Reuse the frontend type extraction for TS interfaces
+        const fileTypes = await extractTypesFromFileAST(fileInfo.path);
+        for (const t of fileTypes) {
+          models.push({
+            name: t.name,
+            fields: t.fields.map(f => ({
+              name: f.name,
+              type: f.type,
+              required: f.required,
+            })),
+            file: t.file,
+            line: t.line,
+            baseClasses: [],
+          });
+        }
+      } catch (err) {
+        logger.debug(`Failed to extract models from ${fileInfo.path}`);
+      }
+    }
+  } else {
+    // Python backend — find model files
+    const modelFiles = Array.from(context.files.values()).filter(
+      (f) => f.path.startsWith(backendPath) && f.path.endsWith(".py"),
+    );
+
+    for (const fileInfo of modelFiles) {
+      try {
+        const content = await fs.readFile(fileInfo.path, "utf-8");
+        const fileModels = extractModelsFromPythonContent(content, fileInfo.path);
+        models.push(...fileModels);
+      } catch (err) {
+        logger.debug(`Failed to extract models from ${fileInfo.path}`);
+      }
     }
   }
 
@@ -986,24 +1202,49 @@ function findMatchingRoute(
 
   if (fuzzyMatch) return { route: fuzzyMatch, isMethodMismatch: false };
 
-  // Try matching with path parameters
+  // Try matching with path parameters (normalize all param formats to {param})
   const paramMatch = routes.find((route) => {
     if (route.method.toUpperCase() !== service.method.toUpperCase()) return false;
     
     const normalizedRoute = normalizePath(route.path);
     const normalizedServiceEndpoint = normalizePath(service.endpoint);
     
-    // Replace backend params {id} and frontend params ${id} with generic {param} for comparison
-    const routeWithGenericParams = normalizedRoute.replace(/\{[^}]+\}/g, "{param}");
-    // Handle both Python {param} and JavaScript ${param} formats
+    // Replace all param formats with generic {param}:
+    // - Python/FastAPI: {id}, {project_id}
+    // - Express: :id, :projectId
+    // - JavaScript template: ${id}, ${projectId}
+    const routeWithGenericParams = normalizedRoute
+      .replace(/\{[^}]+\}/g, "{param}")
+      .replace(/:([a-zA-Z_]\w*)/g, "{param}");
     const endpointWithGenericParams = normalizedServiceEndpoint
       .replace(/\{[^}]+\}/g, "{param}")
-      .replace(/\$\{\w+\}/g, "{param}");
+      .replace(/\$\{\w+\}/g, "{param}")
+      .replace(/:([a-zA-Z_]\w*)/g, "{param}");
     
     return endpointWithGenericParams === routeWithGenericParams;
   });
 
   if (paramMatch) return { route: paramMatch, isMethodMismatch: false };
+
+  // Try matching with API prefix stripped AND path parameters normalized
+  const prefixParamMatch = routes.find((route) => {
+    if (route.method.toUpperCase() !== service.method.toUpperCase()) return false;
+    
+    const normalizedRoute = removeApiPrefix(normalizePath(route.path));
+    const normalizedServiceEndpoint = removeApiPrefix(normalizePath(service.endpoint));
+    
+    const routeWithGenericParams = normalizedRoute
+      .replace(/\{[^}]+\}/g, "{param}")
+      .replace(/:([a-zA-Z_]\w*)/g, "{param}");
+    const endpointWithGenericParams = normalizedServiceEndpoint
+      .replace(/\{[^}]+\}/g, "{param}")
+      .replace(/\$\{\w+\}/g, "{param}")
+      .replace(/:([a-zA-Z_]\w*)/g, "{param}");
+    
+    return endpointWithGenericParams === routeWithGenericParams;
+  });
+
+  if (prefixParamMatch) return { route: prefixParamMatch, isMethodMismatch: false };
 
   return undefined;
 }

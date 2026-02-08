@@ -30,6 +30,7 @@ import {
   extractJSUsages,
   extractJSImports,
   extractJSTypeReferences,
+  collectJSLocalDefinitions,
 } from "./javascript.js";
 
 // ============================================================================
@@ -173,6 +174,30 @@ export function extractUsagesAST(
 }
 
 /**
+ * Collect all locally-defined identifier names from code.
+ * For Python: assignment targets, function parameters, for-loop variables, etc.
+ * For JS/TS: variable declarations, for-of/for-in loop vars, catch vars, params, etc.
+ * Used by the validator to prevent false positives on local variable method calls.
+ *
+ * @param code - The source code string to analyze
+ * @param language - Programming language
+ * @returns Set of locally-defined identifier names
+ */
+export function collectLocalDefinitionsAST(code: string, language: string): Set<string> {
+  const definitions = new Set<string>();
+  const parser = getParser(language);
+  const tree = parser.parse(code);
+
+  if (language === "python") {
+    collectPythonLocalDefinitions(tree.rootNode, code, definitions);
+  } else {
+    collectJSLocalDefinitions(tree.rootNode as any, code, definitions);
+  }
+
+  return definitions;
+}
+
+/**
  * Extract all import statements from code using language-appropriate AST parser.
  * Routes to Python or JavaScript/TypeScript extractor based on language parameter.
  *
@@ -229,26 +254,6 @@ export function extractImportsAST(code: string, language: string): ASTImport[] {
  * console.log(typeRefs); // [{ name: 'MyType', context: 'returnType', ... }]
  * ```
  */
-/**
- * Collect all locally-defined identifier names from Python code.
- * This includes assignment targets, function parameters, for-loop variables,
- * with-as targets, except-as targets, comprehension variables, and function/class names.
- * Used by the validator to prevent false positives on local variable method calls.
- *
- * @param code - The source code string to analyze
- * @param language - Programming language (only 'python' is supported)
- * @returns Set of locally-defined identifier names
- */
-export function collectLocalDefinitionsAST(code: string, language: string): Set<string> {
-  const definitions = new Set<string>();
-  if (language !== "python") return definitions;
-
-  const parser = getParser(language);
-  const tree = parser.parse(code);
-  collectPythonLocalDefinitions(tree.rootNode, code, definitions);
-  return definitions;
-}
-
 export function extractTypeReferencesAST(
   code: string,
   language: string,

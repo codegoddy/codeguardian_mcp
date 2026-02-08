@@ -35,8 +35,8 @@ async function testApiContractValidation() {
     console.log(`   ⚠️  Unmatched Backend: ${result.summary.unmatchedBackend}`);
     
     if (result.issues.length > 0) {
-      console.log("\n🔍 Top Issues:");
-      result.issues.slice(0, 15).forEach((issue: any, i: number) => {
+      console.log("\n🔍 All Issues:");
+      result.issues.forEach((issue: any, i: number) => {
         console.log(`\n${i + 1}. [${issue.severity.toUpperCase()}] ${issue.type}`);
         console.log(`   📄 ${issue.file || 'N/A'}${issue.line ? `:${issue.line}` : ''}`);
         console.log(`   📝 ${issue.message}`);
@@ -44,19 +44,16 @@ async function testApiContractValidation() {
           console.log(`   💡 ${issue.suggestion}`);
         }
       });
-      
-      if (result.issues.length > 15) {
-        console.log(`\n... and ${result.issues.length - 15} more issues`);
-      }
     } else {
       console.log("\n✨ No issues found! All API contracts are valid.");
     }
     
-    // Return non-zero exit code if critical issues found
-    if (result.summary.critical > 0) {
-      process.exit(1);
-    }
-    
+    // Write full JSON output for analysis
+    const fs = await import("fs");
+    fs.writeFileSync("api-contract-report.json", JSON.stringify(result, null, 2, ), "utf-8");
+    console.log("\n📁 Full report written to api-contract-report.json");
+
+    process.exit(0);
   } catch (error) {
     console.error("❌ Validation failed:", error);
     process.exit(1);

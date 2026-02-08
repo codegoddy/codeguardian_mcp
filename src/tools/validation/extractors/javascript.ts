@@ -707,6 +707,168 @@ export function extractDestructuredNames(
 }
 
 // ============================================================================
+// Local Definition Collection (for JS/TS)
+// ============================================================================
+
+/**
+ * Collect all locally-defined identifier names from JavaScript/TypeScript code.
+ * This includes: variable declarations (const/let/var), function parameters,
+ * for-of/for-in loop variables, catch clause variables, destructured names,
+ * function/class declaration names.
+ *
+ * Used by the validator to prevent false positives on local variable references
+ * and method calls (e.g., `for (const training of records) { training.status }`)
+ */
+export function collectJSLocalDefinitions(
+  node: Parser.SyntaxNode,
+  code: string,
+  definitions: Set<string>,
+): void {
+  if (!node) return;
+
+  switch (node.type) {
+    case "variable_declarator": {
+      const nameNode = node.childForFieldName("name");
+      if (nameNode) {
+        if (nameNode.type === "identifier") {
+          definitions.add(getText(nameNode, code));
+        } else if (nameNode.type === "object_pattern" || nameNode.type === "array_pattern") {
+          collectDestructuredDefinitions(nameNode, code, definitions);
+        }
+      }
+      break;
+    }
+
+    // For-in/for-of loop variable: for (const x of arr) / for (const x in obj)
+    case "for_in_statement": {
+      const leftNode = node.childForFieldName("left");
+      if (leftNode) {
+        if (leftNode.type === "identifier") {
+          definitions.add(getText(leftNode, code));
+        } else if (leftNode.type === "object_pattern" || leftNode.type === "array_pattern") {
+          // Destructured loop variable: for (const [key, value] of entries)
+          collectDestructuredDefinitions(leftNode, code, definitions);
+        } else {
+          // Could be lexical_declaration wrapping the variable
+          collectJSLocalDefinitions(leftNode, code, definitions);
+        }
+      }
+      break;
+    }
+
+    // Catch clause: catch (err) { ... }
+    case "catch_clause": {
+      const paramNode = node.childForFieldName("parameter");
+      if (paramNode) {
+        if (paramNode.type === "identifier") {
+          definitions.add(getText(paramNode, code));
+        } else if (paramNode.type === "object_pattern" || paramNode.type === "array_pattern") {
+          collectDestructuredDefinitions(paramNode, code, definitions);
+        }
+      }
+      break;
+    }
+
+    // Function/class declaration names
+    case "function_declaration":
+    case "class_declaration": {
+      const nameNode = node.childForFieldName("name");
+      if (nameNode && nameNode.type === "identifier") {
+        definitions.add(getText(nameNode, code));
+      }
+      break;
+    }
+
+    // Function parameters
+    case "required_parameter":
+    case "optional_parameter": {
+      const nameNode = node.childForFieldName("pattern") || node.childForFieldName("name");
+      if (nameNode) {
+        if (nameNode.type === "identifier") {
+          definitions.add(getText(nameNode, code));
+        } else if (nameNode.type === "object_pattern" || nameNode.type === "array_pattern") {
+          collectDestructuredDefinitions(nameNode, code, definitions);
+        }
+      }
+      break;
+    }
+
+    // Rest parameter: ...args
+    case "rest_pattern": {
+      for (const child of node.children) {
+        if (child && child.type === "identifier") {
+          definitions.add(getText(child, code));
+        }
+      }
+      break;
+    }
+
+    // Enum declaration
+    case "enum_declaration": {
+      const nameNode = node.childForFieldName("name");
+      if (nameNode && nameNode.type === "identifier") {
+        definitions.add(getText(nameNode, code));
+      }
+      break;
+    }
+  }
+
+  for (const child of node.children) {
+    if (child) {
+      collectJSLocalDefinitions(child, code, definitions);
+    }
+  }
+}
+
+/**
+ * Collect identifier names from destructuring patterns (object/array).
+ */
+function collectDestructuredDefinitions(
+  node: Parser.SyntaxNode,
+  code: string,
+  definitions: Set<string>,
+): void {
+  if (!node) return;
+
+  for (const child of node.children) {
+    if (!child) continue;
+
+    if (child.type === "identifier") {
+      definitions.add(getText(child, code));
+    } else if (child.type === "shorthand_property_identifier_pattern") {
+      definitions.add(getText(child, code));
+    } else if (child.type === "pair_pattern") {
+      const valueNode = child.childForFieldName("value");
+      if (valueNode) {
+        if (valueNode.type === "identifier") {
+          definitions.add(getText(valueNode, code));
+        } else if (valueNode.type === "object_pattern" || valueNode.type === "array_pattern") {
+          collectDestructuredDefinitions(valueNode, code, definitions);
+        } else if (valueNode.type === "assignment_pattern") {
+          const leftNode = valueNode.childForFieldName("left");
+          if (leftNode?.type === "identifier") {
+            definitions.add(getText(leftNode, code));
+          }
+        }
+      }
+    } else if (child.type === "rest_pattern") {
+      for (const restChild of child.children) {
+        if (restChild?.type === "identifier") {
+          definitions.add(getText(restChild, code));
+        }
+      }
+    } else if (child.type === "assignment_pattern") {
+      const leftNode = child.childForFieldName("left");
+      if (leftNode?.type === "identifier") {
+        definitions.add(getText(leftNode, code));
+      }
+    } else if (child.type === "object_pattern" || child.type === "array_pattern") {
+      collectDestructuredDefinitions(child, code, definitions);
+    }
+  }
+}
+
+// ============================================================================
 // Usage Extraction
 // ============================================================================
 
@@ -859,7 +1021,15 @@ export function extractJSUsages(
       }
 
       // Only skip standard lowercase JSX tags (div, span, etc.)
+      // tree-sitter-typescript/tsx uses plain "identifier" (not "jsx_identifier") for tag names
+      // inside jsx_opening_element and jsx_closing_element, so check both node types
       if (node.type === "jsx_identifier" && /^[a-z]/.test(name)) break;
+      if (node.type === "identifier" && /^[a-z]/.test(name)) {
+        const p = node.parent;
+        if (p?.type === "jsx_opening_element" || p?.type === "jsx_closing_element" || p?.type === "jsx_self_closing_element") {
+          break;
+        }
+      }
 
       // Filter out non-usage positions:
       const parent = node.parent;
@@ -1206,6 +1376,10 @@ export function extractJSUsages(
           ancestor = ancestor.parent;
         }
       }
+
+      // 2f. Skip identifiers inside nested_identifier (type-level namespace access)
+      // e.g., Express.Multer.File[] — Express and Multer are namespace types, not variable references
+      if (parent.type === "nested_identifier" || parent.type === "nested_type_identifier") break;
 
       // 3. Skip if it's a function/class/variable declaration name
       if (
@@ -1844,9 +2018,14 @@ function getRootObject(node: Parser.SyntaxNode, code: string): string {
     }
   }
   
-  // Handle member expressions: obj.prop - return the full text (includes property access)
-  // We don't recurse here because we want to preserve the object chain
+  // Handle member expressions: obj.prop - recurse into the object to get the root identifier
+  // This correctly handles multiline chains like db\n.select().from() → "db"
+  // Previously returned getText which included newlines, causing FPs in validation
   if (node.type === "member_expression") {
+    const objNode = node.childForFieldName("object");
+    if (objNode) {
+      return getRootObject(objNode, code);
+    }
     return getText(node, code);
   }
   

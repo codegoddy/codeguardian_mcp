@@ -832,10 +832,10 @@ export function validateSymbols(
     }
   }
 
-  // For Python: collect locally-defined names (function params, assignments, loop vars, etc.)
+  // Collect locally-defined names (function params, assignments, loop vars, etc.)
   // These are local scope variables that won't appear in the project symbol table
   // but are valid identifiers — prevents false undefinedVariable on method calls like db.execute()
-  const localDefinitions = language === "python" ? collectLocalDefinitionsAST(newCode, language) : new Set<string>();
+  const localDefinitions = collectLocalDefinitionsAST(newCode, language);
 
   // Validate each used symbol
   for (const used of usedSymbols) {
@@ -988,7 +988,8 @@ export function validateSymbols(
           .split("?.")[0]
           .split(".")[0]
           .split("[")[0]
-          .split("(")[0];
+          .split("(")[0]
+          .trim();
       }
       
       const rootObject = extractRootObject(used.object || "");
@@ -1386,6 +1387,15 @@ export function validateSymbols(
       }
     } else if (used.type === "instantiation") {
       if (!validClasses.has(used.name)) {
+        // Skip imported names — they are validated separately
+        if (allImportedNames.has(used.name)) continue;
+
+        // Skip locally-defined variables (e.g., const ParserClass = require('pdf-parse'))
+        if (localDefinitions.has(used.name)) continue;
+
+        // Skip if it exists as a variable or function (dynamic class assignment)
+        if (validVariables.has(used.name) || validFunctions.has(used.name)) continue;
+
         // Built-in check (Tier 1.5)
         if (
           (language === "python" && isPythonBuiltin(used.name)) ||

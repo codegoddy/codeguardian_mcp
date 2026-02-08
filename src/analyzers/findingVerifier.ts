@@ -210,8 +210,8 @@ function groupFindingsByFile(
   const fileMap = new Map<string, (ValidationIssue | DeadCodeIssue)[]>();
   
   for (const finding of findings) {
-    const filePath = finding.file;
-    if (!filePath) continue;
+    // Use a virtual key for findings without a file path (inline newCode validation)
+    const filePath = finding.file || "(inline)";
     
     if (!fileMap.has(filePath)) {
       fileMap.set(filePath, []);

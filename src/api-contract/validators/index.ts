@@ -199,15 +199,16 @@ function validatePathCompatibility(
 ): ApiContractIssue[] {
   const issues: ApiContractIssue[] = [];
 
-  const normalizedFrontend = normalizePath(frontendPath);
-  const normalizedBackend = normalizePath(backendPath);
+  // Normalize both paths (converting all param formats to {param})
+  const normalizedFrontend = normalizePathForComparison(frontendPath);
+  const normalizedBackend = normalizePathForComparison(backendPath);
 
-  // Check if paths match (accounting for API prefixes)
+  // Check if paths match (accounting for API prefixes and param formats)
   if (!pathsMatch(normalizedFrontend, normalizedBackend)) {
     const frontendWithoutPrefix = removeApiPrefix(normalizedFrontend);
     const backendWithoutPrefix = removeApiPrefix(normalizedBackend);
 
-    if (frontendWithoutPrefix !== backendWithoutPrefix) {
+    if (!pathsMatch(frontendWithoutPrefix, backendWithoutPrefix)) {
       issues.push({
         type: "apiPathMismatch",
         severity: "high",
@@ -221,14 +222,16 @@ function validatePathCompatibility(
     }
   }
 
-  // Check for path parameter consistency
+  // Check for path parameter consistency using normalized paths
   const frontendParams = extractPathParams(frontendPath);
   const backendParams = extractPathParams(backendPath);
 
-  // Check for missing/extra parameters, but account for positional equivalence
-  // e.g., {id} in frontend is equivalent to {project_id} in backend if at the same position
-  const frontendSegments = frontendPath.split('/');
-  const backendSegments = backendPath.split('/');
+  // Use prefix-stripped, fully normalized paths for positional comparison
+  // so frontend "roles/{role_id}/sops" matches backend "api/roles/{id}/sops"
+  const feStripped = removeApiPrefix(normalizedFrontend);
+  const beStripped = removeApiPrefix(normalizedBackend);
+  const frontendSegments = feStripped.split('/');
+  const backendSegments = beStripped.split('/');
   
   // Build positional param map: match params by their position in the path
   const positionallyMatched = new Set<string>();
@@ -240,10 +243,11 @@ function validatePathCompatibility(
       const bSeg = backendSegments[i];
       if (isPathParam(fSeg) && isPathParam(bSeg)) {
         // Both are path params at the same position — they're equivalent
-        const fParam = fSeg.replace(/[\${}]/g, '').split(':')[0];
-        const bParam = bSeg.replace(/[\${}]/g, '').split(':')[0];
+        const fParam = fSeg.replace(/[{}\$:]/g, '').split(':')[0];
+        const bParam = bSeg.replace(/[{}\$:]/g, '').split(':')[0];
         // Convert camelCase frontend param to snake_case for comparison
         const fParamSnake = fParam.replace(/[A-Z]/g, (letter: string) => `_${letter.toLowerCase()}`);
+        positionallyMatched.add(fParam);
         positionallyMatched.add(fParamSnake);
         positionallyMatchedBackend.add(bParam);
       }
@@ -486,21 +490,25 @@ function validateTypes(apiContract: ApiContractContext): ApiContractIssue[] {
     }
 
     // Check for naming convention mismatches
-    for (const frontendField of frontendType.fields) {
-      const backendField = backendModel.fields.find(
-        (f: { name: string }) => normalizeName(f.name) === normalizeName(frontendField.name),
-      );
+    // Skip if both files are TypeScript/JavaScript (same naming convention expected)
+    const isSameLanguage = isSameLanguageProject(frontendType.file, backendModel.file);
+    if (!isSameLanguage) {
+      for (const frontendField of frontendType.fields) {
+        const backendField = backendModel.fields.find(
+          (f: { name: string }) => normalizeName(f.name) === normalizeName(frontendField.name),
+        );
 
-      if (backendField && frontendField.name !== backendField.name) {
-        issues.push({
-          type: "apiNamingConventionMismatch",
-          severity: "medium",
-          message: `Naming convention mismatch: '${frontendField.name}' should be '${backendField.name}'`,
-          file: frontendType.file,
-          line: frontendType.line,
-          suggestion: `Rename to '${backendField.name}' to match backend convention`,
-          confidence: 90,
-        });
+        if (backendField && frontendField.name !== backendField.name) {
+          issues.push({
+            type: "apiNamingConventionMismatch",
+            severity: "medium",
+            message: `Naming convention mismatch: '${frontendField.name}' should be '${backendField.name}'`,
+            file: frontendType.file,
+            line: frontendType.line,
+            suggestion: `Rename to '${backendField.name}' to match backend convention`,
+            confidence: 90,
+          });
+        }
       }
     }
 
@@ -644,11 +652,11 @@ function findSimilarRoute(
   service: { method: string; endpoint: string },
   backendRoutes: ApiRouteDefinition[]
 ): ApiRouteDefinition | undefined {
-  const normalizedEndpoint = normalizePath(service.endpoint);
+  const normalizedEndpoint = normalizePathForComparison(service.endpoint);
   
-  // First, check for exact path match with different method
+  // First, check for exact path match with different method (normalizing params)
   const samePathDifferentMethod = backendRoutes.find(route => {
-    const normalizedRoute = normalizePath(route.path);
+    const normalizedRoute = normalizePathForComparison(route.path);
     return normalizedRoute === normalizedEndpoint && 
            route.method.toUpperCase() !== service.method.toUpperCase();
   });
@@ -656,12 +664,24 @@ function findSimilarRoute(
   if (samePathDifferentMethod) {
     return samePathDifferentMethod;
   }
+
+  // Also check with API prefix stripped
+  const endpointNoPrefix = removeApiPrefix(normalizedEndpoint);
+  const samePathNoPrefixDiffMethod = backendRoutes.find(route => {
+    const normalizedRoute = removeApiPrefix(normalizePathForComparison(route.path));
+    return normalizedRoute === endpointNoPrefix && 
+           route.method.toUpperCase() !== service.method.toUpperCase();
+  });
+
+  if (samePathNoPrefixDiffMethod) {
+    return samePathNoPrefixDiffMethod;
+  }
   
   // Then, check for similar paths (same number of segments, similar structure)
   const endpointSegments = normalizedEndpoint.split('/');
   
   for (const route of backendRoutes) {
-    const normalizedRoute = normalizePath(route.path);
+    const normalizedRoute = normalizePathForComparison(route.path);
     const routeSegments = normalizedRoute.split('/');
     
     // Must have same number of segments
@@ -690,6 +710,28 @@ function findSimilarRoute(
       return route;
     }
   }
+
+  // Try again with API prefix stripped
+  const endpointSegmentsNoPrefix = endpointNoPrefix.split('/');
+  for (const route of backendRoutes) {
+    const normalizedRoute = removeApiPrefix(normalizePathForComparison(route.path));
+    const routeSegments = normalizedRoute.split('/');
+    
+    if (routeSegments.length !== endpointSegmentsNoPrefix.length) continue;
+    
+    let matchingSegments = 0;
+    for (let i = 0; i < endpointSegmentsNoPrefix.length; i++) {
+      if (endpointSegmentsNoPrefix[i] === routeSegments[i] || 
+          isPathParam(endpointSegmentsNoPrefix[i]) || 
+          isPathParam(routeSegments[i])) {
+        matchingSegments++;
+      }
+    }
+    
+    if (matchingSegments / endpointSegmentsNoPrefix.length >= 0.7) {
+      return route;
+    }
+  }
   
   return undefined;
 }
@@ -697,6 +739,26 @@ function findSimilarRoute(
 // ============================================================================
 // Utility Functions
 // ============================================================================
+
+/**
+ * Check if frontend and backend files are in the same language family
+ * (both TS/JS = same naming convention, no need to flag camelCase vs snake_case)
+ */
+function isSameLanguageProject(frontendFile: string, backendFile: string): boolean {
+  const tsJsExtensions = [".ts", ".tsx", ".js", ".jsx", ".mjs"];
+  const pyExtensions = [".py"];
+  
+  const feIsTs = tsJsExtensions.some(ext => frontendFile.endsWith(ext));
+  const beIsTs = tsJsExtensions.some(ext => backendFile.endsWith(ext));
+  const beIsPy = pyExtensions.some(ext => backendFile.endsWith(ext));
+  
+  // Same language if both are TS/JS
+  if (feIsTs && beIsTs) return true;
+  // Different languages if FE is TS and BE is Python
+  if (feIsTs && beIsPy) return false;
+  
+  return false;
+}
 
 function normalizePath(path: string): string {
   return path.replace(/\/+/g, "/").replace(/\/$/, "").replace(/^\//, "");
@@ -750,6 +812,11 @@ function normalizePathForComparison(path: string): string {
     return `{${snakeCase}}`;
   });
   
+  // Convert Express :param to {param} for comparison
+  normalized = normalized.replace(/:([a-zA-Z_]\w*)/g, (match, paramName) => {
+    return `{${paramName}}`;
+  });
+  
   return normalized;
 }
 
@@ -758,6 +825,8 @@ function isPathParam(segment: string): boolean {
   if (segment.startsWith("{") && segment.endsWith("}")) return true;
   // JavaScript template literal style: ${variable}
   if (segment.startsWith("${") && segment.endsWith("}")) return true;
+  // Express style: :param
+  if (segment.startsWith(":") && /^:[a-zA-Z_]\w*$/.test(segment)) return true;
   return false;
 }
 
@@ -781,6 +850,15 @@ function extractPathParams(path: string): string[] {
       // Convert camelCase to snake_case for comparison
       const snakeCase = param.replace(/[A-Z]/g, (letter: string) => `_${letter.toLowerCase()}`);
       params.push(snakeCase);
+    }
+  }
+
+  // Extract Express style params: :param
+  const expressMatches = path.match(/:([a-zA-Z_]\w*)/g);
+  if (expressMatches) {
+    for (const match of expressMatches) {
+      const param = match.replace(/^:/, "");
+      params.push(param);
     }
   }
 

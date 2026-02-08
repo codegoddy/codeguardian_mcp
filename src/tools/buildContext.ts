@@ -144,7 +144,7 @@ export const buildContextTool: ToolDefinition = {
             focusedIntent: intent.recentFiles.slice(0, 5),
             projectHubs: hubs,
           },
-          framework: context.framework,
+          frameworks: context.frameworks,
         },
         hint: "Context is cached. VibeGuard is now aware of your Git history and focus.",
       });

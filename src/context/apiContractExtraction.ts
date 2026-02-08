@@ -128,6 +128,55 @@ function extractServiceFromCall(
     };
   }
 
+  // Check if it's a direct function call like authenticatedApiCall("/api/notifications", { method: "GET" })
+  if (functionNode.type === "identifier") {
+    const funcName = getNodeText(functionNode, content);
+    const isApiCall =
+      funcName === "authenticatedApiCall" ||
+      funcName === "apiCall" ||
+      funcName === "fetchApi" ||
+      funcName === "apiFetch";
+
+    if (!isApiCall) return null;
+
+    const argumentsNode = node.childForFieldName("arguments");
+    if (!argumentsNode) return null;
+
+    // First arg is endpoint, second arg is config object with { method: "GET" }
+    const args: any[] = [];
+    for (const child of argumentsNode.children || []) {
+      if (child.type !== "," && child.type !== "(" && child.type !== ")") {
+        args.push(child);
+      }
+    }
+
+    if (args.length < 1) return null;
+
+    const extracted = extractStringValue(args[0], content);
+    if (!extracted) return null;
+
+    // Try to extract HTTP method from config object
+    let httpMethod: ApiServiceDefinition["method"] = "GET";
+    if (args.length >= 2) {
+      const configText = getNodeText(args[1], content);
+      const methodMatch = configText.match(/method\s*:\s*["'](\w+)["']/);
+      if (methodMatch) {
+        const mapped = mapToHttpMethod(methodMatch[1].toLowerCase());
+        if (mapped) httpMethod = mapped;
+      }
+    }
+
+    const enclosingFunction = findEnclosingFunction(node, content);
+
+    return {
+      name: enclosingFunction || `${funcName}_${extracted.endpoint.replace(/[^a-zA-Z0-9]/g, "_")}`,
+      method: httpMethod,
+      endpoint: extracted.endpoint,
+      file: filePath,
+      line: node.startPosition.row + 1,
+    };
+  }
+
   return null;
 }
 

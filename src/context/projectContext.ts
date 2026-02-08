@@ -244,12 +244,12 @@ export interface ProjectContext {
   // Entry points (main files, index files, pages)
   entryPoints: string[];
 
-  // Framework detection
-  framework?: {
+  // Framework detection (supports multiple frameworks for full-stack projects)
+  frameworks: Array<{
     name: string;
     version?: string;
     patterns: string[];
-  };
+  }>;
 
   // API Contract Guardian - Frontend/Backend contract information
   apiContract?: ApiContractContext;
@@ -890,6 +890,7 @@ async function buildProjectContext(
     keywordIndex: new Map(),
     externalDependencies: new Set(),
     entryPoints: [],
+    frameworks: [],
   };
 
   // Find source files (excluding tests if requested)
@@ -906,8 +907,8 @@ async function buildProjectContext(
     testFiles = await findTestFiles(projectPath, language);
   }
 
-  // Detect framework
-  context.framework = await detectFramework(projectPath, filesToProcess);
+  // Detect frameworks (supports multiple for full-stack projects)
+  context.frameworks = await detectFrameworks(projectPath, filesToProcess);
 
   // Process each file
   for (let i = 0; i < filesToProcess.length; i++) {
@@ -919,7 +920,7 @@ async function buildProjectContext(
         filePath,
         content,
         projectPath,
-        context.framework,
+        context.frameworks,
       );
       fileInfo.lastModified = stats.mtimeMs;
 
@@ -978,7 +979,7 @@ async function buildProjectContext(
         testFilePath,
         content,
         projectPath,
-        context.framework,
+        context.frameworks,
       );
       fileInfo.lastModified = stats.mtimeMs;
       fileInfo.isTest = true; // Ensure it's marked as test
@@ -1091,7 +1092,7 @@ async function updateFileInContext(
         filePath,
         content,
         projectPath,
-        context.framework,
+        context.frameworks,
       );
       fileInfo.lastModified = stats.mtimeMs;
 
@@ -1320,7 +1321,7 @@ function analyzeFile(
   filePath: string,
   content: string,
   projectPath: string,
-  framework?: { name: string; patterns: string[] },
+  frameworks?: Array<{ name: string; patterns: string[] }>,
 ): FileInfo {
   const ext = path.extname(filePath);
   const language = getLanguageFromExt(ext);
@@ -1338,7 +1339,7 @@ function analyzeFile(
     keywords: [],
     isTest: isTestFile(filePath),
     isConfig: isConfigFile(fileName),
-    isEntryPoint: isEntryPointFile(filePath, framework),
+    isEntryPoint: isEntryPointFile(filePath, frameworks),
   };
 
   // Extract based on language - use AST for accurate multi-line parsing
@@ -2212,7 +2213,7 @@ function isConfigFile(fileName: string): boolean {
 
 function isEntryPointFile(
   filePath: string,
-  framework?: { name: string; patterns: string[] },
+  frameworks?: Array<{ name: string; patterns: string[] }>,
 ): boolean {
   const fileName = path.basename(filePath).toLowerCase();
   const relativePath = filePath.toLowerCase();
@@ -2235,64 +2236,81 @@ function isEntryPointFile(
     return true;
   }
 
-  // Framework-specific
-  if (framework?.name === "nextjs") {
-    if (
-      relativePath.includes("/app/") &&
-      (fileName === "page.tsx" ||
-        fileName === "page.ts" ||
-        fileName === "layout.tsx")
-    ) {
-      return true;
-    }
-    if (relativePath.includes("/pages/") && !fileName.startsWith("_")) {
-      return true;
+  // Framework-specific — check ALL detected frameworks
+  if (frameworks) {
+    for (const framework of frameworks) {
+      if (framework.name === "nextjs") {
+        if (
+          relativePath.includes("/app/") &&
+          (fileName === "page.tsx" ||
+            fileName === "page.ts" ||
+            fileName === "layout.tsx")
+        ) {
+          return true;
+        }
+        if (relativePath.includes("/pages/") && !fileName.startsWith("_")) {
+          return true;
+        }
+      }
+
+      if (framework.name === "fastapi") {
+        if (fileName === "main.py" || fileName === "app.py") {
+          return true;
+        }
+        if (relativePath.includes("/api/") && fileName.endsWith(".py")) {
+          return true;
+        }
+      }
     }
   }
 
   return false;
 }
 
-async function detectFramework(
+async function detectFrameworks(
   projectPath: string,
   files: string[],
-): Promise<{ name: string; version?: string; patterns: string[] } | undefined> {
+): Promise<Array<{ name: string; version?: string; patterns: string[] }>> {
+  const frameworks: Array<{ name: string; version?: string; patterns: string[] }> = [];
+
   // Check for Next.js
   const hasNextConfig = files.some((f) => f.includes("next.config"));
   const hasAppDir = files.some((f) => f.includes("/app/page."));
   const hasPagesDir = files.some((f) => f.includes("/pages/"));
 
   if (hasNextConfig || hasAppDir || hasPagesDir) {
-    return {
+    frameworks.push({
       name: "nextjs",
       patterns: ["app/", "pages/", "components/", "lib/"],
-    };
+    });
   }
 
   // Check for React (without Next)
-  const hasReact = files.some(
-    (f) => f.includes("App.tsx") || f.includes("App.jsx"),
-  );
-  if (hasReact) {
-    return {
-      name: "react",
-      patterns: ["src/", "components/"],
-    };
+  if (frameworks.length === 0) {
+    const hasReact = files.some(
+      (f) => f.includes("App.tsx") || f.includes("App.jsx"),
+    );
+    if (hasReact) {
+      frameworks.push({
+        name: "react",
+        patterns: ["src/", "components/"],
+      });
+    }
   }
 
-  // Check for FastAPI/Flask
+  // Check for FastAPI/Flask (always check — not mutually exclusive with frontend frameworks)
   const hasFastAPI = files.some((f) => {
     const name = path.basename(f);
     return name === "main.py" || name === "app.py";
   });
   if (hasFastAPI) {
-    return {
+    frameworks.push({
       name: "fastapi",
       patterns: ["app/", "api/", "routers/", "services/"],
-    };
+    });
   }
 
-  return undefined;
+  return frameworks;
 }
 
 function extractKeywords(filePath: string, content: string): string[] {
@@ -2370,6 +2388,13 @@ async function loadContextFromDisk(
 
     const content = await fs.readFile(cacheFile, "utf-8");
     const cached = deserialize<CachedContext>(content);
+
+    // Backward compat: migrate old "framework" (singular) to "frameworks" (array)
+    const ctx = cached.context as any;
+    if (!ctx.frameworks) {
+      ctx.frameworks = ctx.framework ? [ctx.framework] : [];
+      delete ctx.framework;
+    }
 
     // Verify it belongs to this project path (just in case)
     if (cached.context.projectPath !== projectPath) {
