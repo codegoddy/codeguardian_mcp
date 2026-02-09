@@ -1,0 +1,197 @@
+{
+  "description": "Ground truth manifest for extreme hallucination/dead-code/API-contract test",
+  "created": "2026-02-09",
+  "files": {
+    "backend": {
+      "test_hallucinations_extreme.py": "report/backend/app/api/test_hallucinations_extreme.py",
+      "phantom_analytics_service.py": "report/backend/app/services/phantom_analytics_service.py"
+    },
+    "frontend": {
+      "test-hallucinations-extreme.ts": "report/frontend/src/services/test-hallucinations-extreme.ts",
+      "broken-api-contracts.ts": "report/frontend/src/services/broken-api-contracts.ts",
+      "PhantomDashboard.tsx": "report/frontend/src/components/PhantomDashboard.tsx",
+      "phantom-helpers.ts": "report/frontend/src/utils/phantom-helpers.ts"
+    }
+  },
+  "injectedIssues": {
+    "backend": {
+      "hallucinations": {
+        "unusedImport": {
+          "count": 17,
+          "file": "test_hallucinations_extreme.py",
+          "items": [
+            "create_access_token", "create_refresh_token", "decode_access_token",
+            "validate_refresh_token", "check_token_expiration", "settings",
+            "Project", "Client", "Invoice", "Milestone", "User", "UserSettings",
+            "create_notification", "send_otp_email", "success_response",
+            "json", "os"
+          ]
+        },
+        "nonExistentImport": {
+          "count": 12,
+          "file": "test_hallucinations_extreme.py",
+          "items": [
+            "verify_biometric_token", "rotate_encryption_keys", "create_api_key",
+            "validate_mfa_token", "ProjectAnalytics", "UserPermissionMatrix",
+            "UserAuditLog", "track_realtime_usage", "bulk_log_activities",
+            "execute_raw_sql", "send_bulk_sms", "streaming_response"
+          ]
+        },
+        "missingDependency": {
+          "count": 7,
+          "file": "test_hallucinations_extreme.py",
+          "items": [
+            "tensorflow", "apache_beam", "dask", "kubernetes",
+            "elasticsearch", "celery", "pymongo"
+          ]
+        },
+        "nonExistentMethod": {
+          "count": 5,
+          "file": "test_hallucinations_extreme.py",
+          "items": [
+            "db.execute_parallel", "router.get_middleware_chain",
+            "HTTPException.from_validation_error", "db.bulk_upsert",
+            "db.create_savepoint"
+          ]
+        }
+      },
+      "deadCode": {
+        "unusedFunction": {
+          "count": 6,
+          "file": "test_hallucinations_extreme.py",
+          "items": [
+            "calculate_quantum_complexity", "generate_fractal_report",
+            "sync_with_parallel_universe", "validate_interdimensional_token",
+            "_internal_but_exported_helper"
+          ],
+          "note": "Also 1 class method but counted as part of the class"
+        },
+        "unusedExport": {
+          "count": 5,
+          "file": "test_hallucinations_extreme.py",
+          "items": [
+            "PhantomOrchestrator", "GhostCacheManager",
+            "PHANTOM_CONSTANT", "GHOST_THRESHOLD", "UNUSED_CONFIG_MAP"
+          ]
+        },
+        "orphanedFile": {
+          "count": 1,
+          "file": "phantom_analytics_service.py",
+          "items": ["phantom_analytics_service.py"],
+          "containedExports": [
+            "AnalyticsEngine", "compute_revenue_forecast",
+            "detect_anomalies", "calculate_ltv",
+            "ANALYTICS_VERSION", "DEFAULT_WINDOW_SIZE",
+            "MAX_FORECAST_PERIODS", "ANOMALY_SENSITIVITY_LEVELS"
+          ]
+        }
+      },
+      "totalInjected": {
+        "hallucinations": 41,
+        "deadCode": 12
+      }
+    },
+    "frontend": {
+      "hallucinations": {
+        "unusedImport": {
+          "count": 12,
+          "file": "test-hallucinations-extreme.ts",
+          "items": [
+            "ProjectCreate", "ProjectUpdate", "ScopeGuardrailConfig",
+            "LoginCredentials", "RegisterData", "OTPRequest",
+            "ContractTemplate", "ContractTemplateResponse",
+            "PaymentMethod", "DeliverableCreate", "DeliverableUpdate",
+            "API_BASE_URL"
+          ]
+        },
+        "nonExistentImport": {
+          "count": 10,
+          "file": "test-hallucinations-extreme.ts",
+          "items": [
+            "ProjectTimeline", "ProjectArchive",
+            "BiometricAuth", "MFASetup",
+            "GraphQLService", "WebSocketService",
+            "ContractBulkSign", "ContractAnalytics",
+            "InvoiceReconciliation", "PaymentSplitConfig"
+          ]
+        },
+        "missingDependency": {
+          "count": 7,
+          "file": "test-hallucinations-extreme.ts",
+          "items": [
+            "@mui/material", "axios", "@apollo/client",
+            "socket.io-client", "d3", "react-beautiful-dnd", "moment"
+          ]
+        },
+        "nonExistentMethod": {
+          "count": 4,
+          "file": "test-hallucinations-extreme.ts",
+          "items": [
+            "projectsApi.getAnalyticsDashboard", "projectsApi.exportToCsv",
+            "ApiService.graphql", "ApiService.stream"
+          ]
+        }
+      },
+      "deadCode": {
+        "unusedExport": {
+          "count": 23,
+          "details": {
+            "test-hallucinations-extreme.ts": [
+              "PhantomUserProfile", "GhostNotification",
+              "calculateEctoplasmicResidue", "generateSpectralFingerprint",
+              "syncParallelDimension", "PhantomWebSocket",
+              "PHANTOM_API_VERSION", "GHOST_DETECTION_THRESHOLD",
+              "SPECTRAL_FREQUENCIES", "validateGhostProtocol"
+            ],
+            "broken-api-contracts.ts": [
+              "WrongProjectCreate", "WrongInvoiceCreate", "brokenApiCalls",
+              "buildQueryString", "parseApiError", "BROKEN_API_ENDPOINTS"
+            ],
+            "PhantomDashboard.tsx": [
+              "PhantomDashboard", "usePhantomMetrics", "PHANTOM_DASHBOARD_CONFIG"
+            ],
+            "phantom-helpers.ts": [
+              "formatGhostTimestamp", "parseSpectralId",
+              "calculatePhantomHash", "debounceGhostEvent",
+              "GHOST_PROTOCOL_VERSION", "SPECTRAL_COLOR_MAP",
+              "SpectralEvent", "mergeSpectralEvents"
+            ]
+          }
+        },
+        "orphanedFile": {
+          "count": 3,
+          "items": [
+            "PhantomDashboard.tsx",
+            "phantom-helpers.ts",
+            "broken-api-contracts.ts"
+          ]
+        }
+      },
+      "apiContract": {
+        "count": 8,
+        "file": "broken-api-contracts.ts",
+        "items": [
+          { "id": "apiContract-8", "desc": "GET /api/projects/{id}/analytics - endpoint doesn't exist (should be /metrics)" },
+          { "id": "apiContract-9", "desc": "DELETE /api/projects/{id}/with-scope-guardrail - wrong method (should be POST)" },
+          { "id": "apiContract-10", "desc": "POST /api/invoices/{id}/auto-pay - endpoint doesn't exist" },
+          { "id": "apiContract-11", "desc": "POST /api/contracts/bulk-sign - endpoint doesn't exist" },
+          { "id": "apiContract-12", "desc": "POST /api/deliverables/{id}/ai-review - endpoint doesn't exist" },
+          { "id": "apiContract-13", "desc": "PATCH /api/projects/{id} - wrong method (backend uses PUT)" },
+          { "id": "apiContract-14", "desc": "POST /api/time-entries/bulk-approve - endpoint doesn't exist" },
+          { "id": "apiContract-15", "desc": "GET /api/auth/sso/saml - endpoint doesn't exist" }
+        ]
+      },
+      "totalInjected": {
+        "hallucinations": 33,
+        "deadCode": 26,
+        "apiContract": 8
+      }
+    },
+    "grandTotal": {
+      "hallucinations": 74,
+      "deadCode": 38,
+      "apiContract": 8,
+      "total": 120
+    }
+  }
+}

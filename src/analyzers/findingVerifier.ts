@@ -60,6 +60,20 @@ interface VerificationContext {
   gitAvailable: boolean;
 }
 
+/**
+ * Detect file language from extension. Used when ctx.language is "all"
+ * in full-stack projects to ensure the correct parser is used per file.
+ */
+function detectFileLanguage(filePath: string, fallback: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  switch (ext) {
+    case ".py": return "python";
+    case ".ts": case ".tsx": return "typescript";
+    case ".js": case ".jsx": case ".mjs": case ".cjs": return "javascript";
+    default: return fallback === "all" ? "typescript" : fallback;
+  }
+}
+
 interface FileBatch {
   filePath: string;
   findings: (ValidationIssue | DeadCodeIssue)[];
@@ -358,7 +372,8 @@ async function verifyHallucinationWithCache(
 
     case "dependencyHallucination": {
       const pkgName = extractPackageName(issue.message);
-      const existsOnNpm = await checkPackageExistsOnRegistry(pkgName, ctx.language);
+      const fileLang = issue.file ? detectFileLanguage(issue.file, ctx.language) : ctx.language;
+      const existsOnNpm = await checkPackageExistsOnRegistry(pkgName, fileLang);
       
       if (!existsOnNpm) {
         status = "confirmed";
@@ -827,7 +842,8 @@ async function checkSymbolDefinedLocally(
 
     // Parse local symbols from the file itself (includes params when enabled)
     const { extractSymbolsAST } = await import("../tools/validation/extractors/index.js");
-    const symbols = extractSymbolsAST(cache.content, issue.file, ctx.language, {
+    const fileLang = detectFileLanguage(issue.file, ctx.language);
+    const symbols = extractSymbolsAST(cache.content, issue.file, fileLang, {
       includeParameterSymbols: true,
     });
 

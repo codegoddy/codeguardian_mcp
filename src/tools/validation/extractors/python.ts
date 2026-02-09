@@ -23,6 +23,14 @@ import type {
 } from "../types.js";
 import { isPythonBuiltin, isPythonBuiltinType } from "../builtins.js";
 
+// Common project-internal import prefixes for Python
+const INTERNAL_PREFIXES = [
+  "app.", "src.", "tests.", "test.", "lib.", "core.", "api.",
+  "models.", "services.", "utils.", "helpers.", "config.",
+  "schemas.", "routers.", "routes.", "views.", "controllers.",
+  "handlers.", "middleware.", "database.", "db.",
+];
+
 // ============================================================================
 // Main Extraction Functions
 // ============================================================================
@@ -133,7 +141,20 @@ export function extractPythonSymbols(
 
     case "assignment": {
       // Top-level assignments (module variables)
-      if (node.parent?.type === "module") {
+      // In tree-sitter-python, module-level assignments are:
+      //   module > expression_statement > assignment
+      const isModuleLevel =
+        node.parent?.type === "module" ||
+        (node.parent?.type === "expression_statement" &&
+          node.parent?.parent?.type === "module");
+      // Class-level assignments (class attributes)
+      const isClassLevel =
+        !isModuleLevel &&
+        currentClass !== null &&
+        (node.parent?.type === "expression_statement" &&
+          node.parent?.parent?.type === "block" &&
+          node.parent?.parent?.parent?.type === "class_definition");
+      if (isModuleLevel || isClassLevel) {
         const leftNode = node.childForFieldName("left");
         if (leftNode?.type === "identifier") {
           const name = getText(leftNode, code);
@@ -143,6 +164,8 @@ export function extractPythonSymbols(
             file: filePath,
             line: node.startPosition.row + 1,
             column: node.startPosition.column,
+            isExported: isModuleLevel,
+            scope: isClassLevel ? currentClass || undefined : undefined,
           });
         }
       }
@@ -450,16 +473,37 @@ export function extractPythonImports(
 
   switch (node.type) {
     case "import_statement": {
-      // import module
-      const nameNode = node.childForFieldName("name");
-      if (nameNode) {
-        const module = getText(nameNode, code);
-        imports.push({
-          module,
-          names: [{ imported: module, local: module }],
-          isExternal: !module.startsWith("."),
-          line: node.startPosition.row + 1,
-        });
+      // import module  OR  import module as alias
+      for (const child of node.children) {
+        if (!child) continue;
+        if (child.type === "dotted_name") {
+          // Simple: import json, import app.models
+          const module = getText(child, code);
+          const isInternal = module.startsWith(".") ||
+            INTERNAL_PREFIXES.some((prefix) => module.startsWith(prefix) || module === prefix.slice(0, -1));
+          imports.push({
+            module,
+            names: [{ imported: module, local: module }],
+            isExternal: !isInternal,
+            line: node.startPosition.row + 1,
+          });
+        } else if (child.type === "aliased_import") {
+          // Aliased: import sqlalchemy as sa
+          const nameNode = child.childForFieldName("name");
+          const aliasNode = child.childForFieldName("alias");
+          if (nameNode) {
+            const module = getText(nameNode, code);
+            const local = aliasNode ? getText(aliasNode, code) : module;
+            const isInternal = module.startsWith(".") ||
+              INTERNAL_PREFIXES.some((prefix) => module.startsWith(prefix) || module === prefix.slice(0, -1));
+            imports.push({
+              module,
+              names: [{ imported: module, local }],
+              isExternal: !isInternal,
+              line: node.startPosition.row + 1,
+            });
+          }
+        }
       }
       break;
     }
@@ -492,32 +536,9 @@ export function extractPythonImports(
         // Internal imports in Python:
         // - Relative imports: from . import x, from .. import x
         // - Common project prefixes: app., src., tests., lib., core., api., models., services., etc.
-        const internalPrefixes = [
-          "app.",
-          "src.",
-          "tests.",
-          "test.",
-          "lib.",
-          "core.",
-          "api.",
-          "models.",
-          "services.",
-          "utils.",
-          "helpers.",
-          "config.",
-          "schemas.",
-          "routers.",
-          "routes.",
-          "views.",
-          "controllers.",
-          "handlers.",
-          "middleware.",
-          "database.",
-          "db.",
-        ];
         const isInternal =
           module.startsWith(".") ||
-          internalPrefixes.some((prefix) => module.startsWith(prefix));
+          INTERNAL_PREFIXES.some((prefix) => module.startsWith(prefix) || module === prefix.slice(0, -1));
         const isExternal = !isInternal;
 
         imports.push({

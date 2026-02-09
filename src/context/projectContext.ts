@@ -1144,6 +1144,8 @@ async function updateFileInContext(
         let resolved: string | null = null;
         if (imp.isRelative) {
           resolved = resolveImport(imp.source, filePath, allFiles);
+        } else if (!imp.isExternal && fileInfo.language === "python") {
+          resolved = resolvePythonImport(imp.source, context.projectPath, allFiles);
         } else {
           resolved = resolvePathAlias(imp.source, pathAliases, allFiles);
         }
@@ -1762,14 +1764,43 @@ function extractPythonSymbolsAST(
     const astSymbols = extractSymbolsAST(content, filePath, "python");
 
     for (const sym of astSymbols) {
+      let kind: SymbolInfo["kind"];
+      switch (sym.type) {
+        case "class":
+          kind = "class";
+          break;
+        case "method":
+          kind = "method";
+          break;
+        case "variable":
+          kind = "variable";
+          break;
+        default:
+          kind = "function";
+      }
+
+      // In Python, names not starting with _ are public (exported)
+      const isExported = sym.isExported ?? !sym.name.startsWith("_");
+
       fileInfo.symbols.push({
         name: sym.name,
-        kind: sym.type === "class" ? "class" : "function",
+        kind,
         line: sym.line,
-        exported: !sym.name.startsWith("_"),
+        exported: isExported,
         async: sym.isAsync,
         params: sym.params?.map((p) => ({ name: p })),
+        scope: sym.scope,
       });
+
+      // Populate exports list for Python (module-level public symbols)
+      if (isExported && !sym.scope) {
+        fileInfo.exports.push({
+          name: sym.name,
+          kind: kind,
+          isDefault: false,
+          line: sym.line,
+        });
+      }
     }
   } catch (err) {
     // Fallback to regex if AST parsing fails
@@ -1899,8 +1930,11 @@ async function buildDependencyGraphAsync(
       let resolved: string | null = null;
 
       if (imp.isRelative) {
-        // Standard relative import: ./foo, ../bar
+        // Standard relative import: ./foo, ../bar, from . import x
         resolved = resolveImport(imp.source, filePath, allFiles);
+      } else if (!imp.isExternal && fileInfo.language === "python") {
+        // Python absolute import: from app.core.config import settings
+        resolved = resolvePythonImport(imp.source, context.projectPath, allFiles);
       } else {
         // Check if it's a path alias (e.g., @/services/timeEntries, ~/utils)
         resolved = resolvePathAlias(imp.source, pathAliases, allFiles);
@@ -1953,6 +1987,9 @@ function buildDependencyGraph(context: ProjectContext): void {
       if (imp.isRelative) {
         // Standard relative import: ./foo, ../bar
         resolved = resolveImport(imp.source, filePath, allFiles);
+      } else if (!imp.isExternal && fileInfo.language === "python") {
+        // Python absolute import: from app.core.config import settings
+        resolved = resolvePythonImport(imp.source, context.projectPath, allFiles);
       } else {
         // Check if it's a path alias (e.g., @/services/timeEntries, ~/utils)
         resolved = resolvePathAlias(imp.source, pathAliases, allFiles);
@@ -2148,6 +2185,40 @@ export function resolveImport(
   ]) {
     const withIndex = path.join(resolved, indexFile);
     if (allFiles.includes(withIndex)) return withIndex;
+  }
+
+  return null;
+}
+
+/**
+ * Resolve a Python dotted module path to an actual file path.
+ * e.g., "app.core.config" → "/project/app/core/config.py"
+ *       "app.db" → "/project/app/db/__init__.py"
+ */
+function resolvePythonImport(
+  modulePath: string,
+  projectPath: string,
+  allFiles: string[],
+): string | null {
+  // Convert dotted path to filesystem path: app.core.config → app/core/config
+  const parts = modulePath.split(".");
+  const relPath = parts.join("/");
+
+  // Try as .py file relative to project root
+  const asPy = path.join(projectPath, relPath + ".py");
+  if (allFiles.includes(asPy)) return asPy;
+
+  // Try as package directory with __init__.py
+  const asInit = path.join(projectPath, relPath, "__init__.py");
+  if (allFiles.includes(asInit)) return asInit;
+
+  // Try looking under common subdirs (backend/, src/, etc.)
+  for (const subdir of ["backend", "src", ""]) {
+    if (!subdir) continue;
+    const withSubdir = path.join(projectPath, subdir, relPath + ".py");
+    if (allFiles.includes(withSubdir)) return withSubdir;
+    const withSubdirInit = path.join(projectPath, subdir, relPath, "__init__.py");
+    if (allFiles.includes(withSubdirInit)) return withSubdirInit;
   }
 
   return null;

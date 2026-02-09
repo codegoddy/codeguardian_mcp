@@ -420,6 +420,7 @@ async function isSymbolUsedAnywhere(
 export async function detectDeadCode(
   context: ProjectContext,
   newCode?: string,
+  filePathFilter?: (filePath: string) => boolean,
 ): Promise<DeadCodeIssue[]> {
   const issues: DeadCodeIssue[] = [];
 
@@ -561,9 +562,8 @@ export async function detectDeadCode(
     // Check against ignore patterns
     if (isIgnored(fileInfo.relativePath, ignorePatterns)) continue;
 
-    // SKIP common libraries - removed to allow strict validation of all project code
-    // Users should use .vibeguardignore for intentional library files.
-    // const isLibraryFile = ... (removed)
+    // Apply scope filter (e.g., only backend or frontend files)
+    if (filePathFilter && !filePathFilter(filePath)) continue;
 
     // Collect from exports list
     for (const exp of fileInfo.exports) {
@@ -812,16 +812,22 @@ export async function detectDeadCode(
         }
       }
 
-      // Double-check: are ANY of this file's exports used anywhere?
+      // Double-check: are ANY of this file's exports used in OTHER files?
+      // Important: only check cross-file usage (imports, type refs, calls from other files).
+      // Do NOT use isSymbolUsedAnywhere here — its same-file scope check
+      // (isSymbolUsedInSameFileExports) falsely marks files as "used" when methods
+      // have an exported parent object, even though no other file imports from this file.
       let anyExportUsed = false;
       for (const exp of fileInfo.exports) {
-        const isUsed = await isSymbolUsedAnywhere(
-          exp.name,
-          filePath,
-          context,
-          symbolsImportedFromFile,
-        );
-        if (isUsed) {
+        // Check: Is it directly imported by another file?
+        // This is the ONLY reliable check for orphaned files because it scopes
+        // by defining file. isSymbolTypeReferenced and isSymbolCalledOrInstantiated
+        // match by NAME only, producing false positives from name collisions
+        // (e.g., "buildQueryString" used in another file from a different definition).
+        // Since importers.length === 0 (reverseImportGraph), we already know no file
+        // imports from this file, but symbolsImportedFromFile (from dependencies)
+        // provides a second opinion.
+        if (isSymbolImported(exp.name, filePath, symbolsImportedFromFile)) {
           anyExportUsed = true;
           break;
         }
@@ -895,7 +901,12 @@ export async function detectDeadCode(
     logger.info(`Dead code analysis: ${limitWarning}`);
   }
 
-  return issues.slice(0, 30);
+  // Separate orphanedFile issues from other dead code issues.
+  // Limit non-orphan issues (unusedExport, unusedFunction) to 30 for performance,
+  // but always include ALL orphanedFile entries — they are high-signal and cheap.
+  const orphanIssues = issues.filter(i => i.type === "orphanedFile");
+  const otherIssues = issues.filter(i => i.type !== "orphanedFile");
+  return [...otherIssues.slice(0, 30), ...orphanIssues];
 }
 
 /**

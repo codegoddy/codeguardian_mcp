@@ -1,0 +1,1346 @@
+{
+  "meta": {
+    "tool": "start_guardian (unified context)",
+    "projectPath": "/home/codegoddy/Desktop/codeguardian_mcp/report",
+    "scope": "frontend",
+    "contextLanguage": "all",
+    "timestamp": "2026-02-09T20:50:27.043Z",
+    "totalTimeMs": 324298,
+    "contextBuildTimeMs": 43482,
+    "deadCodeTimeMs": 182490,
+    "verificationTimeMs": 46864
+  },
+  "context": {
+    "totalFilesInUnifiedContext": 468,
+    "symbolsInUnifiedContext": 4933,
+    "contextQuality": "fair",
+    "filesScanned": 212,
+    "tsManifestPackages": 50,
+    "pyManifestPackages": 237
+  },
+  "summary": {
+    "totalConfirmedIssues": 173,
+    "hallucinations": 51,
+    "deadCode": 122,
+    "rawHallucinations": 71,
+    "rawDeadCode": 149,
+    "falsePositivesFiltered": 47
+  },
+  "hallucinations": [
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 7,
+      "message": "Imported symbol 'WorkspaceLayout' does not exist in module '@/components/layout/workspace-layout'",
+      "suggestion": "Did you mean: workspaceId, r, k?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 8,
+      "message": "Imported symbol 'ProjectFile' does not exist in module '@/contexts/project-context'",
+      "suggestion": "Did you mean: project, Project, Project?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 9,
+      "message": "Imported symbol 'useFilesBundle' does not exist in module '@/lib/api/bundles/filesBundle'",
+      "suggestion": "Did you mean: use, i, e?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 17,
+      "message": "Imported symbol 'Input' does not exist in module '@/components/ui/input'",
+      "suggestion": "Did you mean: input, inputs, inputValue?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 18,
+      "message": "Imported symbol 'Label' does not exist in module '@/components/ui/label'",
+      "suggestion": "Did you mean: label, labels, l?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 19,
+      "message": "Imported symbol 'Textarea' does not exist in module '@/components/ui/textarea'",
+      "suggestion": "Did you mean: textarea, text, t?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 27,
+      "message": "Module '../../../components/LoadingSpinner' found in import does not exist",
+      "suggestion": "Check the relative file path",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 29,
+      "message": "Imported symbol 'withPageAccess' does not exist in module '@/components/access/with-page-access'",
+      "suggestion": "Did you mean: page, i, t?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 30,
+      "message": "Imported symbol 'FileOwnershipDisplay' does not exist in module '@/components/files/file-ownership-display'",
+      "suggestion": "Did you mean: file, f, i?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentMethod",
+      "severity": "medium",
+      "file": "frontend/jest.setup.js",
+      "line": 78,
+      "message": "Method 'displayName' not found on 'MockLink' (verify manually)",
+      "suggestion": "Did you mean: usePathname, Gitlab, useAuthContext?",
+      "confidence": 70
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/app/integrations/callback/page.tsx",
+      "line": 6,
+      "message": "Imported symbol 'gitIntegrationApi' is never used",
+      "suggestion": "Remove the unused import: gitIntegrationApi",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/app/integrations/page.tsx",
+      "line": 15,
+      "message": "Imported symbol 'gitIntegrationApi' is never used",
+      "suggestion": "Remove the unused import: gitIntegrationApi",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/components/Sidebar.tsx",
+      "line": 11,
+      "message": "Imported symbol 'HelpCircle' is never used",
+      "suggestion": "Remove the unused import: HelpCircle",
+      "confidence": 98
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 32,
+      "message": "Package '@mui/material' is not installed (but exists on registry)",
+      "suggestion": "Run: npm install @mui/material",
+      "confidence": 100
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 33,
+      "message": "Package 'axios' is not installed (but exists on registry)",
+      "suggestion": "Run: npm install axios",
+      "confidence": 100
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 34,
+      "message": "Package '@apollo/client' is not installed (but exists on registry)",
+      "suggestion": "Run: npm install @apollo/client",
+      "confidence": 100
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 35,
+      "message": "Package 'socket.io-client' is not installed (but exists on registry)",
+      "suggestion": "Run: npm install socket.io-client",
+      "confidence": 100
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 36,
+      "message": "Package 'd3' is not installed (but exists on registry)",
+      "suggestion": "Run: npm install d3",
+      "confidence": 100
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 37,
+      "message": "Package 'react-beautiful-dnd' is not installed (but exists on registry)",
+      "suggestion": "Run: npm install react-beautiful-dnd",
+      "confidence": 100
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 38,
+      "message": "Package 'moment' is not installed (but exists on registry)",
+      "suggestion": "Run: npm install moment",
+      "confidence": 100
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 22,
+      "message": "Module './projects' exists but has no export named 'ProjectTimeline'",
+      "suggestion": "Did you mean: Project, Project, ProjectMetrics?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 22,
+      "message": "Module './projects' exists but has no export named 'ProjectArchive'",
+      "suggestion": "Did you mean: Project, Project, ProjectMetrics?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 23,
+      "message": "Module './auth' exists but has no export named 'BiometricAuth'",
+      "suggestion": "Did you mean: authenticatedApiCall, authenticatedApiCall, OAuthCallbackData?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 23,
+      "message": "Module './auth' exists but has no export named 'MFASetup'",
+      "suggestion": "Did you mean: register, AuthResponse, AuthResponse?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 24,
+      "message": "Module './api' exists but has no export named 'GraphQLService'",
+      "suggestion": "Did you mean: ApiService, ApiService, ApiService?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 24,
+      "message": "Module './api' exists but has no export named 'WebSocketService'",
+      "suggestion": "Did you mean: ApiService, ApiService, ApiService?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 25,
+      "message": "Module './contracts' exists but has no export named 'ContractBulkSign'",
+      "suggestion": "Did you mean: ContractTemplate, ContractTemplate, contractsApi?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 25,
+      "message": "Module './contracts' exists but has no export named 'ContractAnalytics'",
+      "suggestion": "Did you mean: ContractSignature, ContractSignature, contractsApi?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 26,
+      "message": "Module './payments' exists but has no export named 'InvoiceReconciliation'",
+      "suggestion": "Did you mean: Invoice, Invoice, sendInvoice?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 26,
+      "message": "Module './payments' exists but has no export named 'PaymentSplitConfig'",
+      "suggestion": "Did you mean: paymentsApi, paymentsApi, PaymentMethod?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentMethod",
+      "severity": "medium",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 53,
+      "message": "Method 'getAnalyticsDashboard' not found on 'projectsApi' (verify manually)",
+      "suggestion": "Did you mean: send?",
+      "confidence": 70
+    },
+    {
+      "type": "nonExistentMethod",
+      "severity": "medium",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 53,
+      "message": "Method 'getAnalyticsDashboard' not found on 'projectsApi' (verify manually)",
+      "suggestion": "Did you mean: send?",
+      "confidence": 70
+    },
+    {
+      "type": "nonExistentMethod",
+      "severity": "medium",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 56,
+      "message": "Method 'exportToCsv' not found on 'projectsApi' (verify manually)",
+      "suggestion": "Did you mean: isConnected?",
+      "confidence": 70
+    },
+    {
+      "type": "nonExistentMethod",
+      "severity": "medium",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 56,
+      "message": "Method 'exportToCsv' not found on 'projectsApi' (verify manually)",
+      "suggestion": "Did you mean: isConnected?",
+      "confidence": 70
+    },
+    {
+      "type": "nonExistentMethod",
+      "severity": "medium",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 59,
+      "message": "Method 'graphql' not found on 'ApiService' (verify manually)",
+      "suggestion": "No similar symbols found. This may be a hallucination.",
+      "confidence": 70
+    },
+    {
+      "type": "nonExistentMethod",
+      "severity": "medium",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 59,
+      "message": "Method 'graphql' not found on 'ApiService' (verify manually)",
+      "suggestion": "No similar symbols found. This may be a hallucination.",
+      "confidence": 70
+    },
+    {
+      "type": "nonExistentMethod",
+      "severity": "medium",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 62,
+      "message": "Method 'stream' not found on 'ApiService' (verify manually)",
+      "suggestion": "Did you mean: send, disconnect, isConnected?",
+      "confidence": 70
+    },
+    {
+      "type": "nonExistentMethod",
+      "severity": "medium",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 62,
+      "message": "Method 'stream' not found on 'ApiService' (verify manually)",
+      "suggestion": "Did you mean: send, disconnect, isConnected?",
+      "confidence": 70
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 11,
+      "message": "Imported symbol 'ProjectCreate' is never used",
+      "suggestion": "Remove the unused import: ProjectCreate",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 11,
+      "message": "Imported symbol 'ProjectUpdate' is never used",
+      "suggestion": "Remove the unused import: ProjectUpdate",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 11,
+      "message": "Imported symbol 'ScopeGuardrailConfig' is never used",
+      "suggestion": "Remove the unused import: ScopeGuardrailConfig",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 12,
+      "message": "Imported symbol 'LoginCredentials' is never used",
+      "suggestion": "Remove the unused import: LoginCredentials",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 12,
+      "message": "Imported symbol 'RegisterData' is never used",
+      "suggestion": "Remove the unused import: RegisterData",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 12,
+      "message": "Imported symbol 'OTPRequest' is never used",
+      "suggestion": "Remove the unused import: OTPRequest",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 13,
+      "message": "Imported symbol 'ContractTemplate' is never used",
+      "suggestion": "Remove the unused import: ContractTemplate",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 13,
+      "message": "Imported symbol 'ContractTemplateResponse' is never used",
+      "suggestion": "Remove the unused import: ContractTemplateResponse",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 14,
+      "message": "Imported symbol 'PaymentMethod' is never used",
+      "suggestion": "Remove the unused import: PaymentMethod",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 15,
+      "message": "Imported symbol 'DeliverableCreate' is never used",
+      "suggestion": "Remove the unused import: DeliverableCreate",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 15,
+      "message": "Imported symbol 'DeliverableUpdate' is never used",
+      "suggestion": "Remove the unused import: DeliverableUpdate",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 16,
+      "message": "Imported symbol 'API_BASE_URL' is never used",
+      "suggestion": "Remove the unused import: API_BASE_URL",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 44,
+      "message": "Imported symbol 'Project' is never used",
+      "suggestion": "Remove the unused import: Project",
+      "confidence": 98
+    }
+  ],
+  "deadCode": [
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "formatGhostTimestamp",
+      "file": "../frontend/src/utils/phantom-helpers.ts",
+      "message": "Export 'formatGhostTimestamp' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "parseSpectralId",
+      "file": "../frontend/src/utils/phantom-helpers.ts",
+      "message": "Export 'parseSpectralId' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "calculatePhantomHash",
+      "file": "../frontend/src/utils/phantom-helpers.ts",
+      "message": "Export 'calculatePhantomHash' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "debounceGhostEvent",
+      "file": "../frontend/src/utils/phantom-helpers.ts",
+      "message": "Export 'debounceGhostEvent' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "GHOST_PROTOCOL_VERSION",
+      "file": "../frontend/src/utils/phantom-helpers.ts",
+      "message": "Export 'GHOST_PROTOCOL_VERSION' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "SPECTRAL_COLOR_MAP",
+      "file": "../frontend/src/utils/phantom-helpers.ts",
+      "message": "Export 'SPECTRAL_COLOR_MAP' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "mergeSpectralEvents",
+      "file": "../frontend/src/utils/phantom-helpers.ts",
+      "message": "Export 'mergeSpectralEvents' is never used anywhere in the codebase"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/utils/phantom-helpers.ts",
+      "file": "../frontend/src/utils/phantom-helpers.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "cleanupOldAuthTokens",
+      "file": "../frontend/src/utils/authMigration.ts",
+      "message": "Export 'cleanupOldAuthTokens' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "hasOldAuthTokens",
+      "file": "../frontend/src/utils/authMigration.ts",
+      "message": "Export 'hasOldAuthTokens' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "getAuthStorageState",
+      "file": "../frontend/src/utils/authMigration.ts",
+      "message": "Export 'getAuthStorageState' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "clearAllAuthData",
+      "file": "../frontend/src/utils/authMigration.ts",
+      "message": "Export 'clearAllAuthData' is never used anywhere in the codebase"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/utils/authMigration.ts",
+      "file": "../frontend/src/utils/authMigration.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "disconnectNATS",
+      "file": "../frontend/src/services/nats.ts",
+      "message": "Export 'disconnectNATS' is never used anywhere in the codebase"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/services/broken-api-contracts.ts",
+      "file": "../frontend/src/services/broken-api-contracts.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/verify_settings_setup.py",
+      "file": "../backend/verify_settings_setup.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/verify_seeding.py",
+      "file": "../backend/verify_seeding.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/check_db.py",
+      "file": "../backend/check_db.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/check_columns.py",
+      "file": "../backend/check_columns.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/proxy.ts",
+      "file": "../frontend/src/proxy.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/scripts/test_webhook_simulation.py",
+      "file": "../backend/scripts/test_webhook_simulation.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/scripts/test_pdf_generation.py",
+      "file": "../backend/scripts/test_pdf_generation.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/scripts/generate_encryption_key.py",
+      "file": "../backend/scripts/generate_encryption_key.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/scripts/backfill_commit_stats.py",
+      "file": "../backend/scripts/backfill_commit_stats.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/env.py",
+      "file": "../backend/alembic/env.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/services/test-hallucinations-extreme.ts",
+      "file": "../frontend/src/services/test-hallucinations-extreme.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/hooks/useProjectBundle.ts",
+      "file": "../frontend/src/hooks/useProjectBundle.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/hooks/useNATS.ts",
+      "file": "../frontend/src/hooks/useNATS.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/hooks/useChangeRequests.ts",
+      "file": "../frontend/src/hooks/useChangeRequests.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/hooks/useAuthQueries.ts",
+      "file": "../frontend/src/hooks/useAuthQueries.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/hooks/useActiveSessions.ts",
+      "file": "../frontend/src/hooks/useActiveSessions.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/TimeTrackingDisplay.tsx",
+      "file": "../frontend/src/components/TimeTrackingDisplay.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/TimeReviewButton.tsx",
+      "file": "../frontend/src/components/TimeReviewButton.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/StickyScroll.tsx",
+      "file": "../frontend/src/components/StickyScroll.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/RetainerBalanceWidget.tsx",
+      "file": "../frontend/src/components/RetainerBalanceWidget.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/ProjectDocumentationSection.tsx",
+      "file": "../frontend/src/components/ProjectDocumentationSection.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/PhantomDashboard.tsx",
+      "file": "../frontend/src/components/PhantomDashboard.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/PaymentScheduleTab.tsx",
+      "file": "../frontend/src/components/PaymentScheduleTab.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/PaymentGate.tsx",
+      "file": "../frontend/src/components/PaymentGate.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/OTPVerification.tsx",
+      "file": "../frontend/src/components/OTPVerification.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/MilestoneSection.tsx",
+      "file": "../frontend/src/components/MilestoneSection.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/ManualTimeEntry.tsx",
+      "file": "../frontend/src/components/ManualTimeEntry.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/GitIntegration.tsx",
+      "file": "../frontend/src/components/GitIntegration.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/FAQSchema.tsx",
+      "file": "../frontend/src/components/FAQSchema.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/EditMilestoneModal.tsx",
+      "file": "../frontend/src/components/EditMilestoneModal.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/EditDeliverableModal.tsx",
+      "file": "../frontend/src/components/EditDeliverableModal.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/DeliverableDocumentation.tsx",
+      "file": "../frontend/src/components/DeliverableDocumentation.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/DeliverableCard.tsx",
+      "file": "../frontend/src/components/DeliverableCard.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/ContractSection.tsx",
+      "file": "../frontend/src/components/ContractSection.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/CommitHistory.tsx",
+      "file": "../frontend/src/components/CommitHistory.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/BudgetHistory.tsx",
+      "file": "../frontend/src/components/BudgetHistory.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/BudgetHealthWidget.tsx",
+      "file": "../frontend/src/components/BudgetHealthWidget.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/AutoPauseBanner.tsx",
+      "file": "../frontend/src/components/AutoPauseBanner.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/app/workers/__init__.py",
+      "file": "../backend/app/workers/__init__.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/app/utils/uuid_helpers.py",
+      "file": "../backend/app/utils/uuid_helpers.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/app/utils/seed_system_templates.py",
+      "file": "../backend/app/utils/seed_system_templates.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/app/services/planning_service.py",
+      "file": "../backend/app/services/planning_service.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/app/services/phantom_analytics_service.py",
+      "file": "../backend/app/services/phantom_analytics_service.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/app/services/invoice_service.py",
+      "file": "../backend/app/services/invoice_service.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/app/services/enforcement.py",
+      "file": "../backend/app/services/enforcement.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/app/services/changelog_generator.py",
+      "file": "../backend/app/services/changelog_generator.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/app/schemas/time_entry.py",
+      "file": "../backend/app/schemas/time_entry.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/app/schemas/git_integration.py",
+      "file": "../backend/app/schemas/git_integration.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/app/schemas/__init__.py",
+      "file": "../backend/app/schemas/__init__.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/app/observability/__init__.py",
+      "file": "../backend/app/observability/__init__.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/app/models/git_access_log.py",
+      "file": "../backend/app/models/git_access_log.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/app/models/auto_pause_event.py",
+      "file": "../backend/app/models/auto_pause_event.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/app/middleware/subscription_middleware.py",
+      "file": "../backend/app/middleware/subscription_middleware.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/app/middleware/csrf_middleware.py",
+      "file": "../backend/app/middleware/csrf_middleware.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/app/middleware/cors_validation_middleware.py",
+      "file": "../backend/app/middleware/cors_validation_middleware.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/app/middleware/auth_middleware.py",
+      "file": "../backend/app/middleware/auth_middleware.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/zd6789012345q_merge_all_heads.py",
+      "file": "../backend/alembic/versions/zd6789012345q_merge_all_heads.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/zb456789012no_make_hashed_password_nullable.py",
+      "file": "../backend/alembic/versions/zb456789012no_make_hashed_password_nullable.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/za345678901mn_add_developer_signature_fields.py",
+      "file": "../backend/alembic/versions/za345678901mn_add_developer_signature_fields.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/z234567890lm_add_payment_milestones_table.py",
+      "file": "../backend/alembic/versions/z234567890lm_add_payment_milestones_table.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/y123456789kl_add_ai_estimation_fields.py",
+      "file": "../backend/alembic/versions/y123456789kl_add_ai_estimation_fields.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/x012345678jk_add_attachments_and_preview_links.py",
+      "file": "../backend/alembic/versions/x012345678jk_add_attachments_and_preview_links.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/w901234567ij_add_waitlist_table.py",
+      "file": "../backend/alembic/versions/w901234567ij_add_waitlist_table.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/v890123456hi_add_deadline_priority_to_deliverables.py",
+      "file": "../backend/alembic/versions/v890123456hi_add_deadline_priority_to_deliverables.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/u789012345gh_add_planning_and_calendar_integration.py",
+      "file": "../backend/alembic/versions/u789012345gh_add_planning_and_calendar_integration.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/t678901234fg_add_developer_notes_to_deliverables.py",
+      "file": "../backend/alembic/versions/t678901234fg_add_developer_notes_to_deliverables.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/supabase001_setup_auth_sync.py",
+      "file": "../backend/alembic/versions/supabase001_setup_auth_sync.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/s567890123ef_add_repo_purpose.py",
+      "file": "../backend/alembic/versions/s567890123ef_add_repo_purpose.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/r456789012cd_add_work_type_and_notes.py",
+      "file": "../backend/alembic/versions/r456789012cd_add_work_type_and_notes.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/q345678901bc_add_auto_pause_columns_to_time_sessions.py",
+      "file": "../backend/alembic/versions/q345678901bc_add_auto_pause_columns_to_time_sessions.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/p234567890ab_add_cli_tokens.py",
+      "file": "../backend/alembic/versions/p234567890ab_add_cli_tokens.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/opt1767316611_optimize_database_queries.py",
+      "file": "../backend/alembic/versions/opt1767316611_optimize_database_queries.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/o123456789ef_add_cli_time_sessions.py",
+      "file": "../backend/alembic/versions/o123456789ef_add_cli_time_sessions.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/n012345678de_add_git_integration.py",
+      "file": "../backend/alembic/versions/n012345678de_add_git_integration.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/m901234567cd_add_performance_indexes.py",
+      "file": "../backend/alembic/versions/m901234567cd_add_performance_indexes.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/l789012345fg_add_template_type_to_templates.py",
+      "file": "../backend/alembic/versions/l789012345fg_add_template_type_to_templates.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/k678901234ef_add_time_tracker_integrations.py",
+      "file": "../backend/alembic/versions/k678901234ef_add_time_tracker_integrations.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/j567890123de_add_start_date_to_projects.py",
+      "file": "../backend/alembic/versions/j567890123de_add_start_date_to_projects.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/i456789012cd_add_payment_methods_table.py",
+      "file": "../backend/alembic/versions/i456789012cd_add_payment_methods_table.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/f28b91a3872b_initial_migration_add_user_table.py",
+      "file": "../backend/alembic/versions/f28b91a3872b_initial_migration_add_user_table.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/f1234567890a_add_due_date_to_projects.py",
+      "file": "../backend/alembic/versions/f1234567890a_add_due_date_to_projects.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/eb1d55fcb1e0_add_contract_management_tables.py",
+      "file": "../backend/alembic/versions/eb1d55fcb1e0_add_contract_management_tables.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/e94a0a099ce1_add_template_tracking_to_projects.py",
+      "file": "../backend/alembic/versions/e94a0a099ce1_add_template_tracking_to_projects.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/dedf1f685a81_add_core_tables_clients_projects_.py",
+      "file": "../backend/alembic/versions/dedf1f685a81_add_core_tables_clients_projects_.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/c1d2e3f4g5h6_add_client_portal_tables.py",
+      "file": "../backend/alembic/versions/c1d2e3f4g5h6_add_client_portal_tables.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/bb234567890c_add_support_conversations_table.py",
+      "file": "../backend/alembic/versions/bb234567890c_add_support_conversations_table.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/aa123456789b_add_activities_notifications.py",
+      "file": "../backend/alembic/versions/aa123456789b_add_activities_notifications.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/a2f800308cef_add_milestones_table.py",
+      "file": "../backend/alembic/versions/a2f800308cef_add_milestones_table.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/8a07ba2451ea_add_token_preview_to_cli_tokens.py",
+      "file": "../backend/alembic/versions/8a07ba2451ea_add_token_preview_to_cli_tokens.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/80f6c28b6114_add_oauth_fields.py",
+      "file": "../backend/alembic/versions/80f6c28b6114_add_oauth_fields.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/5fc9dada7fad_add_payment_and_subscription_tables.py",
+      "file": "../backend/alembic/versions/5fc9dada7fad_add_payment_and_subscription_tables.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/56b0e8597b96_merge_all_heads.py",
+      "file": "../backend/alembic/versions/56b0e8597b96_merge_all_heads.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/2b55a65f6ca0_merge_auth_and_sign_heads.py",
+      "file": "../backend/alembic/versions/2b55a65f6ca0_merge_auth_and_sign_heads.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/149dd9bb8735_final_merge.py",
+      "file": "../backend/alembic/versions/149dd9bb8735_final_merge.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/0ad9ded5b70e_add_currency_to_time_entries.py",
+      "file": "../backend/alembic/versions/0ad9ded5b70e_add_currency_to_time_entries.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/versions/00eedacd1b97_add_automation_and_settings_tables.py",
+      "file": "../backend/alembic/versions/00eedacd1b97_add_automation_and_settings_tables.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/hooks/nats/useProjectEvents.ts",
+      "file": "../frontend/src/hooks/nats/useProjectEvents.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/ui/Spinner.tsx",
+      "file": "../frontend/src/components/ui/Spinner.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/ui/SkeletonLoader.tsx",
+      "file": "../frontend/src/components/ui/SkeletonLoader.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/ui/ProgressBar.tsx",
+      "file": "../frontend/src/components/ui/ProgressBar.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/ui/FormExample.tsx",
+      "file": "../frontend/src/components/ui/FormExample.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/ui/ErrorBoundary.tsx",
+      "file": "../frontend/src/components/ui/ErrorBoundary.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/ui/CommitReviewModal.tsx",
+      "file": "../frontend/src/components/ui/CommitReviewModal.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/auth/VerifyOTP.tsx",
+      "file": "../frontend/src/components/auth/VerifyOTP.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/auth/SignupForm.tsx",
+      "file": "../frontend/src/components/auth/SignupForm.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/auth/LoginForm.tsx",
+      "file": "../frontend/src/components/auth/LoginForm.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/auth/LinkedIdentities.tsx",
+      "file": "../frontend/src/components/auth/LinkedIdentities.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    }
+  ]
+}

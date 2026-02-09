@@ -1,0 +1,873 @@
+{
+  "meta": {
+    "tool": "start_validation (per-directory)",
+    "projectPath": "/home/codegoddy/Desktop/codeguardian_mcp/report/frontend",
+    "scope": "frontend",
+    "language": "typescript",
+    "timestamp": "2026-02-09T20:43:46.076Z",
+    "totalTimeMs": 439153,
+    "contextBuildTimeMs": 21534,
+    "deadCodeTimeMs": 22969,
+    "verificationTimeMs": 6708
+  },
+  "context": {
+    "filesIndexed": 199,
+    "symbolsInContext": 2473,
+    "filesScanned": 212
+  },
+  "summary": {
+    "totalConfirmedIssues": 103,
+    "hallucinations": 61,
+    "deadCode": 42,
+    "rawHallucinations": 81,
+    "rawDeadCode": 55,
+    "falsePositivesFiltered": 33
+  },
+  "hallucinations": [
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 7,
+      "message": "Imported symbol 'WorkspaceLayout' does not exist in module '@/components/layout/workspace-layout'",
+      "suggestion": "Did you mean: r, k, s?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 8,
+      "message": "Imported symbol 'ProjectFile' does not exist in module '@/contexts/project-context'",
+      "suggestion": "Did you mean: project, Project, project?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 9,
+      "message": "Imported symbol 'useFilesBundle' does not exist in module '@/lib/api/bundles/filesBundle'",
+      "suggestion": "Did you mean: i, e, s?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 17,
+      "message": "Imported symbol 'Input' does not exist in module '@/components/ui/input'",
+      "suggestion": "Did you mean: input, inputs, inputValue?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 18,
+      "message": "Imported symbol 'Label' does not exist in module '@/components/ui/label'",
+      "suggestion": "Did you mean: label, labels, l?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 19,
+      "message": "Imported symbol 'Textarea' does not exist in module '@/components/ui/textarea'",
+      "suggestion": "Did you mean: textarea, text, t?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 27,
+      "message": "Module '../../../components/LoadingSpinner' found in import does not exist",
+      "suggestion": "Check the relative file path",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 29,
+      "message": "Imported symbol 'withPageAccess' does not exist in module '@/components/access/with-page-access'",
+      "suggestion": "Did you mean: i, t, p?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 30,
+      "message": "Imported symbol 'FileOwnershipDisplay' does not exist in module '@/components/files/file-ownership-display'",
+      "suggestion": "Did you mean: file, f, i?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/e2e/auth.spec.ts",
+      "line": 1,
+      "message": "Module './base' found in import does not exist",
+      "suggestion": "Check the relative file path",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/e2e/auth.spec.ts",
+      "line": 1,
+      "message": "Module './base' found in import does not exist",
+      "suggestion": "Check the relative file path",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/e2e/contracts.spec.ts",
+      "line": 1,
+      "message": "Module './base' found in import does not exist",
+      "suggestion": "Check the relative file path",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/e2e/contracts.spec.ts",
+      "line": 1,
+      "message": "Module './base' found in import does not exist",
+      "suggestion": "Check the relative file path",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/e2e/invoices.spec.ts",
+      "line": 1,
+      "message": "Module './base' found in import does not exist",
+      "suggestion": "Check the relative file path",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/e2e/invoices.spec.ts",
+      "line": 1,
+      "message": "Module './base' found in import does not exist",
+      "suggestion": "Check the relative file path",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/e2e/payments.spec.ts",
+      "line": 1,
+      "message": "Module './base' found in import does not exist",
+      "suggestion": "Check the relative file path",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/e2e/payments.spec.ts",
+      "line": 1,
+      "message": "Module './base' found in import does not exist",
+      "suggestion": "Check the relative file path",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/e2e/projects.spec.ts",
+      "line": 1,
+      "message": "Module './base' found in import does not exist",
+      "suggestion": "Check the relative file path",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/e2e/projects.spec.ts",
+      "line": 1,
+      "message": "Module './base' found in import does not exist",
+      "suggestion": "Check the relative file path",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentMethod",
+      "severity": "medium",
+      "file": "frontend/jest.setup.js",
+      "line": 78,
+      "message": "Method 'displayName' not found on 'MockLink' (verify manually)",
+      "suggestion": "Did you mean: usePathname, Gitlab, useAuthContext?",
+      "confidence": 70
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/app/integrations/callback/page.tsx",
+      "line": 6,
+      "message": "Imported symbol 'gitIntegrationApi' is never used",
+      "suggestion": "Remove the unused import: gitIntegrationApi",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/app/integrations/page.tsx",
+      "line": 15,
+      "message": "Imported symbol 'gitIntegrationApi' is never used",
+      "suggestion": "Remove the unused import: gitIntegrationApi",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/components/Sidebar.tsx",
+      "line": 11,
+      "message": "Imported symbol 'HelpCircle' is never used",
+      "suggestion": "Remove the unused import: HelpCircle",
+      "confidence": 98
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 32,
+      "message": "Package '@mui/material' is not installed (but exists on registry)",
+      "suggestion": "Run: npm install @mui/material",
+      "confidence": 100
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 33,
+      "message": "Package 'axios' is not installed (but exists on registry)",
+      "suggestion": "Run: npm install axios",
+      "confidence": 100
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 34,
+      "message": "Package '@apollo/client' is not installed (but exists on registry)",
+      "suggestion": "Run: npm install @apollo/client",
+      "confidence": 100
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 35,
+      "message": "Package 'socket.io-client' is not installed (but exists on registry)",
+      "suggestion": "Run: npm install socket.io-client",
+      "confidence": 100
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 36,
+      "message": "Package 'd3' is not installed (but exists on registry)",
+      "suggestion": "Run: npm install d3",
+      "confidence": 100
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 37,
+      "message": "Package 'react-beautiful-dnd' is not installed (but exists on registry)",
+      "suggestion": "Run: npm install react-beautiful-dnd",
+      "confidence": 100
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 38,
+      "message": "Package 'moment' is not installed (but exists on registry)",
+      "suggestion": "Run: npm install moment",
+      "confidence": 100
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 22,
+      "message": "Module './projects' exists but has no export named 'ProjectTimeline'",
+      "suggestion": "Did you mean: Project, Project, ProjectMetrics?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 22,
+      "message": "Module './projects' exists but has no export named 'ProjectArchive'",
+      "suggestion": "Did you mean: Project, Project, ProjectMetrics?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 23,
+      "message": "Module './auth' exists but has no export named 'BiometricAuth'",
+      "suggestion": "Did you mean: authenticatedApiCall, authenticatedApiCall, OAuthCallbackData?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 23,
+      "message": "Module './auth' exists but has no export named 'MFASetup'",
+      "suggestion": "Did you mean: register, AuthResponse, AuthResponse?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 24,
+      "message": "Module './api' exists but has no export named 'GraphQLService'",
+      "suggestion": "Did you mean: ApiService, ApiService, ApiService?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 24,
+      "message": "Module './api' exists but has no export named 'WebSocketService'",
+      "suggestion": "Did you mean: ApiService, ApiService, ApiService?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 25,
+      "message": "Module './contracts' exists but has no export named 'ContractBulkSign'",
+      "suggestion": "Did you mean: ContractTemplate, ContractTemplate, contractsApi?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 25,
+      "message": "Module './contracts' exists but has no export named 'ContractAnalytics'",
+      "suggestion": "Did you mean: ContractSignature, ContractSignature, contractsApi?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 26,
+      "message": "Module './payments' exists but has no export named 'InvoiceReconciliation'",
+      "suggestion": "Did you mean: Invoice, Invoice, sendInvoice?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 26,
+      "message": "Module './payments' exists but has no export named 'PaymentSplitConfig'",
+      "suggestion": "Did you mean: paymentsApi, paymentsApi, PaymentMethod?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentMethod",
+      "severity": "medium",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 53,
+      "message": "Method 'getAnalyticsDashboard' not found on 'projectsApi' (verify manually)",
+      "suggestion": "Did you mean: send?",
+      "confidence": 70
+    },
+    {
+      "type": "nonExistentMethod",
+      "severity": "medium",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 53,
+      "message": "Method 'getAnalyticsDashboard' not found on 'projectsApi' (verify manually)",
+      "suggestion": "Did you mean: send?",
+      "confidence": 70
+    },
+    {
+      "type": "nonExistentMethod",
+      "severity": "medium",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 56,
+      "message": "Method 'exportToCsv' not found on 'projectsApi' (verify manually)",
+      "suggestion": "Did you mean: isConnected?",
+      "confidence": 70
+    },
+    {
+      "type": "nonExistentMethod",
+      "severity": "medium",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 56,
+      "message": "Method 'exportToCsv' not found on 'projectsApi' (verify manually)",
+      "suggestion": "Did you mean: isConnected?",
+      "confidence": 70
+    },
+    {
+      "type": "nonExistentMethod",
+      "severity": "medium",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 59,
+      "message": "Method 'graphql' not found on 'ApiService' (verify manually)",
+      "suggestion": "No similar symbols found. This may be a hallucination.",
+      "confidence": 70
+    },
+    {
+      "type": "nonExistentMethod",
+      "severity": "medium",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 59,
+      "message": "Method 'graphql' not found on 'ApiService' (verify manually)",
+      "suggestion": "No similar symbols found. This may be a hallucination.",
+      "confidence": 70
+    },
+    {
+      "type": "nonExistentMethod",
+      "severity": "medium",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 62,
+      "message": "Method 'stream' not found on 'ApiService' (verify manually)",
+      "suggestion": "Did you mean: send, disconnect, isConnected?",
+      "confidence": 70
+    },
+    {
+      "type": "nonExistentMethod",
+      "severity": "medium",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 62,
+      "message": "Method 'stream' not found on 'ApiService' (verify manually)",
+      "suggestion": "Did you mean: send, disconnect, isConnected?",
+      "confidence": 70
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 11,
+      "message": "Imported symbol 'ProjectCreate' is never used",
+      "suggestion": "Remove the unused import: ProjectCreate",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 11,
+      "message": "Imported symbol 'ProjectUpdate' is never used",
+      "suggestion": "Remove the unused import: ProjectUpdate",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 11,
+      "message": "Imported symbol 'ScopeGuardrailConfig' is never used",
+      "suggestion": "Remove the unused import: ScopeGuardrailConfig",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 12,
+      "message": "Imported symbol 'LoginCredentials' is never used",
+      "suggestion": "Remove the unused import: LoginCredentials",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 12,
+      "message": "Imported symbol 'RegisterData' is never used",
+      "suggestion": "Remove the unused import: RegisterData",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 12,
+      "message": "Imported symbol 'OTPRequest' is never used",
+      "suggestion": "Remove the unused import: OTPRequest",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 13,
+      "message": "Imported symbol 'ContractTemplate' is never used",
+      "suggestion": "Remove the unused import: ContractTemplate",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 13,
+      "message": "Imported symbol 'ContractTemplateResponse' is never used",
+      "suggestion": "Remove the unused import: ContractTemplateResponse",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 14,
+      "message": "Imported symbol 'PaymentMethod' is never used",
+      "suggestion": "Remove the unused import: PaymentMethod",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 15,
+      "message": "Imported symbol 'DeliverableCreate' is never used",
+      "suggestion": "Remove the unused import: DeliverableCreate",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 15,
+      "message": "Imported symbol 'DeliverableUpdate' is never used",
+      "suggestion": "Remove the unused import: DeliverableUpdate",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 16,
+      "message": "Imported symbol 'API_BASE_URL' is never used",
+      "suggestion": "Remove the unused import: API_BASE_URL",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/services/test-hallucinations-extreme.ts",
+      "line": 44,
+      "message": "Imported symbol 'Project' is never used",
+      "suggestion": "Remove the unused import: Project",
+      "confidence": 98
+    }
+  ],
+  "deadCode": [
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "formatGhostTimestamp",
+      "file": "../src/utils/phantom-helpers.ts",
+      "message": "Export 'formatGhostTimestamp' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "parseSpectralId",
+      "file": "../src/utils/phantom-helpers.ts",
+      "message": "Export 'parseSpectralId' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "calculatePhantomHash",
+      "file": "../src/utils/phantom-helpers.ts",
+      "message": "Export 'calculatePhantomHash' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "debounceGhostEvent",
+      "file": "../src/utils/phantom-helpers.ts",
+      "message": "Export 'debounceGhostEvent' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "GHOST_PROTOCOL_VERSION",
+      "file": "../src/utils/phantom-helpers.ts",
+      "message": "Export 'GHOST_PROTOCOL_VERSION' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "SPECTRAL_COLOR_MAP",
+      "file": "../src/utils/phantom-helpers.ts",
+      "message": "Export 'SPECTRAL_COLOR_MAP' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "mergeSpectralEvents",
+      "file": "../src/utils/phantom-helpers.ts",
+      "message": "Export 'mergeSpectralEvents' is never used anywhere in the codebase"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/utils/phantom-helpers.ts",
+      "file": "../src/utils/phantom-helpers.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "cleanupOldAuthTokens",
+      "file": "../src/utils/authMigration.ts",
+      "message": "Export 'cleanupOldAuthTokens' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "hasOldAuthTokens",
+      "file": "../src/utils/authMigration.ts",
+      "message": "Export 'hasOldAuthTokens' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "getAuthStorageState",
+      "file": "../src/utils/authMigration.ts",
+      "message": "Export 'getAuthStorageState' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "clearAllAuthData",
+      "file": "../src/utils/authMigration.ts",
+      "message": "Export 'clearAllAuthData' is never used anywhere in the codebase"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/utils/authMigration.ts",
+      "file": "../src/utils/authMigration.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "disconnectNATS",
+      "file": "../src/services/nats.ts",
+      "message": "Export 'disconnectNATS' is never used anywhere in the codebase"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/services/broken-api-contracts.ts",
+      "file": "../src/services/broken-api-contracts.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/proxy.ts",
+      "file": "../src/proxy.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/services/test-hallucinations-extreme.ts",
+      "file": "../src/services/test-hallucinations-extreme.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/hooks/useProjectBundle.ts",
+      "file": "../src/hooks/useProjectBundle.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/hooks/useNATS.ts",
+      "file": "../src/hooks/useNATS.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/hooks/useChangeRequests.ts",
+      "file": "../src/hooks/useChangeRequests.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/hooks/useAuthQueries.ts",
+      "file": "../src/hooks/useAuthQueries.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/hooks/useActiveSessions.ts",
+      "file": "../src/hooks/useActiveSessions.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/components/TimeTrackingDisplay.tsx",
+      "file": "../src/components/TimeTrackingDisplay.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/components/TimeReviewButton.tsx",
+      "file": "../src/components/TimeReviewButton.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/components/StickyScroll.tsx",
+      "file": "../src/components/StickyScroll.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/components/ProjectDocumentationSection.tsx",
+      "file": "../src/components/ProjectDocumentationSection.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/components/PhantomDashboard.tsx",
+      "file": "../src/components/PhantomDashboard.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/components/PaymentGate.tsx",
+      "file": "../src/components/PaymentGate.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/components/OTPVerification.tsx",
+      "file": "../src/components/OTPVerification.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/components/ManualTimeEntry.tsx",
+      "file": "../src/components/ManualTimeEntry.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/components/GitIntegration.tsx",
+      "file": "../src/components/GitIntegration.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/components/FAQSchema.tsx",
+      "file": "../src/components/FAQSchema.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/components/DeliverableDocumentation.tsx",
+      "file": "../src/components/DeliverableDocumentation.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/components/ContractSection.tsx",
+      "file": "../src/components/ContractSection.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/components/CommitHistory.tsx",
+      "file": "../src/components/CommitHistory.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/components/BudgetHealthWidget.tsx",
+      "file": "../src/components/BudgetHealthWidget.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/hooks/nats/useProjectEvents.ts",
+      "file": "../src/hooks/nats/useProjectEvents.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/components/ui/SkeletonLoader.tsx",
+      "file": "../src/components/ui/SkeletonLoader.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/components/ui/ProgressBar.tsx",
+      "file": "../src/components/ui/ProgressBar.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/components/ui/FormExample.tsx",
+      "file": "../src/components/ui/FormExample.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/components/ui/ErrorBoundary.tsx",
+      "file": "../src/components/ui/ErrorBoundary.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "src/components/ui/CommitReviewModal.tsx",
+      "file": "../src/components/ui/CommitReviewModal.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    }
+  ]
+}

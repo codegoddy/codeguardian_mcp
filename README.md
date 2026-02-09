@@ -290,6 +290,7 @@ Validates code immediately after generation with sub-second response times
 
 ## Limitations
 
+- **No Python type inference** — CodeGuardian uses static AST analysis, not a type system. It cannot resolve types through variable assignments, function return values, or chained calls. For example, if `db.query(User)` returns a `Query` object and you call `.filter()` on it, CodeGuardian cannot verify that `.filter()` is a valid method because it doesn't track the return type of `db.query()`. This would require building a mini mypy-style type checker, which is out of scope. Python method calls on dynamically-typed variables are skipped to avoid false positives.
 - Doesn't catch logic errors (that's still on you)
 - Dynamic code (`eval`, reflection) can't be tracked
 - Method calls on untyped objects may be skipped to avoid false positives

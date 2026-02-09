@@ -179,10 +179,13 @@ export class AutoValidator {
     // Load manifests for all detected languages
     logger.info("Loading dependency manifests...");
     if (this.isFullStack) {
-      // Full-stack: load both TS/JS and Python manifests
-      this.tsManifest = await loadManifestDependencies(this.projectPath, "typescript");
-      this.pyManifest = await loadManifestDependencies(this.projectPath, "python");
-      this.pythonExports = await loadPythonModuleExports(this.projectPath);
+      // Full-stack: load manifests from the correct subdirectories
+      // (e.g., frontend/package.json and backend/requirements.txt)
+      const tsRoot = this.projectStructure?.frontend || this.projectPath;
+      const pyRoot = this.projectStructure?.backend || this.projectPath;
+      this.tsManifest = await loadManifestDependencies(tsRoot, "typescript");
+      this.pyManifest = await loadManifestDependencies(pyRoot, "python");
+      this.pythonExports = await loadPythonModuleExports(pyRoot);
       // Keep this.manifest as the "primary" for backward compat
       this.manifest = this.language === "python" ? this.pyManifest : this.tsManifest;
     } else {
@@ -232,6 +235,8 @@ export class AutoValidator {
     const fs = await import("fs/promises");
     let hasPython = false;
     let hasTypeScript = false;
+    let pythonRoot: string | undefined;
+    let tsRoot: string | undefined;
 
     // Quick heuristic: check for common full-stack markers
     const markers = [
@@ -264,12 +269,48 @@ export class AutoValidator {
       try {
         const stat = await fs.stat(path.join(this.projectPath, check.path));
         if (stat.isDirectory()) {
-          if (check.lang === "python") hasPython = true;
-          if (check.lang === "typescript") hasTypeScript = true;
+          if (check.lang === "python" && !pythonRoot) {
+            hasPython = true;
+            pythonRoot = path.join(this.projectPath, check.path);
+          }
+          if (check.lang === "typescript" && !tsRoot) {
+            hasTypeScript = true;
+            tsRoot = path.join(this.projectPath, check.path);
+          }
         }
       } catch {
         // Not found
       }
+    }
+
+    // For subdirectories, also check if manifests exist inside them
+    // (e.g., backend/requirements.txt, frontend/package.json)
+    if (pythonRoot && !hasPython) {
+      for (const m of ["requirements.txt", "pyproject.toml", "Pipfile"]) {
+        try {
+          await fs.access(path.join(pythonRoot, m));
+          hasPython = true;
+          break;
+        } catch { /* Not found */ }
+      }
+    }
+    if (tsRoot && !hasTypeScript) {
+      for (const m of ["package.json", "tsconfig.json"]) {
+        try {
+          await fs.access(path.join(tsRoot, m));
+          hasTypeScript = true;
+          break;
+        } catch { /* Not found */ }
+      }
+    }
+
+    // Store detected structure for manifest loading and scope resolution
+    if (hasPython && hasTypeScript) {
+      this.projectStructure = {
+        backend: pythonRoot || this.projectPath,
+        frontend: tsRoot || this.projectPath,
+      };
+      logger.info(`Full-stack structure detected: backend=${pythonRoot || this.projectPath}, frontend=${tsRoot || this.projectPath}`);
     }
 
     return hasPython && hasTypeScript;
@@ -434,7 +475,21 @@ export class AutoValidator {
       }
 
       // Run dead code detection on existing codebase
-      const deadCodeIssues = await detectDeadCode(context);
+      // For full-stack projects, run per-scope to avoid hitting the export cap
+      let deadCodeIssues;
+      if (this.isFullStack && this.projectStructure) {
+        const backendRoot = this.projectStructure.backend!;
+        const frontendRoot = this.projectStructure.frontend!;
+        logger.info(`Running dead code detection per-scope: backend=${backendRoot}, frontend=${frontendRoot}`);
+        const [backendDead, frontendDead] = await Promise.all([
+          detectDeadCode(context, undefined, (fp) => fp.startsWith(backendRoot)),
+          detectDeadCode(context, undefined, (fp) => fp.startsWith(frontendRoot)),
+        ]);
+        deadCodeIssues = [...backendDead, ...frontendDead];
+        logger.info(`Dead code per-scope: backend=${backendDead.length}, frontend=${frontendDead.length}`);
+      } else {
+        deadCodeIssues = await detectDeadCode(context);
+      }
 
       // Verify findings to eliminate false positives
       // Use "all" for full-stack projects so verification understands both languages

@@ -222,6 +222,7 @@ export function buildSymbolTable(
         line: def.symbol.line,
         params: def.symbol.params?.map((p) => p.name),
         paramCount: def.symbol.params?.length,
+        scope: def.symbol.scope,
       });
     }
   }
@@ -528,6 +529,23 @@ export function validateSymbols(
               resolvedFile = pyFile;
             } else if (context.files.has(pyInit)) {
               resolvedFile = pyInit;
+            } else {
+              // Full-stack fallback: the Python root may be a subdirectory
+              // (e.g., report/backend/ instead of report/). Walk up from the
+              // file being validated to find the directory that resolves the import.
+              let tryDir = path.dirname(filePath);
+              while (tryDir.length > basePath.length) {
+                const tryPy = path.join(tryDir, `${modulePath}.py`);
+                const tryInit = path.join(tryDir, modulePath, "__init__.py");
+                if (context.files.has(tryPy)) {
+                  resolvedFile = tryPy;
+                  break;
+                } else if (context.files.has(tryInit)) {
+                  resolvedFile = tryInit;
+                  break;
+                }
+                tryDir = path.dirname(tryDir);
+              }
             }
           }
         }
@@ -570,6 +588,9 @@ export function validateSymbols(
                 }
 
                 // For Python: check pythonExports (__all__) for the module
+                // At this point, the symbol was NOT found in fileInfo.symbols.
+                // The only way it can still be valid is if __all__ explicitly lists it
+                // (meaning it was re-exported via star import or dynamic assignment).
                 if (language === "python") {
                   // Convert resolved file to module path for pythonExports lookup
                   const basePath = context?.projectPath || "";
@@ -584,15 +605,10 @@ export function validateSymbols(
                     .replace(/\.$/, "");
                   const moduleAllExports = pythonExports.get(pyModPath);
                   if (moduleAllExports && moduleAllExports.has(name.imported)) {
-                    continue; // Symbol is in __all__
+                    continue; // Symbol is explicitly in __all__ (re-exported) — valid
                   }
-                  if (!moduleAllExports) {
-                    // No __all__ defined — all names are importable in Python
-                    continue;
-                  }
-                  // __all__ exists but symbol not in it — still importable, just not in __all__
-                  // Python allows importing any module-level name regardless of __all__
-                  continue;
+                  // Symbol is NOT in fileInfo.symbols AND NOT in __all__
+                  // Fall through to flag as nonExistentImport
                 }
 
                 // This is a TRUE hallucination - module exists, but export doesn't
@@ -698,9 +714,23 @@ export function validateSymbols(
           if (context) {
             const moduleDir = imp.module.replace(/^\.+/, "").replace(/\./g, "/");
             const basePath = context.projectPath;
+            let subModFound = false;
             const subModPy = path.join(basePath, moduleDir, `${name.imported}.py`);
             const subModInit = path.join(basePath, moduleDir, name.imported, "__init__.py");
             if (context.files.has(subModPy) || context.files.has(subModInit)) {
+              subModFound = true;
+            } else {
+              // Full-stack fallback: walk up from file dir
+              let tryDir = path.dirname(filePath);
+              while (!subModFound && tryDir.length > basePath.length) {
+                if (context.files.has(path.join(tryDir, moduleDir, `${name.imported}.py`)) ||
+                    context.files.has(path.join(tryDir, moduleDir, name.imported, "__init__.py"))) {
+                  subModFound = true;
+                }
+                tryDir = path.dirname(tryDir);
+              }
+            }
+            if (subModFound) {
               // Valid sub-module import, skip __all__ check
               validVariables.set(name.local, projectSym);
               continue;
@@ -750,15 +780,33 @@ export function validateSymbols(
           if (language === "python" && context) {
             const modulePath = imp.module.replace(/^\.+/, "").replace(/\./g, "/");
             const basePath = context.projectPath;
+            let resolvedSubMod: string | null = null;
             const subModulePy = path.join(basePath, modulePath, `${name.imported}.py`);
             const subModuleInit = path.join(basePath, modulePath, name.imported, "__init__.py");
-            const isSubModule = context.files.has(subModulePy) || context.files.has(subModuleInit);
-            if (isSubModule) {
+            if (context.files.has(subModulePy)) {
+              resolvedSubMod = subModulePy;
+            } else if (context.files.has(subModuleInit)) {
+              resolvedSubMod = subModuleInit;
+            } else {
+              // Full-stack fallback: walk up from file dir
+              let tryDir = path.dirname(filePath);
+              while (!resolvedSubMod && tryDir.length > basePath.length) {
+                const tryPy = path.join(tryDir, modulePath, `${name.imported}.py`);
+                const tryInit = path.join(tryDir, modulePath, name.imported, "__init__.py");
+                if (context.files.has(tryPy)) {
+                  resolvedSubMod = tryPy;
+                } else if (context.files.has(tryInit)) {
+                  resolvedSubMod = tryInit;
+                }
+                tryDir = path.dirname(tryDir);
+              }
+            }
+            if (resolvedSubMod) {
               // It's a valid sub-module import — treat as a module variable
               validVariables.set(name.local, {
                 name: name.local,
                 type: "variable" as const,
-                file: subModulePy,
+                file: resolvedSubMod,
               });
               continue;
             }
@@ -1277,24 +1325,36 @@ export function validateSymbols(
           if (missingPackages.has(imp.module)) {
             shouldCheck = true; // Hallucinated import - definitely flag usages!
           } else if (!imp.isExternal) {
-            // For internal imports, only check if we have CLASS info (not just variable info)
-            // This prevents false positives on imported const objects like React Query keys:
-            //   import { contractKeys } from "./keys";
-            //   contractKeys.all  // Don't flag - we don't know the shape of plain objects
-            // But DO validate actual class instances:
-            //   import { MyClass } from "./class";
-            //   const instance = new MyClass();
-            //   instance.method()  // Can validate if we have method info
-            //
-            // IMPORTANT: Use projectClasses, not validClasses, because validClasses
-            // contains ALL imported symbols (added as fallback), not just actual classes
+            // For internal imports, check if we have CLASS info
             const objClass = projectClasses.get(used.object!);
             if (objClass) {
               shouldCheck = true; // We have class info, so we can validate methods
             }
-            // Note: We intentionally DON'T check based on projectVariables
-            // because plain object imports (like query key factories) should
-            // not have their property access validated
+            // Also check if we have scoped method info for this object
+            // This handles const object literals with known methods:
+            //   export const projectsApi = { getProjects: async () => {...}, ... }
+            // The AST extractor captures these as methods with scope="projectsApi",
+            // so we know the exact shape and can validate method calls.
+            // This is different from plain key objects (contractKeys.all) which
+            // have no methods in the symbol table.
+            if (!shouldCheck) {
+              for (const [, sym] of validMethods) {
+                if (sym.scope === used.object) {
+                  shouldCheck = true;
+                  break;
+                }
+              }
+            }
+            // Also check validFunctions — object literal methods may be stored
+            // as kind=function (not method), landing in validFunctions instead
+            if (!shouldCheck) {
+              for (const [, sym] of validFunctions) {
+                if (sym.scope === used.object) {
+                  shouldCheck = true;
+                  break;
+                }
+              }
+            }
           }
         } else {
           // Objects not from imports (locally defined)
@@ -1311,16 +1371,22 @@ export function validateSymbols(
       // console.log(`DEBUG: Method ${used.object}.${used.name} - shouldCheck: ${shouldCheck}`);
       if (!shouldCheck) continue;
 
-      // Look up method by name, but also check if it has a matching scope
-      // This handles object literal methods: const api = { method: () => {} }
+      // Look up method by name, checking ALL symbols with that name (not just the first)
+      // This handles multiple services with same-named methods (e.g., getProject on both
+      // clientPortalService and projectsApi)
+      const methodSyms = projectMethods.get(used.name) || [];
+      const funcSyms = projectFunctions.get(used.name) || [];
       const methodSym = validMethods.get(used.name);
       const funcSym = validFunctions.get(used.name);
       
-      // Check if method exists with matching scope (e.g., timeEntriesApi.getPending)
-      // If the method has a scope, it must match the object name
-      // If no scope, it's a general method (like class methods)
-      const methodMatches = methodSym && (!methodSym.scope || methodSym.scope === used.object);
-      const funcMatches = funcSym && (!funcSym.scope || funcSym.scope === used.object);
+      // Check ALL method symbols for a scope match, not just the single representative
+      const methodMatches = methodSyms.some(s => !s.scope || s.scope === used.object) ||
+        (methodSym && (!methodSym.scope || methodSym.scope === used.object));
+      // Check ALL function symbols for a scope match
+      // Local variables (from "(new code)") like `const stream = ...` should NOT
+      // validate `ApiService.stream()` — that's a name collision, not a real method.
+      const funcMatches = funcSyms.some(s => (!s.scope || s.scope === used.object) && s.file !== "(new code)") ||
+        (funcSym && (!funcSym.scope || funcSym.scope === used.object) && funcSym.file !== "(new code)");
 
       // Skip well-known inherited methods from common frameworks
       // These methods exist on base classes (Pydantic BaseModel, SQLAlchemy Model, etc.)

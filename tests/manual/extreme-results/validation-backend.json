@@ -1,0 +1,2679 @@
+{
+  "meta": {
+    "tool": "start_validation (per-directory)",
+    "projectPath": "/home/codegoddy/Desktop/codeguardian_mcp/report/backend",
+    "scope": "backend",
+    "language": "python",
+    "timestamp": "2026-02-09T20:43:46.075Z",
+    "totalTimeMs": 439153,
+    "contextBuildTimeMs": 17372,
+    "deadCodeTimeMs": 304494,
+    "verificationTimeMs": 16734
+  },
+  "context": {
+    "filesIndexed": 190,
+    "symbolsInContext": 2241,
+    "filesScanned": 256
+  },
+  "summary": {
+    "totalConfirmedIssues": 301,
+    "hallucinations": 271,
+    "deadCode": 30,
+    "rawHallucinations": 289,
+    "rawDeadCode": 30,
+    "falsePositivesFiltered": 18
+  },
+  "hallucinations": [
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "backend/alembic/env.py",
+      "line": 16,
+      "message": "Module 'app.models' exists but has no export named 'app.models'",
+      "suggestion": "No similar symbols found. This may be a hallucination.",
+      "confidence": 99
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/alembic/env.py",
+      "line": 3,
+      "message": "Imported symbol 'engine_from_config' is never used",
+      "suggestion": "Remove the unused import: engine_from_config",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/alembic/env.py",
+      "line": 16,
+      "message": "Imported symbol 'app.models' is never used",
+      "suggestion": "Remove the unused import: app.models",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/alembic/versions/149dd9bb8735_final_merge.py",
+      "line": 11,
+      "message": "Imported symbol 'sa' is never used",
+      "suggestion": "Remove the unused import: sa",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/alembic/versions/149dd9bb8735_final_merge.py",
+      "line": 13,
+      "message": "Imported symbol 'op' is never used",
+      "suggestion": "Remove the unused import: op",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/alembic/versions/2b55a65f6ca0_merge_auth_and_sign_heads.py",
+      "line": 11,
+      "message": "Imported symbol 'sa' is never used",
+      "suggestion": "Remove the unused import: sa",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/alembic/versions/2b55a65f6ca0_merge_auth_and_sign_heads.py",
+      "line": 13,
+      "message": "Imported symbol 'op' is never used",
+      "suggestion": "Remove the unused import: op",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/alembic/versions/56b0e8597b96_merge_all_heads.py",
+      "line": 11,
+      "message": "Imported symbol 'sa' is never used",
+      "suggestion": "Remove the unused import: sa",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/alembic/versions/56b0e8597b96_merge_all_heads.py",
+      "line": 13,
+      "message": "Imported symbol 'op' is never used",
+      "suggestion": "Remove the unused import: op",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/alembic/versions/m901234567cd_add_performance_indexes.py",
+      "line": 9,
+      "message": "Imported symbol 'sa' is never used",
+      "suggestion": "Remove the unused import: sa",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/alembic/versions/opt1767316611_optimize_database_queries.py",
+      "line": 13,
+      "message": "Imported symbol 'sa' is never used",
+      "suggestion": "Remove the unused import: sa",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/alembic/versions/supabase001_setup_auth_sync.py",
+      "line": 11,
+      "message": "Imported symbol 'sa' is never used",
+      "suggestion": "Remove the unused import: sa",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/alembic/versions/y123456789kl_add_ai_estimation_fields.py",
+      "line": 10,
+      "message": "Imported symbol 'UUID' is never used",
+      "suggestion": "Remove the unused import: UUID",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/activities.py",
+      "line": 4,
+      "message": "Imported symbol 'UUID' is never used",
+      "suggestion": "Remove the unused import: UUID",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/ai_estimation.py",
+      "line": 8,
+      "message": "Imported symbol 'UUID' is never used",
+      "suggestion": "Remove the unused import: UUID",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/auth.py",
+      "line": 5,
+      "message": "Imported symbol 'status' is never used",
+      "suggestion": "Remove the unused import: status",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/auth.py",
+      "line": 6,
+      "message": "Imported symbol 'RedirectResponse' is never used",
+      "suggestion": "Remove the unused import: RedirectResponse",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/auth.py",
+      "line": 41,
+      "message": "Imported symbol 'send_otp_email' is never used",
+      "suggestion": "Remove the unused import: send_otp_email",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/auth.py",
+      "line": 41,
+      "message": "Imported symbol 'send_welcome_email' is never used",
+      "suggestion": "Remove the unused import: send_welcome_email",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/auth_cookies.py",
+      "line": 26,
+      "message": "Imported symbol 'TokenRefresh' is never used",
+      "suggestion": "Remove the unused import: TokenRefresh",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/auth_supabase.py",
+      "line": 24,
+      "message": "Imported symbol 'send_otp_email' is never used",
+      "suggestion": "Remove the unused import: send_otp_email",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/auth_supabase.py",
+      "line": 444,
+      "message": "Imported symbol 'uuid4' is never used",
+      "suggestion": "Remove the unused import: uuid4",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/auth_supabase.py",
+      "line": 450,
+      "message": "Imported symbol 'GoogleCalendarService' is never used",
+      "suggestion": "Remove the unused import: GoogleCalendarService",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/change_requests.py",
+      "line": 2,
+      "message": "Imported symbol 'Decimal' is never used",
+      "suggestion": "Remove the unused import: Decimal",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/change_requests.py",
+      "line": 10,
+      "message": "Imported symbol 'get_current_user' is never used",
+      "suggestion": "Remove the unused import: get_current_user",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/client_portal.py",
+      "line": 1,
+      "message": "Imported symbol 'secrets' is never used",
+      "suggestion": "Remove the unused import: secrets",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/contracts.py",
+      "line": 3,
+      "message": "Imported symbol 'string' is never used",
+      "suggestion": "Remove the unused import: string",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/contracts.py",
+      "line": 39,
+      "message": "Imported symbol 'delete_file' is never used",
+      "suggestion": "Remove the unused import: delete_file",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/contracts.py",
+      "line": 39,
+      "message": "Imported symbol 'upload_file' is never used",
+      "suggestion": "Remove the unused import: upload_file",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/contracts.py",
+      "line": 40,
+      "message": "Imported symbol 'send_email' is never used",
+      "suggestion": "Remove the unused import: send_email",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/contracts.py",
+      "line": 447,
+      "message": "Imported symbol 'get_currency_symbol' is never used",
+      "suggestion": "Remove the unused import: get_currency_symbol",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/dashboard.py",
+      "line": 4,
+      "message": "Imported symbol 'Optional' is never used",
+      "suggestion": "Remove the unused import: Optional",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/dashboard.py",
+      "line": 19,
+      "message": "Imported symbol 'UserSettings' is never used",
+      "suggestion": "Remove the unused import: UserSettings",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/deliverables.py",
+      "line": 2,
+      "message": "Imported symbol 'Decimal' is never used",
+      "suggestion": "Remove the unused import: Decimal",
+      "confidence": 98
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "backend/app/api/git_integration.py",
+      "line": 458,
+      "message": "Package 'dateutil' is not installed (but exists on registry)",
+      "suggestion": "Run: pip install dateutil (or add to requirements.txt)",
+      "confidence": 100
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "backend/app/api/git_integration.py",
+      "line": 690,
+      "message": "Package 'dateutil' is not installed (but exists on registry)",
+      "suggestion": "Run: pip install dateutil (or add to requirements.txt)",
+      "confidence": 100
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/git_integration.py",
+      "line": 3,
+      "message": "Imported symbol 'hashlib' is never used",
+      "suggestion": "Remove the unused import: hashlib",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/git_integration.py",
+      "line": 4,
+      "message": "Imported symbol 'hmac' is never used",
+      "suggestion": "Remove the unused import: hmac",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/health.py",
+      "line": 13,
+      "message": "Imported symbol 'Any' is never used",
+      "suggestion": "Remove the unused import: Any",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/health.py",
+      "line": 13,
+      "message": "Imported symbol 'Dict' is never used",
+      "suggestion": "Remove the unused import: Dict",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/health.py",
+      "line": 16,
+      "message": "Imported symbol 'select' is never used",
+      "suggestion": "Remove the unused import: select",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/integrations.py",
+      "line": 7,
+      "message": "Imported symbol 'Optional' is never used",
+      "suggestion": "Remove the unused import: Optional",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/notifications.py",
+      "line": 3,
+      "message": "Imported symbol 'List' is never used",
+      "suggestion": "Remove the unused import: List",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/notifications.py",
+      "line": 3,
+      "message": "Imported symbol 'Optional' is never used",
+      "suggestion": "Remove the unused import: Optional",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/payment_milestones.py",
+      "line": 7,
+      "message": "Imported symbol 'List' is never used",
+      "suggestion": "Remove the unused import: List",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/payment_milestones.py",
+      "line": 7,
+      "message": "Imported symbol 'Optional' is never used",
+      "suggestion": "Remove the unused import: Optional",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/payment_milestones.py",
+      "line": 10,
+      "message": "Imported symbol 'HTTPException' is never used",
+      "suggestion": "Remove the unused import: HTTPException",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/payment_milestones.py",
+      "line": 11,
+      "message": "Imported symbol 'update' is never used",
+      "suggestion": "Remove the unused import: update",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/payment_milestones.py",
+      "line": 15,
+      "message": "Imported symbol 'InternalException' is never used",
+      "suggestion": "Remove the unused import: InternalException",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/payments.py",
+      "line": 4,
+      "message": "Imported symbol 'Optional' is never used",
+      "suggestion": "Remove the unused import: Optional",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/payments.py",
+      "line": 7,
+      "message": "Imported symbol 'Request' is never used",
+      "suggestion": "Remove the unused import: Request",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/payments.py",
+      "line": 21,
+      "message": "Imported symbol 'InvoiceMarkPaid' is never used",
+      "suggestion": "Remove the unused import: InvoiceMarkPaid",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/payments.py",
+      "line": 21,
+      "message": "Imported symbol 'InvoiceSend' is never used",
+      "suggestion": "Remove the unused import: InvoiceSend",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/payments.py",
+      "line": 21,
+      "message": "Imported symbol 'InvoiceVerifyPayment' is never used",
+      "suggestion": "Remove the unused import: InvoiceVerifyPayment",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/projects.py",
+      "line": 12,
+      "message": "Imported symbol 'generate_and_send_contract' is never used",
+      "suggestion": "Remove the unused import: generate_and_send_contract",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/projects.py",
+      "line": 12,
+      "message": "Imported symbol 'generate_contract' is never used",
+      "suggestion": "Remove the unused import: generate_contract",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/projects.py",
+      "line": 12,
+      "message": "Imported symbol 'send_contract' is never used",
+      "suggestion": "Remove the unused import: send_contract",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/settings.py",
+      "line": 2,
+      "message": "Imported symbol 'Optional' is never used",
+      "suggestion": "Remove the unused import: Optional",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/settings.py",
+      "line": 9,
+      "message": "Imported symbol 'decode_access_token' is never used",
+      "suggestion": "Remove the unused import: decode_access_token",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/subscriptions.py",
+      "line": 3,
+      "message": "Imported symbol 'List' is never used",
+      "suggestion": "Remove the unused import: List",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/subscriptions.py",
+      "line": 5,
+      "message": "Imported symbol 'HTTPException' is never used",
+      "suggestion": "Remove the unused import: HTTPException",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/support_chat.py",
+      "line": 10,
+      "message": "Imported symbol 'status' is never used",
+      "suggestion": "Remove the unused import: status",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/templates.py",
+      "line": 11,
+      "message": "Imported symbol 'BackgroundTasks' is never used",
+      "suggestion": "Remove the unused import: BackgroundTasks",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/templates.py",
+      "line": 25,
+      "message": "Imported symbol 'TemplateUse' is never used",
+      "suggestion": "Remove the unused import: TemplateUse",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/templates.py",
+      "line": 28,
+      "message": "Imported symbol 'get_system_templates' is never used",
+      "suggestion": "Remove the unused import: get_system_templates",
+      "confidence": 98
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 49,
+      "message": "Package 'tensorflow' is not installed (but exists on registry)",
+      "suggestion": "Run: pip install tensorflow (or add to requirements.txt)",
+      "confidence": 100
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 50,
+      "message": "Package 'apache_beam' is not installed (but exists on registry)",
+      "suggestion": "Run: pip install apache_beam (or add to requirements.txt)",
+      "confidence": 100
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 51,
+      "message": "Package 'dask' is not installed (but exists on registry)",
+      "suggestion": "Run: pip install dask (or add to requirements.txt)",
+      "confidence": 100
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 52,
+      "message": "Package 'kubernetes' is not installed (but exists on registry)",
+      "suggestion": "Run: pip install kubernetes (or add to requirements.txt)",
+      "confidence": 100
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 53,
+      "message": "Package 'elasticsearch' is not installed (but exists on registry)",
+      "suggestion": "Run: pip install elasticsearch (or add to requirements.txt)",
+      "confidence": 100
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 54,
+      "message": "Package 'celery' is not installed (but exists on registry)",
+      "suggestion": "Run: pip install celery (or add to requirements.txt)",
+      "confidence": 100
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 55,
+      "message": "Package 'pymongo' is not installed (but exists on registry)",
+      "suggestion": "Run: pip install pymongo (or add to requirements.txt)",
+      "confidence": 100
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 32,
+      "message": "Module 'app.core.auth' exists but has no export named 'verify_biometric_token'",
+      "suggestion": "Did you mean: verify, verify_oauth_state, verify_oauth_state?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 33,
+      "message": "Module 'app.core.auth' exists but has no export named 'rotate_encryption_keys'",
+      "suggestion": "Did you mean: check_token_expiration, check_token_expiration, validate_refresh_token?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 34,
+      "message": "Module 'app.core.auth' exists but has no export named 'create_api_key'",
+      "suggestion": "Did you mean: create_access_token, create_access_token, create_refresh_token?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 35,
+      "message": "Module 'app.core.auth' exists but has no export named 'validate_mfa_token'",
+      "suggestion": "Did you mean: validate_refresh_token, validate_refresh_token, extract_user_id_from_token?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 36,
+      "message": "Module 'app.models.project' exists but has no export named 'ProjectAnalytics'",
+      "suggestion": "Did you mean: Project, Project, project_budget?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 37,
+      "message": "Module 'app.models.user' exists but has no export named 'UserPermissionMatrix'",
+      "suggestion": "Did you mean: User, User, UserSettings?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 38,
+      "message": "Module 'app.models.user' exists but has no export named 'UserAuditLog'",
+      "suggestion": "Did you mean: User, User, UserSettings?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 39,
+      "message": "Module 'app.services.activity_service' exists but has no export named 'track_realtime_usage'",
+      "suggestion": "Did you mean: log_project_activity, log_project_activity, log_invoice_activity?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 40,
+      "message": "Module 'app.services.activity_service' exists but has no export named 'bulk_log_activities'",
+      "suggestion": "Did you mean: get_user_activities, get_user_activities, log_commit_activity?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 41,
+      "message": "Module 'app.db.database' exists but has no export named 'execute_raw_sql'",
+      "suggestion": "Did you mean: after_cursor_execute, after_cursor_execute, after_cursor_execute?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 42,
+      "message": "Module 'app.utils.email' exists but has no export named 'send_bulk_sms'",
+      "suggestion": "Did you mean: send_budget_alert, send_budget_alert, send_email?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 43,
+      "message": "Module 'app.common.responses' exists but has no export named 'streaming_response'",
+      "suggestion": "Did you mean: T, T, paginated_response?",
+      "confidence": 99
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 11,
+      "message": "Imported symbol 'create_access_token' is never used",
+      "suggestion": "Remove the unused import: create_access_token",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 12,
+      "message": "Imported symbol 'create_refresh_token' is never used",
+      "suggestion": "Remove the unused import: create_refresh_token",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 13,
+      "message": "Imported symbol 'decode_access_token' is never used",
+      "suggestion": "Remove the unused import: decode_access_token",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 14,
+      "message": "Imported symbol 'validate_refresh_token' is never used",
+      "suggestion": "Remove the unused import: validate_refresh_token",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 15,
+      "message": "Imported symbol 'check_token_expiration' is never used",
+      "suggestion": "Remove the unused import: check_token_expiration",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 16,
+      "message": "Imported symbol 'settings' is never used",
+      "suggestion": "Remove the unused import: settings",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 17,
+      "message": "Imported symbol 'Project' is never used",
+      "suggestion": "Remove the unused import: Project",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 18,
+      "message": "Imported symbol 'Client' is never used",
+      "suggestion": "Remove the unused import: Client",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 19,
+      "message": "Imported symbol 'Invoice' is never used",
+      "suggestion": "Remove the unused import: Invoice",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 20,
+      "message": "Imported symbol 'Milestone' is never used",
+      "suggestion": "Remove the unused import: Milestone",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 21,
+      "message": "Imported symbol 'User' is never used",
+      "suggestion": "Remove the unused import: User",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 21,
+      "message": "Imported symbol 'UserSettings' is never used",
+      "suggestion": "Remove the unused import: UserSettings",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 22,
+      "message": "Imported symbol 'create_notification' is never used",
+      "suggestion": "Remove the unused import: create_notification",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 23,
+      "message": "Imported symbol 'send_otp_email' is never used",
+      "suggestion": "Remove the unused import: send_otp_email",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 24,
+      "message": "Imported symbol 'success_response' is never used",
+      "suggestion": "Remove the unused import: success_response",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 25,
+      "message": "Imported symbol 'json' is never used",
+      "suggestion": "Remove the unused import: json",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/test_hallucinations_extreme.py",
+      "line": 26,
+      "message": "Imported symbol 'os' is never used",
+      "suggestion": "Remove the unused import: os",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/time_entries.py",
+      "line": 3,
+      "message": "Imported symbol 'json' is never used",
+      "suggestion": "Remove the unused import: json",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/time_entries.py",
+      "line": 5,
+      "message": "Imported symbol 'Decimal' is never used",
+      "suggestion": "Remove the unused import: Decimal",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/time_entries.py",
+      "line": 9,
+      "message": "Imported symbol 'Form' is never used",
+      "suggestion": "Remove the unused import: Form",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/time_entries.py",
+      "line": 11,
+      "message": "Imported symbol 'and_' is never used",
+      "suggestion": "Remove the unused import: and_",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/waitlist.py",
+      "line": 7,
+      "message": "Imported symbol 'Session' is never used",
+      "suggestion": "Remove the unused import: Session",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/websocket.py",
+      "line": 7,
+      "message": "Imported symbol 'asyncio' is never used",
+      "suggestion": "Remove the unused import: asyncio",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/websocket.py",
+      "line": 10,
+      "message": "Imported symbol 'List' is never used",
+      "suggestion": "Remove the unused import: List",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/websocket.py",
+      "line": 12,
+      "message": "Imported symbol 'Depends' is never used",
+      "suggestion": "Remove the unused import: Depends",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/api/websocket.py",
+      "line": 14,
+      "message": "Imported symbol 'settings' is never used",
+      "suggestion": "Remove the unused import: settings",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/common/errors.py",
+      "line": 8,
+      "message": "Imported symbol 'HTTPException' is never used",
+      "suggestion": "Remove the unused import: HTTPException",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/common/validators.py",
+      "line": 10,
+      "message": "Imported symbol 'Decimal' is never used",
+      "suggestion": "Remove the unused import: Decimal",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/common/validators.py",
+      "line": 11,
+      "message": "Imported symbol 'List' is never used",
+      "suggestion": "Remove the unused import: List",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/common/validators.py",
+      "line": 12,
+      "message": "Imported symbol 'UUID' is never used",
+      "suggestion": "Remove the unused import: UUID",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/common/validators.py",
+      "line": 14,
+      "message": "Imported symbol 'BaseModel' is never used",
+      "suggestion": "Remove the unused import: BaseModel",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/common/validators.py",
+      "line": 14,
+      "message": "Imported symbol 'ConfigDict' is never used",
+      "suggestion": "Remove the unused import: ConfigDict",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/common/validators.py",
+      "line": 14,
+      "message": "Imported symbol 'EmailStr' is never used",
+      "suggestion": "Remove the unused import: EmailStr",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/common/validators.py",
+      "line": 14,
+      "message": "Imported symbol 'HttpUrl' is never used",
+      "suggestion": "Remove the unused import: HttpUrl",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/common/validators.py",
+      "line": 14,
+      "message": "Imported symbol 'field_validator' is never used",
+      "suggestion": "Remove the unused import: field_validator",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/common/validators.py",
+      "line": 14,
+      "message": "Imported symbol 'model_validator' is never used",
+      "suggestion": "Remove the unused import: model_validator",
+      "confidence": 98
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "backend/app/core/auth.py",
+      "line": 497,
+      "message": "Module 'app.api.cli_tokens' exists but has no export named 'CLIToken'",
+      "suggestion": "Did you mean: list_cli_tokens, list_cli_tokens, /validate-token?",
+      "confidence": 99
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/core/auth.py",
+      "line": 2,
+      "message": "Imported symbol 'secrets' is never used",
+      "suggestion": "Remove the unused import: secrets",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/core/auth.py",
+      "line": 7,
+      "message": "Imported symbol 'OAuthError' is never used",
+      "suggestion": "Remove the unused import: OAuthError",
+      "confidence": 98
+    },
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "file": "backend/app/core/logging_config.py",
+      "line": 113,
+      "message": "Package 'pythonjsonlogger' is not installed (but exists on registry)",
+      "suggestion": "Run: pip install pythonjsonlogger (or add to requirements.txt)",
+      "confidence": 100
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/core/logging_config.py",
+      "line": 3,
+      "message": "Imported symbol 'os' is never used",
+      "suggestion": "Remove the unused import: os",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/db/database.py",
+      "line": 9,
+      "message": "Imported symbol 'AsyncSession' is never used",
+      "suggestion": "Remove the unused import: AsyncSession",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/event_handlers/auth_events.py",
+      "line": 18,
+      "message": "Imported symbol 'asyncio' is never used",
+      "suggestion": "Remove the unused import: asyncio",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/event_handlers/contract_events.py",
+      "line": 23,
+      "message": "Imported symbol 'send_contract_signed_email' is never used",
+      "suggestion": "Remove the unused import: send_contract_signed_email",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/event_handlers/deliverable_events.py",
+      "line": 23,
+      "message": "Imported symbol 'Client' is never used",
+      "suggestion": "Remove the unused import: Client",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/event_handlers/deliverable_events.py",
+      "line": 24,
+      "message": "Imported symbol 'Project' is never used",
+      "suggestion": "Remove the unused import: Project",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/event_handlers/deliverable_events.py",
+      "line": 25,
+      "message": "Imported symbol 'send_email' is never used",
+      "suggestion": "Remove the unused import: send_email",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/event_handlers/deliverable_events.py",
+      "line": 26,
+      "message": "Imported symbol 'render_deliverable_completed_email' is never used",
+      "suggestion": "Remove the unused import: render_deliverable_completed_email",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/main.py",
+      "line": 24,
+      "message": "Imported symbol 'json' is never used",
+      "suggestion": "Remove the unused import: json",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/main.py",
+      "line": 30,
+      "message": "Imported symbol '_rate_limit_exceeded_handler' is never used",
+      "suggestion": "Remove the unused import: _rate_limit_exceeded_handler",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/middleware/auth_middleware.py",
+      "line": 5,
+      "message": "Imported symbol 'HTTPException' is never used",
+      "suggestion": "Remove the unused import: HTTPException",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/middleware/cors_validation_middleware.py",
+      "line": 9,
+      "message": "Imported symbol 'Optional' is never used",
+      "suggestion": "Remove the unused import: Optional",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/middleware/csrf_middleware.py",
+      "line": 8,
+      "message": "Imported symbol 'hashlib' is never used",
+      "suggestion": "Remove the unused import: hashlib",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/middleware/rate_limit_middleware.py",
+      "line": 9,
+      "message": "Imported symbol 'time' is never used",
+      "suggestion": "Remove the unused import: time",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/middleware/sanitization_middleware.py",
+      "line": 119,
+      "message": "Imported symbol 'parse_qs' is never used",
+      "suggestion": "Remove the unused import: parse_qs",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/middleware/subscription_middleware.py",
+      "line": 11,
+      "message": "Imported symbol 'is_subscription_active' is never used",
+      "suggestion": "Remove the unused import: is_subscription_active",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/middleware/subscription_middleware.py",
+      "line": 87,
+      "message": "Imported symbol 'decode_supabase_token' is never used",
+      "suggestion": "Remove the unused import: decode_supabase_token",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/models/auto_pause_event.py",
+      "line": 3,
+      "message": "Imported symbol 'Integer' is never used",
+      "suggestion": "Remove the unused import: Integer",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/models/client_portal_session.py",
+      "line": 3,
+      "message": "Imported symbol 'timedelta' is never used",
+      "suggestion": "Remove the unused import: timedelta",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/models/client_portal_session.py",
+      "line": 5,
+      "message": "Imported symbol 'Integer' is never used",
+      "suggestion": "Remove the unused import: Integer",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/models/contract.py",
+      "line": 3,
+      "message": "Imported symbol 'Integer' is never used",
+      "suggestion": "Remove the unused import: Integer",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/models/contract_signature.py",
+      "line": 3,
+      "message": "Imported symbol 'Integer' is never used",
+      "suggestion": "Remove the unused import: Integer",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/models/git_access_log.py",
+      "line": 3,
+      "message": "Imported symbol 'Integer' is never used",
+      "suggestion": "Remove the unused import: Integer",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/models/integrations.py",
+      "line": 8,
+      "message": "Imported symbol 'Integer' is never used",
+      "suggestion": "Remove the unused import: Integer",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/models/invoice.py",
+      "line": 3,
+      "message": "Imported symbol 'Integer' is never used",
+      "suggestion": "Remove the unused import: Integer",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/models/milestone.py",
+      "line": 3,
+      "message": "Imported symbol 'Boolean' is never used",
+      "suggestion": "Remove the unused import: Boolean",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/models/milestone.py",
+      "line": 3,
+      "message": "Imported symbol 'Numeric' is never used",
+      "suggestion": "Remove the unused import: Numeric",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/models/payment_method.py",
+      "line": 8,
+      "message": "Imported symbol 'Integer' is never used",
+      "suggestion": "Remove the unused import: Integer",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/models/paystack_subaccount.py",
+      "line": 3,
+      "message": "Imported symbol 'Integer' is never used",
+      "suggestion": "Remove the unused import: Integer",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/models/support_conversation.py",
+      "line": 8,
+      "message": "Imported symbol 'Text' is never used",
+      "suggestion": "Remove the unused import: Text",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/schemas/auth.py",
+      "line": 1,
+      "message": "Imported symbol 'Any' is never used",
+      "suggestion": "Remove the unused import: Any",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/schemas/auth.py",
+      "line": 1,
+      "message": "Imported symbol 'Dict' is never used",
+      "suggestion": "Remove the unused import: Dict",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/schemas/git_integration.py",
+      "line": 7,
+      "message": "Imported symbol 'HttpUrl' is never used",
+      "suggestion": "Remove the unused import: HttpUrl",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/schemas/time_entry.py",
+      "line": 8,
+      "message": "Imported symbol 'validate_non_negative_number' is never used",
+      "suggestion": "Remove the unused import: validate_non_negative_number",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/activity_metrics.py",
+      "line": 3,
+      "message": "Imported symbol 'Decimal' is never used",
+      "suggestion": "Remove the unused import: Decimal",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/activity_metrics.py",
+      "line": 4,
+      "message": "Imported symbol 'Any' is never used",
+      "suggestion": "Remove the unused import: Any",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/activity_service.py",
+      "line": 12,
+      "message": "Imported symbol 'ActivityCreate' is never used",
+      "suggestion": "Remove the unused import: ActivityCreate",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/activity_service.py",
+      "line": 12,
+      "message": "Imported symbol 'ActivityResponse' is never used",
+      "suggestion": "Remove the unused import: ActivityResponse",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/ai_estimator.py",
+      "line": 9,
+      "message": "Imported symbol 'Dict' is never used",
+      "suggestion": "Remove the unused import: Dict",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/ai_scheduler.py",
+      "line": 10,
+      "message": "Imported symbol 'Optional' is never used",
+      "suggestion": "Remove the unused import: Optional",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/ai_scheduler.py",
+      "line": 14,
+      "message": "Imported symbol 'func' is never used",
+      "suggestion": "Remove the unused import: func",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/ai_support.py",
+      "line": 8,
+      "message": "Imported symbol 're' is never used",
+      "suggestion": "Remove the unused import: re",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/ai_template_generator.py",
+      "line": 9,
+      "message": "Imported symbol 'Dict' is never used",
+      "suggestion": "Remove the unused import: Dict",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/ai_template_generator.py",
+      "line": 9,
+      "message": "Imported symbol 'List' is never used",
+      "suggestion": "Remove the unused import: List",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/budget_monitor.py",
+      "line": 3,
+      "message": "Imported symbol 'Optional' is never used",
+      "suggestion": "Remove the unused import: Optional",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/budget_monitor.py",
+      "line": 10,
+      "message": "Imported symbol 'TimeEntry' is never used",
+      "suggestion": "Remove the unused import: TimeEntry",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/changelog_generator.py",
+      "line": 5,
+      "message": "Imported symbol 'Any' is never used",
+      "suggestion": "Remove the unused import: Any",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/client_service.py",
+      "line": 19,
+      "message": "Imported symbol 'track_project_created' is never used",
+      "suggestion": "Remove the unused import: track_project_created",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/commit_parser.py",
+      "line": 4,
+      "message": "Imported symbol 'List' is never used",
+      "suggestion": "Remove the unused import: List",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/contract_service.py",
+      "line": 5,
+      "message": "Imported symbol 'json' is never used",
+      "suggestion": "Remove the unused import: json",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/contract_service.py",
+      "line": 20,
+      "message": "Imported symbol 'upload_file' is never used",
+      "suggestion": "Remove the unused import: upload_file",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/contract_service.py",
+      "line": 21,
+      "message": "Imported symbol 'send_contract_signed_email' is never used",
+      "suggestion": "Remove the unused import: send_contract_signed_email",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/documentation.py",
+      "line": 12,
+      "message": "Imported symbol 'Dict' is never used",
+      "suggestion": "Remove the unused import: Dict",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/documentation.py",
+      "line": 12,
+      "message": "Imported symbol 'List' is never used",
+      "suggestion": "Remove the unused import: List",
+      "confidence": 98
+    },
+    {
+      "type": "nonExistentMethod",
+      "severity": "medium",
+      "file": "backend/app/services/enforcement.py",
+      "line": 541,
+      "message": "Method 'check_and_resolve_auto_pause' not found on 'AutoPauseEnforcer' (verify manually)",
+      "suggestion": "Did you mean: check_and_trigger_auto_pause, check_budget_threshold, trigger_auto_pause?",
+      "confidence": 70
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/enforcement.py",
+      "line": 5,
+      "message": "Imported symbol 'List' is never used",
+      "suggestion": "Remove the unused import: List",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/enforcement.py",
+      "line": 7,
+      "message": "Imported symbol 'desc' is never used",
+      "suggestion": "Remove the unused import: desc",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/enforcement.py",
+      "line": 12,
+      "message": "Imported symbol 'Client' is never used",
+      "suggestion": "Remove the unused import: Client",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/google_calendar_service.py",
+      "line": 8,
+      "message": "Imported symbol 'Optional' is never used",
+      "suggestion": "Remove the unused import: Optional",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/invoice_service.py",
+      "line": 14,
+      "message": "Imported symbol 'select' is never used",
+      "suggestion": "Remove the unused import: select",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/nats_service.py",
+      "line": 7,
+      "message": "Imported symbol 'Optional' is never used",
+      "suggestion": "Remove the unused import: Optional",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/notification_service.py",
+      "line": 12,
+      "message": "Imported symbol 'NotificationCreate' is never used",
+      "suggestion": "Remove the unused import: NotificationCreate",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/payment_parser.py",
+      "line": 10,
+      "message": "Imported symbol 'List' is never used",
+      "suggestion": "Remove the unused import: List",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/payment_parser.py",
+      "line": 10,
+      "message": "Imported symbol 'Optional' is never used",
+      "suggestion": "Remove the unused import: Optional",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/phantom_analytics_service.py",
+      "line": 9,
+      "message": "Imported symbol 'Optional' is never used",
+      "suggestion": "Remove the unused import: Optional",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/phantom_analytics_service.py",
+      "line": 10,
+      "message": "Imported symbol 'timedelta' is never used",
+      "suggestion": "Remove the unused import: timedelta",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/planning_service.py",
+      "line": 9,
+      "message": "Imported symbol 'Optional' is never used",
+      "suggestion": "Remove the unused import: Optional",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/planning_service.py",
+      "line": 12,
+      "message": "Imported symbol 'func' is never used",
+      "suggestion": "Remove the unused import: func",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/planning_service.py",
+      "line": 12,
+      "message": "Imported symbol 'or_' is never used",
+      "suggestion": "Remove the unused import: or_",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/planning_service.py",
+      "line": 18,
+      "message": "Imported symbol 'User' is never used",
+      "suggestion": "Remove the unused import: User",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/review_service.py",
+      "line": 12,
+      "message": "Imported symbol 'TimeEntry' is never used",
+      "suggestion": "Remove the unused import: TimeEntry",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/session_manager.py",
+      "line": 3,
+      "message": "Imported symbol 'timedelta' is never used",
+      "suggestion": "Remove the unused import: timedelta",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/session_manager.py",
+      "line": 8,
+      "message": "Imported symbol 'func' is never used",
+      "suggestion": "Remove the unused import: func",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/session_manager.py",
+      "line": 10,
+      "message": "Imported symbol 'selectinload' is never used",
+      "suggestion": "Remove the unused import: selectinload",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/session_manager.py",
+      "line": 19,
+      "message": "Imported symbol 'TimeSessionCreate' is never used",
+      "suggestion": "Remove the unused import: TimeSessionCreate",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/session_manager.py",
+      "line": 19,
+      "message": "Imported symbol 'TimeSessionUpdate' is never used",
+      "suggestion": "Remove the unused import: TimeSessionUpdate",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/time_calculator.py",
+      "line": 1,
+      "message": "Imported symbol 'timedelta' is never used",
+      "suggestion": "Remove the unused import: timedelta",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/time_calculator.py",
+      "line": 3,
+      "message": "Imported symbol 'Optional' is never used",
+      "suggestion": "Remove the unused import: Optional",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/time_tracker.py",
+      "line": 7,
+      "message": "Imported symbol 'func' is never used",
+      "suggestion": "Remove the unused import: func",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/websocket_manager.py",
+      "line": 8,
+      "message": "Imported symbol 'json' is never used",
+      "suggestion": "Remove the unused import: json",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/services/websocket_manager.py",
+      "line": 10,
+      "message": "Imported symbol 'Set' is never used",
+      "suggestion": "Remove the unused import: Set",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/cache.py",
+      "line": 19,
+      "message": "Imported symbol 'timedelta' is never used",
+      "suggestion": "Remove the unused import: timedelta",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/cache.py",
+      "line": 21,
+      "message": "Imported symbol 'Union' is never used",
+      "suggestion": "Remove the unused import: Union",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/cloudinary_client.py",
+      "line": 8,
+      "message": "Imported symbol 'cloudinary.api' is never used",
+      "suggestion": "Remove the unused import: cloudinary.api",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/currency.py",
+      "line": 7,
+      "message": "Imported symbol 'Optional' is never used",
+      "suggestion": "Remove the unused import: Optional",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/email.py",
+      "line": 4,
+      "message": "Imported symbol 'brevo_python' is never used",
+      "suggestion": "Remove the unused import: brevo_python",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/nats_publishers.py",
+      "line": 1,
+      "message": "Imported symbol 'asyncio' is never used",
+      "suggestion": "Remove the unused import: asyncio",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/nats_publishers.py",
+      "line": 2,
+      "message": "Imported symbol 'json' is never used",
+      "suggestion": "Remove the unused import: json",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/nats_publishers.py",
+      "line": 8,
+      "message": "Imported symbol 'AckPolicy' is never used",
+      "suggestion": "Remove the unused import: AckPolicy",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/nats_publishers.py",
+      "line": 8,
+      "message": "Imported symbol 'ConsumerConfig' is never used",
+      "suggestion": "Remove the unused import: ConsumerConfig",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/nats_publishers.py",
+      "line": 8,
+      "message": "Imported symbol 'DeliverPolicy' is never used",
+      "suggestion": "Remove the unused import: DeliverPolicy",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/nats_publishers.py",
+      "line": 8,
+      "message": "Imported symbol 'RetentionPolicy' is never used",
+      "suggestion": "Remove the unused import: RetentionPolicy",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/nats_publishers.py",
+      "line": 8,
+      "message": "Imported symbol 'StorageType' is never used",
+      "suggestion": "Remove the unused import: StorageType",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/nats_publishers.py",
+      "line": 8,
+      "message": "Imported symbol 'StreamConfig' is never used",
+      "suggestion": "Remove the unused import: StreamConfig",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/nats_publishers.py",
+      "line": 10,
+      "message": "Imported symbol 'settings' is never used",
+      "suggestion": "Remove the unused import: settings",
+      "confidence": 98
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "backend/app/utils/pdf_generator.py",
+      "line": 500,
+      "message": "Module 'app.db.database' exists but has no export named 'AsyncSessionLocal'",
+      "suggestion": "Did you mean: async_session, async_session, async_test_connection?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "backend/app/utils/pdf_generator.py",
+      "line": 509,
+      "message": "Module 'app.db.database' exists but has no export named 'AsyncSessionLocal'",
+      "suggestion": "Did you mean: async_session, async_session, async_test_connection?",
+      "confidence": 99
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/pdf_generator.py",
+      "line": 19,
+      "message": "Imported symbol 'contextmanager' is never used",
+      "suggestion": "Remove the unused import: contextmanager",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/pdf_generator.py",
+      "line": 23,
+      "message": "Imported symbol 'Optional' is never used",
+      "suggestion": "Remove the unused import: Optional",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/pdf_generator.py",
+      "line": 28,
+      "message": "Imported symbol 'Session' is never used",
+      "suggestion": "Remove the unused import: Session",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/pdf_generator.py",
+      "line": 29,
+      "message": "Imported symbol 'CSS' is never used",
+      "suggestion": "Remove the unused import: CSS",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/query_optimizer.py",
+      "line": 8,
+      "message": "Imported symbol 'contextmanager' is never used",
+      "suggestion": "Remove the unused import: contextmanager",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/rate_limiter.py",
+      "line": 10,
+      "message": "Imported symbol 'time' is never used",
+      "suggestion": "Remove the unused import: time",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/rate_limiter.py",
+      "line": 11,
+      "message": "Imported symbol 'Callable' is never used",
+      "suggestion": "Remove the unused import: Callable",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/seed_system_templates.py",
+      "line": 9,
+      "message": "Imported symbol 'AsyncSession' is never used",
+      "suggestion": "Remove the unused import: AsyncSession",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/subscription_utils.py",
+      "line": 12,
+      "message": "Imported symbol 'User' is never used",
+      "suggestion": "Remove the unused import: User",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/utils/supabase_storage.py",
+      "line": 5,
+      "message": "Imported symbol 'os' is never used",
+      "suggestion": "Remove the unused import: os",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/workers/circuit_breaker.py",
+      "line": 35,
+      "message": "Imported symbol 'timedelta' is never used",
+      "suggestion": "Remove the unused import: timedelta",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/workers/performance_monitor.py",
+      "line": 29,
+      "message": "Imported symbol 'defaultdict' is never used",
+      "suggestion": "Remove the unused import: defaultdict",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/workers/performance_monitor.py",
+      "line": 31,
+      "message": "Imported symbol 'timedelta' is never used",
+      "suggestion": "Remove the unused import: timedelta",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/workers/performance_monitor.py",
+      "line": 33,
+      "message": "Imported symbol 'Callable' is never used",
+      "suggestion": "Remove the unused import: Callable",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/workers/session_monitor.py",
+      "line": 5,
+      "message": "Imported symbol 'timedelta' is never used",
+      "suggestion": "Remove the unused import: timedelta",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/workers/session_monitor.py",
+      "line": 8,
+      "message": "Imported symbol 'and_' is never used",
+      "suggestion": "Remove the unused import: and_",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/workers/task_queue.py",
+      "line": 28,
+      "message": "Imported symbol 'logging' is never used",
+      "suggestion": "Remove the unused import: logging",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/workers/task_queue.py",
+      "line": 30,
+      "message": "Imported symbol 'timedelta' is never used",
+      "suggestion": "Remove the unused import: timedelta",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/app/workers/task_queue.py",
+      "line": 32,
+      "message": "Imported symbol 'Any' is never used",
+      "suggestion": "Remove the unused import: Any",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/check_db.py",
+      "line": 11,
+      "message": "Imported symbol 'Client' is never used",
+      "suggestion": "Remove the unused import: Client",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/check_db.py",
+      "line": 13,
+      "message": "Imported symbol 'GitCommit' is never used",
+      "suggestion": "Remove the unused import: GitCommit",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/check_db.py",
+      "line": 14,
+      "message": "Imported symbol 'GitIntegration' is never used",
+      "suggestion": "Remove the unused import: GitIntegration",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/check_db.py",
+      "line": 15,
+      "message": "Imported symbol 'GitRepository' is never used",
+      "suggestion": "Remove the unused import: GitRepository",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/check_db.py",
+      "line": 19,
+      "message": "Imported symbol 'User' is never used",
+      "suggestion": "Remove the unused import: User",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/scripts/test_pdf_generation.py",
+      "line": 2,
+      "message": "Imported symbol 'os' is never used",
+      "suggestion": "Remove the unused import: os",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/scripts/test_webhook_simulation.py",
+      "line": 6,
+      "message": "Imported symbol 'MagicMock' is never used",
+      "suggestion": "Remove the unused import: MagicMock",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/scripts/test_webhook_simulation.py",
+      "line": 20,
+      "message": "Imported symbol 'TimeTrackerIntegration' is never used",
+      "suggestion": "Remove the unused import: TimeTrackerIntegration",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/scripts/test_webhook_simulation.py",
+      "line": 21,
+      "message": "Imported symbol 'Milestone' is never used",
+      "suggestion": "Remove the unused import: Milestone",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/scripts/test_webhook_simulation.py",
+      "line": 23,
+      "message": "Imported symbol 'TimeSession' is never used",
+      "suggestion": "Remove the unused import: TimeSession",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/tests/conftest.py",
+      "line": 27,
+      "message": "Imported symbol 'settings' is never used",
+      "suggestion": "Remove the unused import: settings",
+      "confidence": 98
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "backend/tests/integration/test_sample_flows.py",
+      "line": 304,
+      "message": "Module 'app.schemas.payment' exists but has no export named 'PaymentCreate'",
+      "suggestion": "Did you mean: payment_received_at, payment_reference, payment_method?",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "backend/tests/integration/test_sample_flows.py",
+      "line": 304,
+      "message": "Module 'app.schemas.payment' exists but has no export named 'PaymentResponse'",
+      "suggestion": "Did you mean: PaymentInitializeResponse, PaymentInitializeResponse, payment_reference?",
+      "confidence": 99
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/tests/integration/test_sample_flows.py",
+      "line": 12,
+      "message": "Imported symbol 'AsyncMock' is never used",
+      "suggestion": "Remove the unused import: AsyncMock",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/tests/integration/test_sample_flows.py",
+      "line": 12,
+      "message": "Imported symbol 'patch' is never used",
+      "suggestion": "Remove the unused import: patch",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/tests/services/test_auth_service.py",
+      "line": 12,
+      "message": "Imported symbol 'MagicMock' is never used",
+      "suggestion": "Remove the unused import: MagicMock",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/tests/services/test_auth_service.py",
+      "line": 12,
+      "message": "Imported symbol 'patch' is never used",
+      "suggestion": "Remove the unused import: patch",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/tests/services/test_budget_monitor.py",
+      "line": 11,
+      "message": "Imported symbol 'Decimal' is never used",
+      "suggestion": "Remove the unused import: Decimal",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/tests/services/test_budget_monitor.py",
+      "line": 12,
+      "message": "Imported symbol 'AsyncMock' is never used",
+      "suggestion": "Remove the unused import: AsyncMock",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/tests/services/test_budget_monitor.py",
+      "line": 12,
+      "message": "Imported symbol 'patch' is never used",
+      "suggestion": "Remove the unused import: patch",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/tests/services/test_client_service.py",
+      "line": 9,
+      "message": "Imported symbol 'pytest' is never used",
+      "suggestion": "Remove the unused import: pytest",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/tests/services/test_contract_service.py",
+      "line": 12,
+      "message": "Imported symbol 'pytest' is never used",
+      "suggestion": "Remove the unused import: pytest",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/tests/services/test_email_templates.py",
+      "line": 8,
+      "message": "Imported symbol 'pytest' is never used",
+      "suggestion": "Remove the unused import: pytest",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/tests/services/test_nats_service.py",
+      "line": 9,
+      "message": "Imported symbol 'pytest' is never used",
+      "suggestion": "Remove the unused import: pytest",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/tests/services/test_pdf_generator.py",
+      "line": 456,
+      "message": "Imported symbol 'logger' is never used",
+      "suggestion": "Remove the unused import: logger",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/tests/services/test_project_service.py",
+      "line": 11,
+      "message": "Imported symbol 'pytest' is never used",
+      "suggestion": "Remove the unused import: pytest",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/tests/services/test_project_service.py",
+      "line": 102,
+      "message": "Imported symbol 're' is never used",
+      "suggestion": "Remove the unused import: re",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/tests/test_changelog_generator.py",
+      "line": 6,
+      "message": "Imported symbol 'MagicMock' is never used",
+      "suggestion": "Remove the unused import: MagicMock",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/tests/test_changelog_generator.py",
+      "line": 7,
+      "message": "Imported symbol 'uuid4' is never used",
+      "suggestion": "Remove the unused import: uuid4",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/tests/test_changelog_generator.py",
+      "line": 9,
+      "message": "Imported symbol 'pytest' is never used",
+      "suggestion": "Remove the unused import: pytest",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "backend/tests/test_database_optimizations.py",
+      "line": 20,
+      "message": "Imported symbol 'get_async_session' is never used",
+      "suggestion": "Remove the unused import: get_async_session",
+      "confidence": 98
+    }
+  ],
+  "deadCode": [
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "__all__",
+      "file": "../app/workers/__init__.py",
+      "message": "Export '__all__' is never used anywhere in the codebase"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "app/workers/__init__.py",
+      "file": "../app/workers/__init__.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "TEST_USER_UUID",
+      "file": "../app/utils/uuid_helpers.py",
+      "message": "Export 'TEST_USER_UUID' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "TEST_CLIENT_UUID",
+      "file": "../app/utils/uuid_helpers.py",
+      "message": "Export 'TEST_CLIENT_UUID' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "TEST_PROJECT_UUID",
+      "file": "../app/utils/uuid_helpers.py",
+      "message": "Export 'TEST_PROJECT_UUID' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "TEST_MILESTONE_UUID",
+      "file": "../app/utils/uuid_helpers.py",
+      "message": "Export 'TEST_MILESTONE_UUID' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "TEST_DELIVERABLE_UUID",
+      "file": "../app/utils/uuid_helpers.py",
+      "message": "Export 'TEST_DELIVERABLE_UUID' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "TEST_INVOICE_UUID",
+      "file": "../app/utils/uuid_helpers.py",
+      "message": "Export 'TEST_INVOICE_UUID' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "TEST_CONTRACT_UUID",
+      "file": "../app/utils/uuid_helpers.py",
+      "message": "Export 'TEST_CONTRACT_UUID' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "TEST_TIME_ENTRY_UUID",
+      "file": "../app/utils/uuid_helpers.py",
+      "message": "Export 'TEST_TIME_ENTRY_UUID' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "EXAMPLE_UUID_MAPPING",
+      "file": "../app/utils/uuid_helpers.py",
+      "message": "Export 'EXAMPLE_UUID_MAPPING' is never used anywhere in the codebase"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "app/utils/uuid_helpers.py",
+      "file": "../app/utils/uuid_helpers.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "_l1_cache_lock",
+      "file": "../app/utils/redis_client.py",
+      "message": "Export '_l1_cache_lock' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "PDF_TIMEOUT_SECONDS",
+      "file": "../app/utils/pdf_generator.py",
+      "message": "Export 'PDF_TIMEOUT_SECONDS' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "pdf_queue",
+      "file": "../app/utils/pdf_generator.py",
+      "message": "Export 'pdf_queue' is never used anywhere in the codebase"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "app/utils/seed_system_templates.py",
+      "file": "../app/utils/seed_system_templates.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "app/utils/query_optimizer.py",
+      "file": "../app/utils/query_optimizer.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "app/utils/cache.py",
+      "file": "../app/utils/cache.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "app/services/planning_service.py",
+      "file": "../app/services/planning_service.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "app/services/phantom_analytics_service.py",
+      "file": "../app/services/phantom_analytics_service.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "app/services/invoice_service.py",
+      "file": "../app/services/invoice_service.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "app/services/enforcement.py",
+      "file": "../app/services/enforcement.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "app/services/changelog_generator.py",
+      "file": "../app/services/changelog_generator.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "app/schemas/__init__.py",
+      "file": "../app/schemas/__init__.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "app/observability/__init__.py",
+      "file": "../app/observability/__init__.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "app/middleware/subscription_middleware.py",
+      "file": "../app/middleware/subscription_middleware.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "app/middleware/csrf_middleware.py",
+      "file": "../app/middleware/csrf_middleware.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "app/middleware/cors_validation_middleware.py",
+      "file": "../app/middleware/cors_validation_middleware.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "app/middleware/auth_middleware.py",
+      "file": "../app/middleware/auth_middleware.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "app/utils/git_providers/__init__.py",
+      "file": "../app/utils/git_providers/__init__.py",
+      "message": "File has exports but nothing is used anywhere"
+    }
+  ]
+}

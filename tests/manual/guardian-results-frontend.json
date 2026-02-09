@@ -1,0 +1,355 @@
+{
+  "meta": {
+    "tool": "start_guardian (unified context)",
+    "projectPath": "/home/codegoddy/Desktop/codeguardian_mcp/report",
+    "scope": "frontend",
+    "frontendDir": "/home/codegoddy/Desktop/codeguardian_mcp/report/frontend",
+    "contextLanguage": "all",
+    "timestamp": "2026-02-09T15:58:42.317Z",
+    "totalTimeMs": 307382,
+    "contextBuildTimeMs": 32120,
+    "deadCodeTimeMs": 175366,
+    "verificationTimeMs": 23719
+  },
+  "context": {
+    "totalFilesInUnifiedContext": 462,
+    "symbolsInUnifiedContext": 4141,
+    "contextQuality": "fair",
+    "frontendFilesScanned": 208,
+    "tsManifestPackages": 50,
+    "pyManifestPackages": 237
+  },
+  "summary": {
+    "totalConfirmedIssues": 42,
+    "hallucinations": 13,
+    "deadCode": 29,
+    "rawHallucinations": 15,
+    "rawDeadCode": 30,
+    "falsePositivesFiltered": 3,
+    "uncertainCount": 0
+  },
+  "hallucinations": [
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 7,
+      "message": "Imported symbol 'WorkspaceLayout' does not exist in module '@/components/layout/workspace-layout'",
+      "suggestion": "Did you mean: workspaceId, s, p?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 8,
+      "message": "Imported symbol 'ProjectFile' does not exist in module '@/contexts/project-context'",
+      "suggestion": "Did you mean: project, Project, Project?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 9,
+      "message": "Imported symbol 'useFilesBundle' does not exist in module '@/lib/api/bundles/filesBundle'",
+      "suggestion": "Did you mean: use, i, e?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 17,
+      "message": "Imported symbol 'Input' does not exist in module '@/components/ui/input'",
+      "suggestion": "Did you mean: inputs, inputValue, InputSanitizationMiddleware?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 18,
+      "message": "Imported symbol 'Label' does not exist in module '@/components/ui/label'",
+      "suggestion": "Did you mean: label, labels, l?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 19,
+      "message": "Imported symbol 'Textarea' does not exist in module '@/components/ui/textarea'",
+      "suggestion": "Did you mean: textarea, text, t?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 27,
+      "message": "Module '../../../components/LoadingSpinner' found in import does not exist",
+      "suggestion": "Check the relative file path",
+      "confidence": 99
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 29,
+      "message": "Imported symbol 'withPageAccess' does not exist in module '@/components/access/with-page-access'",
+      "suggestion": "Did you mean: page, i, t?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentImport",
+      "severity": "critical",
+      "file": "frontend/devhq-frontend/src/app/workspace/[workspaceId]/projects/[projectId]/files/page.tsx",
+      "line": 30,
+      "message": "Imported symbol 'FileOwnershipDisplay' does not exist in module '@/components/files/file-ownership-display'",
+      "suggestion": "Did you mean: file, f, i?",
+      "confidence": 93
+    },
+    {
+      "type": "nonExistentMethod",
+      "severity": "medium",
+      "file": "frontend/jest.setup.js",
+      "line": 78,
+      "message": "Method 'displayName' not found on 'MockLink' (verify manually)",
+      "suggestion": "Did you mean: usePathname, Gitlab, useAuthContext?",
+      "confidence": 70
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/app/integrations/callback/page.tsx",
+      "line": 6,
+      "message": "Imported symbol 'gitIntegrationApi' is never used",
+      "suggestion": "Remove the unused import: gitIntegrationApi",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/app/integrations/page.tsx",
+      "line": 15,
+      "message": "Imported symbol 'gitIntegrationApi' is never used",
+      "suggestion": "Remove the unused import: gitIntegrationApi",
+      "confidence": 98
+    },
+    {
+      "type": "unusedImport",
+      "severity": "warning",
+      "file": "frontend/src/components/Sidebar.tsx",
+      "line": 11,
+      "message": "Imported symbol 'HelpCircle' is never used",
+      "suggestion": "Remove the unused import: HelpCircle",
+      "confidence": 98
+    }
+  ],
+  "deadCode": [
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "cleanupOldAuthTokens",
+      "file": "../frontend/src/utils/authMigration.ts",
+      "message": "Export 'cleanupOldAuthTokens' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "hasOldAuthTokens",
+      "file": "../frontend/src/utils/authMigration.ts",
+      "message": "Export 'hasOldAuthTokens' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "getAuthStorageState",
+      "file": "../frontend/src/utils/authMigration.ts",
+      "message": "Export 'getAuthStorageState' is never used anywhere in the codebase"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "clearAllAuthData",
+      "file": "../frontend/src/utils/authMigration.ts",
+      "message": "Export 'clearAllAuthData' is never used anywhere in the codebase"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/utils/authMigration.ts",
+      "file": "../frontend/src/utils/authMigration.ts",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "unusedExport",
+      "severity": "low",
+      "name": "disconnectNATS",
+      "file": "../frontend/src/services/nats.ts",
+      "message": "Export 'disconnectNATS' is never used anywhere in the codebase"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/verify_settings_setup.py",
+      "file": "../backend/verify_settings_setup.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/verify_seeding.py",
+      "file": "../backend/verify_seeding.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/check_db.py",
+      "file": "../backend/check_db.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/check_columns.py",
+      "file": "../backend/check_columns.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/scripts/test_webhook_simulation.py",
+      "file": "../backend/scripts/test_webhook_simulation.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/scripts/test_pdf_generation.py",
+      "file": "../backend/scripts/test_pdf_generation.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/scripts/generate_encryption_key.py",
+      "file": "../backend/scripts/generate_encryption_key.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/scripts/backfill_commit_stats.py",
+      "file": "../backend/scripts/backfill_commit_stats.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/alembic/env.py",
+      "file": "../backend/alembic/env.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/TimeTrackingDisplay.tsx",
+      "file": "../frontend/src/components/TimeTrackingDisplay.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/TimeReviewButton.tsx",
+      "file": "../frontend/src/components/TimeReviewButton.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/StickyScroll.tsx",
+      "file": "../frontend/src/components/StickyScroll.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/ProjectDocumentationSection.tsx",
+      "file": "../frontend/src/components/ProjectDocumentationSection.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/OTPVerification.tsx",
+      "file": "../frontend/src/components/OTPVerification.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/ManualTimeEntry.tsx",
+      "file": "../frontend/src/components/ManualTimeEntry.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/FAQSchema.tsx",
+      "file": "../frontend/src/components/FAQSchema.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/DeliverableDocumentation.tsx",
+      "file": "../frontend/src/components/DeliverableDocumentation.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/ContractSection.tsx",
+      "file": "../frontend/src/components/ContractSection.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/CommitHistory.tsx",
+      "file": "../frontend/src/components/CommitHistory.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "frontend/src/components/BudgetHealthWidget.tsx",
+      "file": "../frontend/src/components/BudgetHealthWidget.tsx",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/app/workers/task_queue.py",
+      "file": "../backend/app/workers/task_queue.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/app/workers/session_monitor.py",
+      "file": "../backend/app/workers/session_monitor.py",
+      "message": "File has exports but nothing is used anywhere"
+    },
+    {
+      "type": "orphanedFile",
+      "severity": "low",
+      "name": "backend/app/workers/performance_monitor.py",
+      "file": "../backend/app/workers/performance_monitor.py",
+      "message": "File has exports but nothing is used anywhere"
+    }
+  ]
+}

@@ -163,7 +163,7 @@ cython_debug/
  
 #Testing Reports
 report/
-report.json
+#report.json
 
 # API Contract test results
 api-contract-results.txt
