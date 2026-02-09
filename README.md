@@ -19,9 +19,10 @@
 
 <p align="center">
   <a href="#installation">Installation</a> &bull;
+  <a href="#connecting-to-your-mcp-client">Connect MCP</a> &bull;
+  <a href="#quick-start">Quick Start</a> &bull;
   <a href="#features">Features</a> &bull;
-  <a href="#how-it-works">How It Works</a> &bull;
-  <a href="#tools">Tools</a> &bull;
+  <a href="#all-tools">All Tools</a> &bull;
   <a href="#contributing">Contributing</a>
 </p>
 
@@ -62,10 +63,17 @@ CodeGuardian validates AI-generated code against your **actual codebase** before
 
 ## Installation
 
+### Prerequisites
+
+- **Node.js** v20 or higher ([Download](https://nodejs.org/))
+- **pnpm** package manager ([Install](https://pnpm.io/installation))
+
+### Clone & Build
+
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/codeguardian-mcp.git
-cd codeguardian-mcp
+git clone https://github.com/codegoddy/codeguardian_mcp.git
+cd codeguardian_mcp
 
 # Install dependencies
 pnpm install
@@ -74,20 +82,95 @@ pnpm install
 pnpm run build
 ```
 
-### MCP Client Configuration
+## Connecting to Your MCP Client
 
-Add to your MCP client (Claude Desktop, Kiro, Cursor, etc.):
+After building, you need to tell your MCP client (Claude Desktop, Windsurf, Cursor, etc.) where CodeGuardian lives.
 
+The key is the **absolute path** to `dist/server.js` inside wherever you cloned the repo.
+
+### 1. Find your path
+
+Run this from inside the cloned repo to get the exact path:
+
+```bash
+echo "$(pwd)/dist/server.js"
+```
+
+This will output something like:
+- **Linux**: `/home/youruser/codeguardian_mcp/dist/server.js`
+- **macOS**: `/Users/youruser/codeguardian_mcp/dist/server.js`
+- **Windows**: `C:\Users\youruser\codeguardian_mcp\dist\server.js`
+
+### 2. Add to your MCP client config
+
+Copy the path from step 1 and add it to your client's MCP configuration:
+
+**Claude Desktop** (`claude_desktop_config.json`):
 ```json
 {
   "mcpServers": {
     "codeguardian": {
       "command": "node",
-      "args": ["/path/to/codeguardian-mcp/dist/server.js"]
+      "args": ["/home/youruser/codeguardian_mcp/dist/server.js"]
     }
   }
 }
 ```
+
+**Windsurf / Cursor** (`mcp_config.json`):
+```json
+{
+  "mcpServers": {
+    "codeguardian": {
+      "command": "node",
+      "args": ["/home/youruser/codeguardian_mcp/dist/server.js"]
+    }
+  }
+}
+```
+
+> **Important:** Replace the path with the actual output from step 1. The path depends on where **you** cloned the repo.
+
+### 3. Restart your MCP client
+
+Restart your IDE / MCP client for the changes to take effect. You should see CodeGuardian's tools become available.
+
+## Quick Start
+
+The two primary tools that handle everything for you:
+
+### `start_validation` — Full Project Health Check
+
+Scans your entire codebase for hallucinations, dead code, and bad imports. Best for on-demand audits.
+
+```
+start_validation({
+  projectPath: "/absolute/path/to/your/project",
+  language: "typescript"
+})
+```
+
+This runs in the background (no timeouts). Check progress and get results with:
+- `get_validation_status({ jobId: "..." })` — poll progress
+- `get_validation_results({ jobId: "..." })` — get the final report
+
+### `start_guardian` — Real-Time File Watcher
+
+Watches your project and automatically validates files as you (or your AI) edit them. Runs continuously in the background.
+
+```
+start_guardian({
+  projectPath: "/absolute/path/to/your/project",
+  language: "typescript"
+})
+```
+
+Once running, it catches issues in real-time. Use these companion tools:
+- `get_guardian_alerts` — see current issues found by the watcher
+- `get_guardian_status` — check which guardians are active
+- `stop_guardian` — stop a guardian when done
+
+> **Tip:** These two tools handle everything without needing to call individual validation tools manually. `start_validation` for audits, `start_guardian` for continuous protection.
 
 ## Features
 
@@ -107,98 +190,18 @@ Every issue includes a confidence score (0-100%) and detailed reasoning
 ### Dead Code Detection
 Finds exported functions and classes that nothing imports
 
+### API Contract Validation
+Detects mismatches between frontend and backend — wrong endpoints, missing fields, type incompatibilities
+
 ### Multi-Language Support
-- **TypeScript / JavaScript** [SUPPORTED]
-- **Python** [SUPPORTED]
-- **Go** (partial)
+- **TypeScript / JavaScript** — full support
+- **Python** — full support
+
+### Full-Stack Projects
+Automatically detects full-stack projects (e.g. React + FastAPI, Next.js + Express) and validates each language correctly.
 
 ### Real-Time Validation
 Validates code immediately after generation with sub-second response times
-
-## Tools
-
-### `validate_code`
-
-The main tool. Validates AI-generated code snippets against your project's actual symbols.
-
-```typescript
-// Basic validation
-validate_code({
-  projectPath: ".",
-  newCode: "const user = getUserById(id);",
-  language: "typescript"
-})
-
-// Strict mode (requires explicit imports)
-validate_code({
-  projectPath: ".",
-  newCode: "...",
-  language: "typescript",
-  strictMode: true
-})
-
-// Scan for dead code
-validate_code({
-  projectPath: ".",
-  language: "typescript",
-  checkDeadCode: true
-})
-```
-
-**Example Output:**
-```json
-{
-  "score": 50,
-  "hallucinationDetected": true,
-  "hallucinations": [
-    {
-      "type": "nonExistentFunction",
-      "severity": "critical", 
-      "message": "Function 'getUserById' does not exist in project",
-      "line": 5,
-      "code": "const user = getUserById(id);",
-      "suggestion": "Did you mean: findUserById, getUser?",
-      "confidence": 95,
-      "reasoning": "Searched 1,247 symbols in project. Found no function named 'getUserById'. Similar functions found using fuzzy matching."
-    }
-  ],
-  "recommendation": {
-    "verdict": "REJECT",
-    "riskLevel": "critical",
-    "message": "DO NOT USE - 1 hallucination(s): references to non-existent code",
-    "action": "Fix all critical issues before using this code"
-  }
-}
-```
-
-### `validate_code_batch`
-
-**NEW:** Validates entire codebases without timeouts. Perfect for large projects (100+ files).
-
-```typescript
-// Validate entire frontend directory
-validate_code_batch({
-  projectPath: "/path/to/frontend",
-  language: "typescript",
-  batchSize: 50
-})
-```
-
-**Performance:**
-- 200 files: ~30 seconds
-- 500 files: ~60 seconds
-- 1000 files: ~120 seconds
-
-### `get_dependency_graph`
-
-Shows what files depend on what. Understand the impact of changes.
-
-```typescript
-get_dependency_graph({
-  target: "src/auth/login.ts",
-  language: "typescript"
-})
-```
 
 ## What It Catches
 
@@ -212,6 +215,7 @@ get_dependency_graph({
 | Wrong param count | `func(a, b)` when expects 3 params | High | 88% |
 | Dead export | Exported function nothing imports | Medium | 85% |
 | Hardcoded credentials | `API_KEY = 'sk_live_...'` | Critical | 85% |
+| API contract mismatch | Frontend calls endpoint that doesn't exist on backend | Critical | 90% |
 
 ## How It Works
 
@@ -237,25 +241,44 @@ get_dependency_graph({
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Agent Integration (Vibe Guard Protocol)
+## All Tools
 
-We recommend a **"Dual-Mode"** strategy for agents:
+### Primary Tools (start here)
 
-| Agent Type | Tool | When to Use | Goal |
-| :--- | :--- | :--- | :--- |
-| **Self-Correcting Agent** | `validate_code` | **Immediately** after generating code | Catch hallucinations before showing user |
-| **Guardian Agent** | `validate_code` logic | On **File Save** / Watch | Real-time "red squiggly" feedback |
-| **Auditor Agent** | `start_validation` | On **Demand** / Review | Full project health check |
+| Tool | Description |
+|------|-------------|
+| `start_validation` | Full project scan — runs in background, no timeouts. Use for on-demand audits. |
+| `start_guardian` | Real-time file watcher — validates files as they change. Use for continuous protection. |
 
-## Prompts
+### Validation Job Tools
 
-CodeGuardian provides validation prompts based on prompt engineering best practices:
+| Tool | Description |
+|------|-------------|
+| `get_validation_status` | Poll progress of a `start_validation` job |
+| `get_validation_results` | Get final results when a validation job completes |
 
-1. **`validate`** - Quick zero-shot validation for simple snippets
-2. **`validate-detailed`** - Chain-of-thought reasoning for complex code
-3. **`validate-with-examples`** - Few-shot learning with common AI mistakes
-4. **`validate-comprehensive`** - Multi-perspective analysis for critical code
-5. **`validate-structured`** - Structured output for CI/CD integration
+### Guardian Tools
+
+| Tool | Description |
+|------|-------------|
+| `get_guardian_alerts` | Get current issues found by active guardians |
+| `get_guardian_status` | Check which guardians are running |
+| `stop_guardian` | Stop a specific guardian or all guardians |
+
+### Individual Tools
+
+| Tool | Description |
+|------|-------------|
+| `validate_code` | Validate a single code snippet against your project's symbols |
+| `build_context` | Build/rebuild project symbol index (usually auto-called) |
+| `get_dependency_graph` | Show what files depend on what — understand the blast radius of changes |
+
+### API Contract Tools
+
+| Tool | Description |
+|------|-------------|
+| `validate_api_contracts` | Validate frontend/backend API contract compatibility |
+| `get_api_contract_report` | Generate a detailed API contract validation report |
 
 ## What It Skips (No False Positives)
 
@@ -270,7 +293,7 @@ CodeGuardian provides validation prompts based on prompt engineering best practi
 - Doesn't catch logic errors (that's still on you)
 - Dynamic code (`eval`, reflection) can't be tracked
 - Method calls on untyped objects may be skipped to avoid false positives
-- Very large monorepos (>1000 files) should use `validate_code_batch`
+- Very large monorepos (>1000 files) should use `start_validation` with batching
 
 ## Contributing
 
@@ -287,7 +310,7 @@ MIT License - see [LICENSE](LICENSE) file for details.
 </p>
 
 <p align="center">
-  <a href="https://github.com/yourusername/codeguardian-mcp">Star us on GitHub</a> &bull;
-  <a href="https://github.com/yourusername/codeguardian-mcp/issues">Report Issues</a> &bull;
-  <a href="https://github.com/yourusername/codeguardian-mcp/discussions">Discussions</a>
+  <a href="https://github.com/codegoddy/codeguardian_mcp">Star us on GitHub</a> &bull;
+  <a href="https://github.com/codegoddy/codeguardian_mcp/issues">Report Issues</a> &bull;
+  <a href="https://github.com/codegoddy/codeguardian_mcp/discussions">Discussions</a>
 </p>

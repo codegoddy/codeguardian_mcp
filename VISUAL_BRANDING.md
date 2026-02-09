@@ -3,32 +3,32 @@
 ## 1. Logo/Header Concept
 
 ```
-    ╔═══════════════════════════════════════════════════════════════╗
-    ║                                                               ║
-    ║     ██████╗ ██████╗ ██████╗ ███████╗                          ║
-    ║    ██╔════╝██╔═══██╗██╔══██╗██╔════╝                          ║
-    ║    ██║     ██║   ██║██║  ██║█████╗                            ║
-    ║    ██║     ██║   ██║██║  ██║██╔══╝                            ║
-    ║    ╚██████╗╚██████╔╝██████╔╝███████╗                          ║
-    ║     ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝                          ║
-    ║                                                               ║
-    ║    ██████╗ ██╗   ██╗ █████╗ ██████╗ ██████╗ ██╗ █████╗ ███╗   ║
-    ║    ██╔══██╗██║   ██║██╔══██╗██╔══██╗██╔══██╗██║██╔══██╗████╗  ║
-    ║    ██████╔╝██║   ██║███████║██║  ██║██║  ██║██║███████║██╔██╗ ║
-    ║    ██╔══██╗██║   ██║██╔══██║██║  ██║██║  ██║██║██╔══██║██║╚██╗║
-    ║    ██║  ██║╚██████╔╝██║  ██║██████╔╝██████╔╝██║██║  ██║██║ ██║║
-    ║    ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═════╝ ╚═════╝ ╚═╝╚═╝  ╚═╝╚═╝ ╚═╝║
-    ║                                                               ║
-    ║              🛡️  CATCHING AI HALLUCINATIONS  🛡️               ║
-    ║                                                               ║
-    ╚═══════════════════════════════════════════════════════════════╝
+    ╔══════════════════════════════════════════════════════════════════════════════════════╗
+    ║                                                                                      ║
+    ║     ██████╗ ██████╗ ██████╗ ███████╗ ██████╗ ██╗   ██╗ █████╗ ██████╗ ██████╗        ║
+    ║    ██╔════╝██╔═══██╗██╔══██╗██╔════╝██╔════╝ ██║   ██║██╔══██╗██╔══██╗██╔══██╗       ║
+    ║    ██║     ██║   ██║██║  ██║█████╗  ██║  ███╗██║   ██║███████║██████╔╝██║  ██║       ║
+    ║    ██║     ██║   ██║██║  ██║██╔══╝  ██║   ██║██║   ██║██╔══██║██╔══██╗██║  ██║       ║
+    ║    ╚██████╗╚██████╔╝██████╔╝███████╗╚██████╔╝╚██████╔╝██║  ██║██║  ██║██████╔╝       ║
+    ║     ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝        ║
+    ║                                                                                      ║
+    ║    ██╗ █████╗ ███╗   ██╗    ███╗   ███╗ ██████╗██████╗                                ║
+    ║    ██║██╔══██╗████╗  ██║    ████╗ ████║██╔════╝██╔══██╗                               ║
+    ║    ██║███████║██╔██╗ ██║    ██╔████╔██║██║     ██████╔╝                               ║
+    ║    ██║██╔══██║██║╚██╗██║    ██║╚██╔╝██║██║     ██╔═══╝                                ║
+    ║    ██║██║  ██║██║ ╚████║    ██║ ╚═╝ ██║╚██████╗██║                                   ║
+    ║    ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝    ╚═╝     ╚═╝ ╚═════╝╚═╝                                   ║
+    ║                                                                                      ║
+    ║                    CATCHING AI HALLUCINATIONS                                        ║
+    ║                                                                                      ║
+    ╚══════════════════════════════════════════════════════════════════════════════════════╝
 ```
 
 ### Alternative Compact Header
 
 ```
 ╔════════════════════════════════════════════════════════════════════════════╗
-║  🛡️  CODEGUARDIAN MCP  |  AI Hallucination Detection & Code Validation    ║
+║  CODEGUARDIAN MCP  |  AI Hallucination Detection & Code Validation        ║
 ╚════════════════════════════════════════════════════════════════════════════╝
 ```
 
@@ -38,12 +38,12 @@
                     /\
                    /  \
                   /    \
-                 /  🛡️  \
-                /   AI   \
-               / GUARDIAN \
+                 / CODE \
+                /GUARDIAN\
+               /   MCP    \
               /─────────────\
-             /  CODE  VALID  \
-            /    PROTECTOR    \
+             /  AI  HALLUC.  \
+            /    DETECTION    \
            /───────────────────\
           /   CATCHES HALLUCINATIONS  \
          /─────────────────────────────\
@@ -83,7 +83,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  🛡️  FEATURE BADGES                                                          │
+│  FEATURE BADGES                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 TypeScript    [██████████] 100%  ████████████████████████████████████████  TS
@@ -92,7 +92,7 @@ Python        [██████████] 100%  █████████
 MCP Server    [██████████] 100%  ████████████████████████████████████████  MCP
 AI Detection  [██████████] 100%  ████████████████████████████████████████  AI
 Dead Code     [██████████] 100%  ████████████████████████████████████████  DC
-MIT License   [██████████] 100%  ████████████████████████████████████████  📜
+MIT License   [██████████] 100%  ████████████████████████████████████████  LIC
 ```
 
 ---
@@ -101,12 +101,12 @@ MIT License   [██████████] 100%  █████████
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                         🔄 CODEGUARDIAN WORKFLOW                            │
+│                         CODEGUARDIAN WORKFLOW                                │
 └─────────────────────────────────────────────────────────────────────────────┘
 
     ┌──────────────┐         ┌──────────────┐         ┌──────────────┐
     │              │         │              │         │              │
-    │   🤖 AI      │────────▶│  🛡️ CODE-    │────────▶│   ✅ CODE    │
+    │   AI         │────────▶│  CODE-       │────────▶│   CODE       │
     │  GENERATES   │         │  GUARDIAN    │         │   VALIDATED  │
     │    CODE      │         │  VALIDATES   │         │              │
     │              │         │              │         │              │
@@ -115,7 +115,7 @@ MIT License   [██████████] 100%  █████████
                                     ▼
                            ┌──────────────┐
                            │              │
-                           │  ⚠️ ISSUES   │
+                           │   ISSUES     │
                            │   FOUND?     │
                            │              │
                            └──────┬───────┘
@@ -125,7 +125,7 @@ MIT License   [██████████] 100%  █████████
                     ▼ YES                       ▼ NO
            ┌──────────────┐            ┌──────────────┐
            │              │            │              │
-           │ 💡 SUGGEST   │            │  🎉 ALL      │
+           │  SUGGEST     │            │   ALL        │
            │  FIXES       │            │   CLEAR!     │
            │              │            │              │
            └──────────────┘            └──────────────┘
@@ -135,23 +135,23 @@ MIT License   [██████████] 100%  █████████
 
 ```
 ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│   🤖 AI      │───▶│  🛡️ CODE-    │───▶│   ⚠️ CHECK   │───▶│   ✅ VALID   │
+│   AI         │───▶│  CODE-       │───▶│   CHECK      │───▶│   VALID      │
 │  Generates   │    │  Guardian    │    │   Symbols    │    │   & Safe     │
 │    Code      │    │  Validates   │    │   Exist?     │    │   to Use     │
 └──────────────┘    └──────────────┘    └──────┬───────┘    └──────────────┘
                                                │
                                                ▼ NO
                                         ┌──────────────┐
-                                        │   ❌ ERROR   │
+                                        │   ERROR      │
                                         │  Function    │
                                         │  Not Found!  │
                                         └──────┬───────┘
                                                │
                                                ▼
                                         ┌──────────────┐
-                                        │   💡 DID     │
-                                        │    YOU       │
+                                        │   DID YOU    │
                                         │   MEAN...?   │
+                                        │              │
                                         └──────────────┘
 ```
 
@@ -161,17 +161,17 @@ MIT License   [██████████] 100%  █████████
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                        🎯 SEVERITY LEVELS                                    │
+│                        SEVERITY LEVELS                                       │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ 🔴 CRITICAL  │  Score: 0-49   │  ████████░░░░░░░░░░  │  IMMEDIATE ACTION   │
+│ CRITICAL  │  Score: 0-49   │  ████████░░░░░░░░░░  │  IMMEDIATE ACTION      │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ 🟠 HIGH      │  Score: 50-69  │  ████████████░░░░░░  │  SHOULD FIX         │
+│ HIGH      │  Score: 50-69  │  ████████████░░░░░░  │  SHOULD FIX            │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ 🟡 MEDIUM    │  Score: 70-89  │  ████████████████░░  │  REVIEW SUGGESTED   │
+│ MEDIUM    │  Score: 70-89  │  ████████████████░░  │  REVIEW SUGGESTED      │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ 🔵 LOW       │  Score: 90-100 │  ██████████████████  │  ACCEPTABLE         │
+│ LOW       │  Score: 90-100 │  ██████████████████  │  ACCEPTABLE            │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -180,10 +180,10 @@ MIT License   [██████████] 100%  █████████
 ```markdown
 <!-- Use these in your README -->
 
-**🔴 CRITICAL** - Non-existent functions, missing imports, undefined classes
-**🟠 HIGH** - Wrong parameter counts, type mismatches
-**🟡 MEDIUM** - Potential dead code, unused exports
-**🔵 LOW** - Minor suggestions, style issues
+**CRITICAL** - Non-existent functions, missing imports, undefined classes
+**HIGH** - Wrong parameter counts, type mismatches
+**MEDIUM** - Potential dead code, unused exports
+**LOW** - Minor suggestions, style issues
 ```
 
 ### Visual Severity Meter
@@ -195,16 +195,16 @@ SEVERITY METER
 0%        25%        50%        75%       100%
 │          │          │          │          │
 ▼          ▼          ▼          ▼          ▼
-🔴─────────🔴─────────🟠─────────🟡─────────🔵
+[X]────────[X]────────[!]────────[~]────────[OK]
 CRITICAL   CRITICAL   HIGH       MEDIUM     LOW
            ██████████░░░░░░░░░░░░░░░░░░░░░░
            
 VERDICT LEVELS:
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  ❌ REJECT    │  Score < 50   │  Critical hallucinations detected           │
-│  ⚠️  REVIEW   │  Score 50-69  │  Multiple issues, needs attention           │
-│  ⚡ CAUTION   │  Score 70-89  │  Minor issues, review suggested             │
-│  ✅ ACCEPT    │  Score 90-100 │  Code is safe to use                        │
+│  REJECT     │  Score < 50   │  Critical hallucinations detected             │
+│  REVIEW     │  Score 50-69  │  Multiple issues, needs attention             │
+│  CAUTION    │  Score 70-89  │  Minor issues, review suggested               │
+│  ACCEPT     │  Score 90-100 │  Code is safe to use                          │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -214,54 +214,54 @@ VERDICT LEVELS:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                     ⚠️  WITHOUT CODEGUARDIAN                                │
+│                     WITHOUT CODEGUARDIAN                                     │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  AI GENERATES CODE:                                                          │
 │                                                                              │
 │  ```typescript                                                               │
-│  const user = getUserById(id);  ❌ Function doesn't exist!                   │
-│  const payment = new PaymentGateway();  ❌ Class not defined!                │
-│  import { helper } from './utils';  ❌ Not exported from utils!              │
+│  const user = getUserById(id);  [X] Function doesn't exist!                  │
+│  const payment = new PaymentGateway();  [X] Class not defined!               │
+│  import { helper } from './utils';  [X] Not exported from utils!             │
 │  ```                                                                         │
 │                                                                              │
-│  Result: Code compiles ✅ → Runtime crash ❌ → Production bug 💥             │
+│  Result: Code compiles [OK] -> Runtime crash [X] -> Production bug [!!]      │
 │                                                                              │
-│  💸 Cost: Hours debugging, frustrated users, hotfix deployment               │
+│  Cost: Hours debugging, frustrated users, hotfix deployment                  │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-                                    ⬇️
-                                    ⬇️
-                              🛡️ CODEGUARDIAN
-                                    ⬇️
-                                    ⬇️
+                                      |
+                                      v
+                                CODEGUARDIAN
+                                      |
+                                      v
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                     ✅  WITH CODEGUARDIAN                                   │
+│                     WITH CODEGUARDIAN                                        │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  AI GENERATES CODE → INSTANT VALIDATION:                                     │
+│  AI GENERATES CODE -> INSTANT VALIDATION:                                    │
 │                                                                              │
 │  ```typescript                                                               │
 │  const user = getUserById(id);                                               │
 │  ```                                                                         │
 │                                                                              │
-│  🔍 VALIDATION RESULTS:                                                      │
+│  VALIDATION RESULTS:                                                         │
 │  ┌─────────────────────────────────────────────────────────────────────────┐ │
-│  │ 🔴 CRITICAL: Function 'getUserById' does not exist in project           │ │
+│  │ CRITICAL: Function 'getUserById' does not exist in project              │ │
 │  │                                                                          │ │
-│  │ 💡 SUGGESTION: Did you mean:                                            │ │
-│  │    • findUserById (in src/users.ts)                                     │ │
-│  │    • getUser (in src/auth.ts)                                           │ │
+│  │ SUGGESTION: Did you mean:                                               │ │
+│  │    - findUserById (in src/users.ts)                                     │ │
+│  │    - getUser (in src/auth.ts)                                           │ │
 │  │                                                                          │ │
-│  │ ❌ VERDICT: REJECT - Fix before using                                   │ │
+│  │ VERDICT: REJECT - Fix before using                                      │ │
 │  └─────────────────────────────────────────────────────────────────────────┘ │
 │                                                                              │
-│  Result: Issues caught immediately ✅ → Fixed before runtime ✅ → No bugs 🎉 │
+│  Result: Issues caught immediately -> Fixed before runtime -> No bugs        │
 │                                                                              │
-│  💰 Saved: Debugging time, user frustration, deployment stress               │
+│  Saved: Debugging time, user frustration, deployment stress                  │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -269,25 +269,25 @@ VERDICT LEVELS:
 
 ```
 ┌────────────────────────────────────┬────────────────────────────────────┐
-│      ❌ WITHOUT CODEGUARDIAN       │       ✅ WITH CODEGUARDIAN         │
+│      WITHOUT CODEGUARDIAN          │       WITH CODEGUARDIAN            │
 ├────────────────────────────────────┼────────────────────────────────────┤
 │                                    │                                    │
 │  AI generates code                 │  AI generates code                 │
-│       ↓                            │       ↓                            │
-│  Code looks correct                │  🛡️ Instant validation             │
-│       ↓                            │       ↓                            │
-│  Compiles successfully ✅          │  Issues detected immediately ⚠️    │
-│       ↓                            │       ↓                            │
-│  Deployed to production            │  Suggestions provided 💡           │
-│       ↓                            │       ↓                            │
-│  💥 Runtime crash!                 │  Fixed before deployment ✅        │
-│       ↓                            │       ↓                            │
-│  😰 Emergency hotfix               │  🎉 Clean production release       │
+│       |                            │       |                            │
+│  Code looks correct                │  Instant validation                │
+│       |                            │       |                            │
+│  Compiles successfully             │  Issues detected immediately       │
+│       |                            │       |                            │
+│  Deployed to production            │  Suggestions provided              │
+│       |                            │       |                            │
+│  Runtime crash!                    │  Fixed before deployment           │
+│       |                            │       |                            │
+│  Emergency hotfix                  │  Clean production release          │
 │                                    │                                    │
 ├────────────────────────────────────┼────────────────────────────────────┤
 │  Time to fix: Hours/Days           │  Time to fix: Seconds              │
-│  User impact: High 💔              │  User impact: None 🛡️              │
-│  Confidence: Low 😰                │  Confidence: High 😊               │
+│  User impact: High                 │  User impact: None                 │
+│  Confidence: Low                   │  Confidence: High                  │
 └────────────────────────────────────┴────────────────────────────────────┘
 ```
 
@@ -299,57 +299,56 @@ VERDICT LEVELS:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                     📊 CONFIDENCE SCORING                                    │
+│                     CONFIDENCE SCORING                                       │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-    100% ┤                                                    🔵 SAFE
+    100% ┤                                                    SAFE
          │                                            ████████████
-     90% ┤                                    🔵 ACCEPT
+     90% ┤                                    ACCEPT
          │                            ████████████
-     70% ┤                    🟡 CAUTION
+     70% ┤                    CAUTION
          │            ████████████
-     50% ┤    🟠 REVIEW
+     50% ┤    REVIEW
          │████████████
-      0% ┤🔴 REJECT
+      0% ┤ REJECT
          └────────────────────────────────────────────────────────────────
               0         50         70         90        100
                          CONFIDENCE SCORE
 
 LEGEND:
-🔴 0-49%   = REJECT   (Critical issues, do not use)
-🟠 50-69%  = REVIEW   (Multiple issues, needs fixing)
-🟡 70-89%  = CAUTION  (Minor issues, review suggested)
-🔵 90-100% = ACCEPT   (Safe to use)
+  0-49%   = REJECT   (Critical issues, do not use)
+  50-69%  = REVIEW   (Multiple issues, needs fixing)
+  70-89%  = CAUTION  (Minor issues, review suggested)
+  90-100% = ACCEPT   (Safe to use)
 ```
 
 ### Language Support Matrix
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                     🌐 LANGUAGE SUPPORT                                      │
+│                     LANGUAGE SUPPORT                                         │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────┬─────────────┬─────────────┬─────────────┬───────────────────┐
 │   LANGUAGE   │   PARSING   │   SYMBOLS   │   IMPORTS   │   DEAD CODE       │
 ├──────────────┼─────────────┼─────────────┼─────────────┼───────────────────┤
-│ TypeScript   │     ✅      │     ✅      │     ✅      │       ✅          │
-│ JavaScript   │     ✅      │     ✅      │     ✅      │       ✅          │
-│ Python       │     ✅      │     ✅      │     ✅      │       ✅          │
-│ Go           │     ✅      │     🟡      │     🟡      │       🟡          │
+│ TypeScript   │    [OK]     │    [OK]     │    [OK]     │      [OK]         │
+│ JavaScript   │    [OK]     │    [OK]     │    [OK]     │      [OK]         │
+│ Python       │    [OK]     │    [OK]     │    [OK]     │      [OK]         │
 └──────────────┴─────────────┴─────────────┴─────────────┴───────────────────┘
 
-✅ = Full Support    🟡 = Partial Support    ❌ = Not Supported
+[OK] = Full Support
 ```
 
 ### Quick Stats Dashboard
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                     📈 CODEGUARDIAN STATS                                    │
+│                     CODEGUARDIAN STATS                                       │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
-│  🎯 ACCURACY         │  │  ⚡ SPEED            │  │  🔍 COVERAGE         │
+│  ACCURACY            │  │  SPEED               │  │  COVERAGE            │
 │                      │  │                      │  │                      │
 │     95%              │  │   <100ms             │  │   1000+              │
 │                      │  │                      │  │                      │
@@ -358,12 +357,12 @@ LEGEND:
 └──────────────────────┘  └──────────────────────┘  └──────────────────────┘
 
 ┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
-│  🛡️ PROTECTION       │  │  💡 SUGGESTIONS      │  │  🌍 LANGUAGES        │
+│  PROTECTION          │  │  SUGGESTIONS         │  │  LANGUAGES           │
 │                      │  │                      │  │                      │
-│    24/7              │  │    99%               │  │      3+              │
+│    24/7              │  │    99%               │  │      3               │
 │                      │  │                      │  │                      │
 │  Real-time           │  │  Fix suggestions     │  │  TypeScript, JS,     │
-│  validation          │  │  accuracy            │  │  Python, Go          │
+│  validation          │  │  accuracy            │  │  Python              │
 └──────────────────────┘  └──────────────────────┘  └──────────────────────┘
 ```
 
@@ -374,17 +373,17 @@ LEGEND:
 ```
 ╔═════════════════════════════════════════════════════════════════════════════╗
 ║                                                                             ║
-║              🛡️  PROTECT YOUR CODEBASE FROM AI HALLUCINATIONS  🛡️          ║
+║              PROTECT YOUR CODEBASE FROM AI HALLUCINATIONS                   ║
 ║                                                                             ║
 ║   ┌─────────────────────────────────────────────────────────────────────┐   ║
 ║   │                                                                     │   ║
-║   │   Get Started:  npm install && npm run build                       │   ║
+║   │   Get Started:  pnpm install && pnpm run build                     │   ║
 ║   │                                                                     │   ║
-║   │   ⭐ Star us on GitHub    🐛 Report Issues    💡 Suggest Features   │   ║
+║   │   Star us on GitHub  |  Report Issues  |  Suggest Features          │   ║
 ║   │                                                                     │   ║
 ║   └─────────────────────────────────────────────────────────────────────┘   ║
 ║                                                                             ║
-║                    Licensed under MIT  |  Made with 💙 for developers        ║
+║                    Licensed under MIT  |  Made for developers               ║
 ║                                                                             ║
 ╚═════════════════════════════════════════════════════════════════════════════╝
 ```

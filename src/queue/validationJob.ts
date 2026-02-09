@@ -43,6 +43,7 @@ import type {
 import { glob } from "glob";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { validationReportStore } from "../resources/validationReportStore.js";
 
 /**
  * Detect language from file extension for per-file validation.
@@ -611,5 +612,30 @@ export function registerValidationJob(): void {
     "validation",
     handleValidationJob,
   );
+
+  // Auto-store report to disk when validation job completes
+  // This ensures the .json report exists even if get_validation_results is never called
+  jobQueue.on("complete", async (jobId: string, result: any) => {
+    const job = jobQueue.getJob(jobId);
+    if (!job || job.type !== "validation") return;
+
+    try {
+      const projectPath = (job.input as ValidationJobInput)?.projectPath || "";
+      if (!validationReportStore.has(jobId)) {
+        await validationReportStore.store(jobId, projectPath, {
+          summary: result.summary,
+          stats: result.stats,
+          hallucinations: result.hallucinations || [],
+          deadCode: result.deadCode || [],
+          score: result.score,
+          recommendation: result.recommendation,
+        });
+        logger.info(`Auto-stored validation report for job ${jobId}`);
+      }
+    } catch (err) {
+      logger.error(`Failed to auto-store report for job ${jobId}:`, err);
+    }
+  });
+
   logger.info("Registered validation job handler");
 }

@@ -59,13 +59,14 @@ pnpm --version  # Should be 8.x.x or higher
 
 ```bash
 git clone https://github.com/YOUR_USERNAME/codeguardian_mcp.git
+# (forked from https://github.com/codegoddy/codeguardian_mcp)
 cd codeguardian_mcp
 ```
 
 3. **Add the upstream remote**:
 
 ```bash
-git remote add upstream https://github.com/original-owner/codeguardian_mcp.git
+git remote add upstream https://github.com/codegoddy/codeguardian_mcp.git
 ```
 
 ### Installation
@@ -187,33 +188,34 @@ Understanding the project structure will help you navigate the codebase:
 ```
 codeguardian_mcp/
 ├── src/                      # Main source code
-│   ├── index.ts             # Entry point
-│   ├── server.ts            # MCP server setup
-│   ├── tools/               # Validation tools
-│   │   ├── validate.ts      # Main validation tool
-│   │   ├── dependencyGraph.ts
-│   │   └── contextBuilder.ts
+│   ├── server.ts            # MCP server entry point
+│   ├── tools/               # MCP tool implementations
+│   │   ├── index.ts         # Tool registration
+│   │   ├── validateCode.ts  # Single-snippet validation
+│   │   ├── asyncValidation.ts # Background validation jobs
+│   │   ├── buildContext.ts  # Context building tool
+│   │   └── getDependencyGraph.ts
+│   ├── agent/               # Guardian agent system
+│   │   ├── agentTools.ts    # Guardian + API contract tools
+│   │   ├── autoValidator.ts # Real-time file watcher
+│   │   └── fileWatcher.ts
 │   ├── analyzers/           # Code analysis modules
-│   │   ├── astAnalyzer.ts   # AST parsing and analysis
-│   │   ├── symbolResolver.ts
-│   │   └── typeChecker.ts
+│   │   ├── validation.ts    # Core validation logic
+│   │   ├── complexity.ts
+│   │   └── extractors/      # Language-specific AST extractors
 │   ├── context/             # Context building
 │   │   ├── projectContext.ts
-│   │   └── symbolIndex.ts
-│   ├── prompts/             # Validation prompts
-│   │   ├── validate.ts
-│   │   ├── validateDetailed.ts
-│   │   └── validateWithExamples.ts
-│   └── utils/               # Utility functions
-│       ├── fileUtils.ts
-│       └── logger.ts
+│   │   ├── apiContractContext.ts
+│   │   └── contextLineage.ts
+│   └── api-contract/        # API contract validation
+│       ├── validators/
+│       └── extractors/
 ├── tests/                   # Test files
-│   ├── unit/               # Unit tests
+│   ├── tools/              # Tool-level tests
 │   ├── integration/        # Integration tests
+│   ├── manual/             # Manual test scripts
 │   └── fixtures/           # Test fixtures
-├── docs/                    # Documentation
-│   ├── api.md
-│   └── guides/
+├── rules/                   # Anti-pattern rules
 ├── dist/                    # Compiled output (generated)
 ├── package.json
 ├── tsconfig.json
@@ -222,12 +224,12 @@ codeguardian_mcp/
 
 ### Key Directories
 
-- **`src/tools/`** - MCP tool implementations that expose validation functionality
-- **`src/analyzers/`** - Core analysis logic for AST parsing, symbol resolution, and type checking
-- **`src/context/`** - Project context building and symbol indexing
-- **`src/prompts/`** - Validation prompt templates following prompt engineering best practices
-- **`tests/`** - Comprehensive test suite with unit and integration tests
-- **`docs/`** - Additional documentation beyond the README
+- **`src/tools/`** - MCP tool implementations (validate_code, start_validation, build_context, etc.)
+- **`src/agent/`** - Guardian agent system for real-time file watching and validation
+- **`src/analyzers/`** - Core analysis logic for AST parsing, symbol resolution, and validation
+- **`src/context/`** - Project context building, symbol indexing, and API contract context
+- **`src/api-contract/`** - API contract validation between frontend and backend
+- **`tests/`** - Test suite with tool, integration, and manual tests
 
 ---
 
@@ -237,7 +239,7 @@ codeguardian_mcp/
 
 Before reporting a bug, please:
 
-1. Check if the issue already exists in the [Issues](https://github.com/original-owner/codeguardian_mcp/issues)
+1. Check if the issue already exists in the [Issues](https://github.com/codegoddy/codeguardian_mcp/issues)
 2. Try to reproduce the issue with the latest version
 
 When reporting a bug, please include:
