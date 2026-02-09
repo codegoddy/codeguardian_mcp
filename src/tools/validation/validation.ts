@@ -568,9 +568,24 @@ export function validateSymbols(
               // Double check against all symbols in file marked as exported
               // (sometimes exports are implicit in simple extractors)
               // For Python: ALL module-level names are importable (no export keyword)
-              const symExport = fileInfo.symbols.find(
+              let symExport = fileInfo.symbols.find(
                 (s) => (language === "python" || s.exported) && s.name === name.imported,
               );
+
+              // For Python: check if the symbol is imported at module level in the target file.
+              // In Python, any name imported at module level is part of the module's namespace
+              // and is importable by other modules (e.g., `from app.api.cli_tokens import CLIToken`
+              // works if cli_tokens.py has `from app.models.cli_token import CLIToken`).
+              if (!symExport && language === "python") {
+                const isImportedInModule = fileInfo.imports.some(
+                  (modImp) => modImp.namedImports.includes(name.imported) ||
+                              modImp.defaultImport === name.imported,
+                );
+                if (isImportedInModule) {
+                  // Treat as found — symbol is a valid Python namespace member via re-import
+                  symExport = { name: name.imported, kind: "variable" as const, line: 0, exported: true };
+                }
+              }
 
               if (!symExport) {
                 // For Python: check if the imported name is a sub-module file

@@ -923,6 +923,9 @@ async function checkModuleExports(
     return { moduleExists: false, exportExists: false };
   }
 
+  // Convert Python dotted module paths to file paths (e.g., app.api.cli_tokens -> app/api/cli_tokens)
+  const moduleAsPath = moduleName.replace(/\./g, "/");
+
   const possiblePaths = [
     path.join(ctx.projectPath, moduleName),
     path.join(ctx.projectPath, `${moduleName}.ts`),
@@ -930,6 +933,9 @@ async function checkModuleExports(
     path.join(ctx.projectPath, `${moduleName}.js`),
     path.join(ctx.projectPath, `${moduleName}/index.ts`),
     path.join(ctx.projectPath, `${moduleName}/index.js`),
+    // Python module paths (dotted notation)
+    path.join(ctx.projectPath, `${moduleAsPath}.py`),
+    path.join(ctx.projectPath, moduleAsPath, "__init__.py"),
   ];
 
   let moduleExists = false;
@@ -952,11 +958,27 @@ async function checkModuleExports(
 
   try {
     const content = await fs.readFile(modulePath, "utf-8");
+    const isPython = modulePath.endsWith(".py");
+
     const exportPatterns = [
       new RegExp(`export\\s+(?:const|let|var|function|class|interface|type)\\s+${exportName}\\b`),
       new RegExp(`export\\s*\\{[^}]*\\b${exportName}\\b`),
       new RegExp(`export\\s+default\\s+(?:class|function)?\\s*\\b${exportName}\\b`),
     ];
+
+    if (isPython) {
+      // Python: check for class/def/variable definitions
+      exportPatterns.push(
+        new RegExp(`^class\\s+${exportName}\\b`, "m"),
+        new RegExp(`^def\\s+${exportName}\\b`, "m"),
+        new RegExp(`^${exportName}\\s*=`, "m"),
+      );
+      // Python: check for module-level imports (re-imports are valid namespace members)
+      exportPatterns.push(
+        new RegExp(`^from\\s+\\S+\\s+import\\s+.*\\b${exportName}\\b`, "m"),
+        new RegExp(`^import\\s+.*\\b${exportName}\\b`, "m"),
+      );
+    }
 
     const exportExists = exportPatterns.some((pattern) => pattern.test(content));
     return { moduleExists: true, exportExists };
