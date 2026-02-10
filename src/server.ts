@@ -18,6 +18,7 @@ import { registerResources } from "./resources/index.js";
 import { registerPrompts } from "./prompts/index.js";
 import { registerValidationJob } from "./queue/validationJob.js";
 import { setMCPServer } from "./agent/mcpNotifications.js";
+import { restoreGuardians } from "./agent/agentTools.js";
 
 // Server configuration
 const SERVER_NAME = "codeguardian-mcp";
@@ -71,11 +72,13 @@ async function main() {
   const cleanup = async () => {
     logger.info("Shutting down CodeGuardian MCP Server...");
     
-    // Stop all active guardians
+    // Gracefully stop guardian watchers but KEEP persisted configs on disk.
+    // This allows guardians to auto-restore when the server restarts
+    // (e.g., when the user starts a new LLM session).
     try {
-      const { stopGuardianTool } = await import("./agent/agentTools.js");
-      await stopGuardianTool.handler({ agent_name: "" });
-      logger.info("All guardians stopped.");
+      const { shutdownGuardiansGracefully } = await import("./agent/agentTools.js");
+      await shutdownGuardiansGracefully();
+      logger.info("All guardians stopped gracefully (configs preserved for next session).");
     } catch (err) {
       logger.error("Error stopping guardians during shutdown:", err);
     }
@@ -101,6 +104,15 @@ async function main() {
   await server.connect(transport);
 
   logger.info(`${SERVER_NAME} v${SERVER_VERSION} is running`);
+
+  // Auto-restore guardians from previous session (non-blocking)
+  restoreGuardians().then((count) => {
+    if (count > 0) {
+      logger.info(`Restored ${count} guardian(s) from previous session`);
+    }
+  }).catch((err) => {
+    logger.error("Failed to restore guardians:", err);
+  });
 }
 
 // Start the server

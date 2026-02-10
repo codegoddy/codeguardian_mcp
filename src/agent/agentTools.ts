@@ -16,11 +16,24 @@ import {
   formatValidationResults,
   generateValidationReport,
 } from "../api-contract/index.js";
+import { guardianPersistence } from "./guardianPersistence.js";
 
 // Global map of active agents (key: name)
 const activeGuardians = new Map<string, AutoValidator>();
 // Map of file paths to their latest validation alert (issues or clear)
 const fileAlerts = new Map<string, ValidationAlert>();
+
+// Debounced alert persistence — avoid writing to disk on every single alert change
+let alertPersistTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleAlertPersist(): void {
+  if (alertPersistTimer) clearTimeout(alertPersistTimer);
+  alertPersistTimer = setTimeout(() => {
+    guardianPersistence.saveAlerts(fileAlerts).catch((err) => {
+      logger.warn("Failed to persist alerts:", err);
+    });
+    alertPersistTimer = null;
+  }, 2000);
+}
 
 /**
  * Callback to handle validation alerts
@@ -40,11 +53,13 @@ function handleAlert(alert: ValidationAlert): void {
     // Only log if we actually cleared something
     if (hadIssues) {
       logger.info(`Issues cleared for: ${alert.file}`);
+      scheduleAlertPersist();
     }
   } else {
     // Store new issues for LLM to retrieve via get_guardian_alerts
     fileAlerts.set(alert.file, alert);
     logger.info(`Alert stored for: ${alert.file} (${alert.issues.length} issues) - use get_guardian_alerts to retrieve`);
+    scheduleAlertPersist();
     
     // Send UI notification as a hint (shows in client UI, not to LLM directly)
     // The LLM still needs to call get_guardian_alerts to get the actual data
@@ -96,14 +111,20 @@ Each Guardian watches its own path and language.`,
     const absolutePath = path.resolve(projectPath);
 
     if (activeGuardians.has(agent_name)) {
+      const existingStatus = activeGuardians.get(agent_name)?.getStatus();
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify({
-              success: false,
-              message: `Guardian '${agent_name}' is already watching. Use a different name or stop it first.`,
-              status: activeGuardians.get(agent_name)?.getStatus(),
+              success: true,
+              alreadyRunning: true,
+              message: `Guardian '${agent_name}' is already active (auto-restored from previous session). No action needed — it's watching your code.`,
+              status: existingStatus,
+              pendingAlerts: fileAlerts.size,
+              hint: fileAlerts.size > 0
+                ? "There are pending alerts from the previous session. Use get_guardian_alerts to review them."
+                : "No pending alerts. The guardian is watching for changes.",
             }),
           },
         ],
@@ -121,6 +142,17 @@ Each Guardian watches its own path and language.`,
       });
 
       activeGuardians.set(agent_name, guardian);
+
+      // Persist config so guardian survives server restarts (new LLM sessions)
+      guardianPersistence.saveGuardian({
+        agentName: agent_name,
+        projectPath: absolutePath,
+        language,
+        mode,
+        startedAt: Date.now(),
+      }).catch(err => {
+        logger.warn("Failed to persist guardian config:", err);
+      });
 
       return {
         content: [
@@ -202,6 +234,12 @@ export const stopGuardianTool: ToolDefinition = {
       }
       guardian.stop();
       activeGuardians.delete(agent_name);
+
+      // Remove persisted config so it won't auto-restore
+      guardianPersistence.removeGuardianFull(agent_name, guardian.getStatus().projectPath).catch(err => {
+        logger.warn("Failed to remove persisted guardian config:", err);
+      });
+
       return {
         content: [
           {
@@ -218,9 +256,12 @@ export const stopGuardianTool: ToolDefinition = {
       const count = activeGuardians.size;
       for (const [name, guardian] of activeGuardians) {
         guardian.stop();
+        // Remove persisted config
+        guardianPersistence.removeGuardianFull(name, guardian.getStatus().projectPath).catch(() => {});
       }
       activeGuardians.clear();
       fileAlerts.clear(); // Clear all tracked alerts
+      guardianPersistence.clearAlerts().catch(() => {});
       
       return {
         content: [
@@ -304,13 +345,18 @@ export const getGuardianStatusTool: ToolDefinition = {
 
   async handler() {
     if (activeGuardians.size === 0) {
+      // Check if there are persisted configs that might be restoring
+      const persistedConfigs = await guardianPersistence.loadAllGuardians();
       return {
         content: [
           {
             type: "text",
             text: JSON.stringify({
               active: false,
-              message: "No Guardians are active.",
+              message: persistedConfigs.length > 0
+                ? `No Guardians are active yet, but ${persistedConfigs.length} guardian(s) are being restored from a previous session. They should be ready shortly.`
+                : "No Guardians are active.",
+              pendingRestore: persistedConfigs.length,
             }),
           },
         ],
@@ -328,6 +374,9 @@ export const getGuardianStatusTool: ToolDefinition = {
             count: activeGuardians.size,
             guardians: statuses,
             pendingAlerts: fileAlerts.size,
+            hint: fileAlerts.size > 0
+              ? "There are pending alerts. Use get_guardian_alerts to review them."
+              : "No pending alerts. All clear.",
           }),
         },
       ],
@@ -502,3 +551,97 @@ export const getApiContractReportTool: ToolDefinition = {
     }
   },
 };
+
+// ============================================================================
+// Guardian Graceful Shutdown (preserves persisted configs for auto-restore)
+// ============================================================================
+
+/**
+ * Stop all in-memory guardian watchers WITHOUT removing persisted configs.
+ * Called during server shutdown so guardians auto-restore on next startup.
+ */
+export async function shutdownGuardiansGracefully(): Promise<void> {
+  for (const [name, guardian] of activeGuardians) {
+    logger.info(`Gracefully stopping guardian '${name}'...`);
+    guardian.stop();
+  }
+  activeGuardians.clear();
+  // Do NOT clear fileAlerts — they're already persisted to disk
+  // Do NOT call guardianPersistence.removeGuardian — we want auto-restore
+}
+
+// ============================================================================
+// Guardian Auto-Restore (survives server restarts / new LLM sessions)
+// ============================================================================
+
+/**
+ * Restore guardians from persisted configs.
+ * Called once during server startup to resume any guardians that were
+ * running before the server was restarted (e.g., new LLM session).
+ */
+export async function restoreGuardians(): Promise<number> {
+  try {
+    const configs = await guardianPersistence.loadAllGuardians();
+    if (configs.length === 0) {
+      logger.info("No persisted guardians to restore");
+      return 0;
+    }
+
+    // Load persisted alerts first so they're available immediately
+    const persistedAlerts = await guardianPersistence.loadAlerts();
+    for (const [file, alert] of persistedAlerts) {
+      fileAlerts.set(file, alert);
+    }
+    if (persistedAlerts.size > 0) {
+      logger.info(`Restored ${persistedAlerts.size} persisted alerts`);
+    }
+
+    let restored = 0;
+    for (const config of configs) {
+      // Skip if already running (shouldn't happen, but be safe)
+      if (activeGuardians.has(config.agentName)) {
+        logger.info(`Guardian '${config.agentName}' already active, skipping restore`);
+        continue;
+      }
+
+      // Validate the project path still exists
+      const valid = await guardianPersistence.isProjectValid(config);
+      if (!valid) {
+        logger.warn(`Project path no longer exists for guardian '${config.agentName}': ${config.projectPath} — removing persisted config`);
+        await guardianPersistence.removeGuardian(config.agentName);
+        continue;
+      }
+
+      try {
+        logger.info(`Restoring guardian '${config.agentName}' for ${config.projectPath} (${config.language})...`);
+        const guardian = new AutoValidator(
+          config.projectPath,
+          config.language,
+          config.mode as any,
+          config.agentName
+        );
+        guardian.setAlertHandler(handleAlert);
+
+        // Start in background (same as normal start)
+        guardian.start().catch((err) => {
+          logger.error(`Failed to restore guardian ${config.agentName}:`, err);
+        });
+
+        activeGuardians.set(config.agentName, guardian);
+        restored++;
+      } catch (err) {
+        logger.error(`Error restoring guardian '${config.agentName}':`, err);
+        // Remove broken config so we don't keep retrying
+        await guardianPersistence.removeGuardian(config.agentName);
+      }
+    }
+
+    if (restored > 0) {
+      logger.info(`Auto-restored ${restored} guardian(s) from previous session`);
+    }
+    return restored;
+  } catch (error) {
+    logger.error("Failed to restore guardians:", error);
+    return 0;
+  }
+}
