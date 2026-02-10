@@ -24,7 +24,7 @@ import {
   buildSymbolTable,
 } from "../tools/validation/validation.js";
 import { getRelevantSymbolsForValidation } from "../analyzers/relevanceScorer.js";
-import { detectDeadCode } from "../tools/validation/deadCode.js";
+import { detectDeadCode, detectUnusedLocals } from "../tools/validation/deadCode.js";
 import {
   calculateScore,
   generateRecommendation,
@@ -516,6 +516,24 @@ export async function processBatch(
         typeReferences,
       );
       batchIssues.push(...symbolIssues);
+
+      // Per-file unused local detection: catch unused local functions and constants
+      // (e.g., `const GHOST_REGISTRY_ID = ...` or `function deprecatedAuditLog()`)
+      // The project-wide detectDeadCode only checks exported symbols and orphaned files.
+      const localDeadCode = detectUnusedLocals(content, filePath);
+      for (const issue of localDeadCode) {
+        batchIssues.push({
+          type: issue.type === "unusedFunction" ? "unusedImport" : "unusedImport",
+          severity: "warning",
+          message: issue.message,
+          line: issue.line || 0,
+          file: filePath,
+          code: issue.line ? (content.split("\n")[issue.line - 1] || "").trim() : "",
+          suggestion: `Remove the unused ${issue.type === "unusedFunction" ? "function" : "constant"}: ${issue.name}`,
+          confidence: 90,
+          reasoning: `${issue.name} is defined but never referenced anywhere else in the file.`,
+        });
+      }
     } catch (error) {
       logger.warn(`Error processing file ${filePath}:`, error);
     }

@@ -82,6 +82,14 @@ export class AutoValidator {
   private isFullStack: boolean = false;
   private tsManifest: ManifestDependencies | null = null;
   private pyManifest: ManifestDependencies | null = null;
+  private pendingRefreshes: Map<string, Promise<any>> = new Map();
+  private lastApiContractValidation: number = 0;
+  private static readonly API_CONTRACT_DEBOUNCE_MS = 30_000; // At most once per 30s
+  private activeValidationCount: number = 0;
+  private validationQueue: Set<string> = new Set();
+  private activeRefreshCount: number = 0;
+  private static readonly MAX_CONCURRENT_VALIDATIONS = 2;
+  private static readonly MAX_CONCURRENT_REFRESHES = 3;
 
   // Thresholds for smart mode
   private static readonly NEW_PROJECT_THRESHOLD = 5; // Less than 5 files = new project
@@ -591,16 +599,15 @@ export class AutoValidator {
     const fileLang = AutoValidator.detectFileLanguage(event.path);
     const refreshLang = this.isFullStack ? "all" : this.language;
 
-    // Track new files and refresh context
+    // Track new files and refresh context — store promise so validateFile can await it.
+    // Throttle concurrent refreshes to avoid spawning too many git subprocesses.
+    let refreshPromise: Promise<any> | null = null;
     if (event.type === "add") {
       this.newFilesTracked.add(event.path);
       this.projectFileCount++;
       
-      // Refresh context when new files are added
       logger.debug(`New file detected: ${event.path} (${fileLang}) - refreshing context...`);
-      refreshFileContext(this.projectPath, event.path, { language: refreshLang }).catch((err) => {
-        logger.warn(`Failed to refresh context for new file ${event.path}:`, err);
-      });
+      refreshPromise = this.throttledRefresh(event.path, refreshLang);
       
       // Check if we should exit learning mode
       if (this.mode === "auto" && this.projectFileCount >= AutoValidator.LEARNING_MODE_FILE_COUNT) {
@@ -608,20 +615,20 @@ export class AutoValidator {
         // But for simplicity, we just let the next detectProjectMode call handle it
       }
     } else if (event.type === "change") {
-      // Refresh context when files are modified so symbols/imports stay current
       logger.debug(`File modified: ${event.path} (${fileLang}) - refreshing context...`);
-      refreshFileContext(this.projectPath, event.path, { language: refreshLang }).catch((err) => {
-        logger.warn(`Failed to refresh context for modified file ${event.path}:`, err);
-      });
+      refreshPromise = this.throttledRefresh(event.path, refreshLang);
     } else if (event.type === "unlink") {
       this.newFilesTracked.delete(event.path);
       this.projectFileCount = Math.max(0, this.projectFileCount - 1);
       
-      // Incrementally remove deleted file from context (not a full invalidation)
       logger.debug(`File deleted: ${event.path} (${fileLang}) - removing from context...`);
-      refreshFileContext(this.projectPath, event.path, { language: refreshLang }).catch((err) => {
-        logger.warn(`Failed to remove deleted file ${event.path} from context:`, err);
-      });
+      refreshPromise = this.throttledRefresh(event.path, refreshLang);
+    }
+
+    // Track the pending refresh so validateFile can await ALL pending refreshes
+    if (refreshPromise) {
+      this.pendingRefreshes.set(event.path, refreshPromise);
+      refreshPromise.finally(() => this.pendingRefreshes.delete(event.path));
     }
 
     // Debounce rapid changes to the same file
@@ -631,15 +638,76 @@ export class AutoValidator {
     }
 
     const timer = setTimeout(() => {
-      this.validateFile(event.path);
+      this.enqueueValidation(event.path);
       this.debounceTimers.delete(event.path);
     }, 500);
 
     this.debounceTimers.set(event.path, timer);
   }
 
+  /**
+   * Throttle concurrent refreshFileContext calls.
+   * Without this, 30 file changes = 30 concurrent refreshes, each spawning
+   * git subprocesses and writing to disk simultaneously.
+   */
+  private async throttledRefresh(filePath: string, language: string): Promise<void> {
+    // Wait if too many refreshes are already running
+    while (this.activeRefreshCount >= AutoValidator.MAX_CONCURRENT_REFRESHES) {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    this.activeRefreshCount++;
+    try {
+      await refreshFileContext(this.projectPath, filePath, { language });
+    } catch (err) {
+      logger.warn(`Failed to refresh context for ${filePath}:`, err);
+    } finally {
+      this.activeRefreshCount--;
+    }
+  }
+
+  /**
+   * Enqueue a file for validation. Only one validation runs at a time.
+   * Without this, N concurrent validateFile calls each spawn git subprocesses,
+   * AST parsing, and verification — causing a subprocess storm that can hang the system.
+   */
+  private enqueueValidation(filePath: string): void {
+    if (this.activeValidationCount >= AutoValidator.MAX_CONCURRENT_VALIDATIONS) {
+      this.validationQueue.add(filePath);
+      return;
+    }
+    this.runValidation(filePath);
+  }
+
+  private async runValidation(filePath: string): Promise<void> {
+    this.activeValidationCount++;
+    try {
+      await this.validateFile(filePath);
+    } finally {
+      this.activeValidationCount--;
+      this.processValidationQueue();
+    }
+  }
+
+  private processValidationQueue(): void {
+    // Drain queue up to concurrency limit
+    while (this.validationQueue.size > 0 && this.activeValidationCount < AutoValidator.MAX_CONCURRENT_VALIDATIONS) {
+      const next = this.validationQueue.values().next().value;
+      if (!next) break;
+      this.validationQueue.delete(next);
+      this.runValidation(next);
+    }
+  }
+
   private async validateFile(filePath: string): Promise<void> {
     try {
+      // Wait for ALL pending context refreshes to complete before validating.
+      // This prevents race conditions where validation runs on stale/partial context
+      // (e.g., reverseImportGraph missing entries because refreshFileContext hasn't finished).
+      if (this.pendingRefreshes.size > 0) {
+        logger.debug(`Waiting for ${this.pendingRefreshes.size} pending context refreshes...`);
+        await Promise.all(this.pendingRefreshes.values());
+      }
+
       const isNewFile = this.newFilesTracked.has(filePath);
       const mode = this.detectProjectMode();
       const isLenient = mode === "learning" || isNewFile;
@@ -731,21 +799,31 @@ export class AutoValidator {
         }
       }
 
-      // Tier 2: Check for dead code (REMOVED 50-line limit - vibecoders write small files!)
-      // Always run dead code detection to catch:
-      // - Unused imports (most common vibecoder mistake)
-      // - Orphaned exports (exports with no importers)
-      // - Unused functions/constants
+      // Tier 2: Per-file dead code checks (unused functions/constants in THIS file only).
+      // Project-wide checks (orphaned files, unused exports) run in the initial health check,
+      // NOT on every file change — they are slow, race-prone during rapid vibecoding,
+      // and produce false positives when the dependency graph is mid-update.
       let deadCodeIssues: any[] = [];
-      deadCodeIssues = await detectDeadCode(context, content);
+      deadCodeIssues = await detectDeadCode(context, content, undefined, true);
+
+      // Fix file paths — detectUnusedLocals uses "(new code)" as placeholder;
+      // replace with the actual file path so verification reads the real file.
+      for (const issue of deadCodeIssues) {
+        if (issue.file === "(new code)") {
+          issue.file = filePath;
+        }
+      }
 
       // Tier 3: API Contract Validation (for service/route files)
+      // Debounced to at most once per 30s to avoid full project-wide scans on every keystroke
       let apiContractIssues: any[] = [];
       const isServiceFile = filePath.includes('/services/') || filePath.includes('/api/');
       const isRouteFile = filePath.includes('/api/') && filePath.endsWith('.py');
+      const apiContractCooldown = Date.now() - this.lastApiContractValidation >= AutoValidator.API_CONTRACT_DEBOUNCE_MS;
       
-      if (isServiceFile || isRouteFile) {
+      if ((isServiceFile || isRouteFile) && apiContractCooldown) {
         logger.debug(`API Contract file changed: ${relativePath} - running contract validation...`);
+        this.lastApiContractValidation = Date.now();
         const apiContractResult = await validateApiContracts(this.projectPath);
         
         // Only report critical and high severity issues for real-time validation
@@ -805,15 +883,22 @@ export class AutoValidator {
         // 1. Ignore architectural deviations (we are learning patterns)
         allIssues = allIssues.filter(i => i.type !== 'architecturalDeviation');
         
-        // 2. Ignore dead code in new/changing files
-        allIssues = allIssues.filter(i => i.type !== 'deadCode' && i.type !== 'unusedExport' && i.type !== 'unusedFunction' && i.type !== 'orphanedFile');
+        // 2. Ignore PROJECT-WIDE dead code in new/changing files (orphaned files, etc.)
+        // but KEEP per-file local dead code (unusedFunction, unusedExport from detectUnusedLocals)
+        // because local unused functions/constants are genuine code hygiene issues
+        // that are cheap to detect and valuable to report.
+        allIssues = allIssues.filter(i => i.type !== 'deadCode' && i.type !== 'orphanedFile');
 
         // 3. Filter out "Medium" severity symbol issues
-        // BUT keep unusedImport warnings - they're the #1 vibecoder mistake!
-        allIssues = allIssues.filter(i => 
-          i.severity === "critical" || 
-          i.severity === "high" || 
-          i.type === "unusedImport"  // Always catch unused imports, even in learning mode
+        // BUT keep unusedImport, unusedFunction, and unusedExport warnings
+        // - unusedImport: the #1 vibecoder mistake
+        // - unusedFunction/unusedExport: local dead code (cheap to detect, high signal)
+        allIssues = allIssues.filter(i =>
+          i.severity === "critical" ||
+          i.severity === "high" ||
+          i.type === "unusedImport" ||
+          i.type === "unusedFunction" ||
+          i.type === "unusedExport"
         );
       }
 

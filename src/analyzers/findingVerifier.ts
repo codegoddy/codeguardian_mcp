@@ -23,9 +23,13 @@
 import { logger } from "../utils/logger.js";
 import type { ProjectContext } from "../context/projectContext.js";
 import type { ValidationIssue, DeadCodeIssue, ASTUsage } from "../tools/validation/types.js";
-import { execSync } from "child_process";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
 import * as fs from "fs/promises";
 import * as path from "path";
+import { extractSymbolsAST } from "../tools/validation/extractors/index.js";
 
 // ============================================================================
 // Types
@@ -58,6 +62,7 @@ interface VerificationContext {
   projectContext: ProjectContext;
   language: string;
   gitAvailable: boolean;
+  featureBranchCached?: boolean;
 }
 
 /**
@@ -249,9 +254,12 @@ async function preloadFileCache(
     cache.gitStatus = await checkGitFileStatus(filePath, ctx);
   }
   
-  // Feature branch check is per-project, not per-file
+  // Feature branch check is per-project — cache once on context, not per-file
   if (ctx.gitAvailable) {
-    cache.featureBranch = await checkFeatureBranch(ctx);
+    if (ctx.featureBranchCached === undefined) {
+      ctx.featureBranchCached = await checkFeatureBranch(ctx);
+    }
+    cache.featureBranch = ctx.featureBranchCached;
   }
 }
 
@@ -640,7 +648,7 @@ async function detectFutureFeatureWithCache(
 
   // Signal 2: Check for TODO/FIXME comments (lazy load & cache)
   if (cache.hasTodoComments === undefined) {
-    cache.hasTodoComments = await checkForTodoComments(issue.file, ctx);
+    cache.hasTodoComments = await checkForTodoComments(issue.file, ctx, cache);
   }
   if (cache.hasTodoComments) {
     signalCount++;
@@ -650,7 +658,7 @@ async function detectFutureFeatureWithCache(
 
   // Signal 3: Check if this is a stub implementation (lazy load & cache)
   if (cache.isStub === undefined) {
-    cache.isStub = await checkIfStubImplementation(issue.file, issue, ctx);
+    cache.isStub = await checkIfStubImplementation(issue.file, issue, ctx, cache);
   }
   if (cache.isStub) {
     signalCount++;
@@ -690,7 +698,7 @@ async function detectFutureFeatureWithCache(
 
 async function checkGitAvailable(projectPath: string): Promise<boolean> {
   try {
-    execSync("git rev-parse --git-dir", { cwd: projectPath, stdio: "pipe" });
+    await execAsync("git rev-parse --git-dir", { cwd: projectPath });
     return true;
   } catch {
     return false;
@@ -706,10 +714,11 @@ async function checkGitFileStatus(
   }
 
   try {
-    const result = execSync(
+    const { stdout } = await execAsync(
       `git status --porcelain "${filePath}"`,
-      { cwd: ctx.projectPath, stdio: "pipe", encoding: "utf-8" }
-    ).trim();
+      { cwd: ctx.projectPath }
+    );
+    const result = stdout.trim();
 
     const isNew = result.startsWith("??") || result.startsWith("A");
     const isModified = result.includes("M") || result.startsWith(" M");
@@ -724,10 +733,11 @@ async function checkFeatureBranch(ctx: VerificationContext): Promise<boolean> {
   if (!ctx.gitAvailable) return false;
 
   try {
-    const branchName = execSync(
+    const { stdout } = await execAsync(
       "git branch --show-current",
-      { cwd: ctx.projectPath, stdio: "pipe", encoding: "utf-8" }
-    ).trim();
+      { cwd: ctx.projectPath }
+    );
+    const branchName = stdout.trim();
 
     const featurePatterns = [
       /^feature\//i,
@@ -753,11 +763,16 @@ async function checkFeatureBranch(ctx: VerificationContext): Promise<boolean> {
 async function checkForTodoComments(
   filePath: string,
   ctx: VerificationContext,
+  cache?: FileCache,
 ): Promise<boolean> {
   if (!filePath) return false;
 
   try {
-    const content = await fs.readFile(filePath, "utf-8");
+    // Use cached content if available, otherwise load and cache
+    if (cache && !cache.content) {
+      cache.content = await fs.readFile(filePath, "utf-8");
+    }
+    const content = cache?.content ?? await fs.readFile(filePath, "utf-8");
     const todoPatterns = [
       /\/\/\s*TODO/i,
       /\/\/\s*FIXME/i,
@@ -779,11 +794,16 @@ async function checkIfStubImplementation(
   filePath: string,
   issue: ValidationIssue | DeadCodeIssue,
   ctx: VerificationContext,
+  cache?: FileCache,
 ): Promise<boolean> {
   if (!filePath) return false;
 
   try {
-    const content = await fs.readFile(filePath, "utf-8");
+    // Use cached content if available, otherwise load and cache
+    if (cache && !cache.content) {
+      cache.content = await fs.readFile(filePath, "utf-8");
+    }
+    const content = cache?.content ?? await fs.readFile(filePath, "utf-8");
     
     const stubPatterns = [
       /throw\s+new\s+Error\s*\(\s*["']\s*not\s+implemented/i,
@@ -841,7 +861,6 @@ async function checkSymbolDefinedLocally(
     }
 
     // Parse local symbols from the file itself (includes params when enabled)
-    const { extractSymbolsAST } = await import("../tools/validation/extractors/index.js");
     const fileLang = detectFileLanguage(issue.file, ctx.language);
     const symbols = extractSymbolsAST(cache.content, issue.file, fileLang, {
       includeParameterSymbols: true,
@@ -1069,19 +1088,48 @@ async function checkImportUsage(
   if (!importName || !issue.file) return { isUsed: false };
 
   try {
-    const content = await fs.readFile(issue.file, "utf-8");
+    const rawContent = await fs.readFile(issue.file, "utf-8");
+    
+    // Strip import lines, comment-only lines, and the definition line so they
+    // don't count as "usage".
+    // Previously, `import { ChefHat } from 'lucide-react'; // ChefHat is unused`
+    // produced 2 regex matches (import + comment) and was falsely marked as "used".
+    //
+    // For local dead code findings (e.g., `const GHOST_REGISTRY_ID = ...` or
+    // `function deprecatedAuditLog()`), the definition line itself contains the
+    // symbol name. Without excluding it, checkImportUsage falsely returns
+    // isUsed=true because the regex matches the definition.
+    const escapedName = importName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const issueLine = issue.line; // 1-indexed line number of the finding
+    const content = rawContent
+      .split("\n")
+      .filter((line, index) => {
+        // Exclude the definition/declaration line itself (prevents local dead code
+        // findings like GHOST_REGISTRY_ID from matching their own definition)
+        if (issueLine && index + 1 === issueLine) return false;
+        const trimmed = line.trim();
+        // Exclude import lines
+        if (trimmed.startsWith("import ") || trimmed.startsWith("import{")) return false;
+        // Exclude from...import lines (Python)
+        if (trimmed.startsWith("from ")) return false;
+        // Exclude comment-only lines (JS/TS/Python)
+        if (trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("/*") || trimmed.startsWith("*")) return false;
+        return true;
+      })
+      .join("\n");
     
     const patterns = [
-      { regex: new RegExp(`\\b${importName}\\s*\\(`, "g"), type: "function call" },
-      { regex: new RegExp(`\\b${importName}\\.`, "g"), type: "property access" },
-      { regex: new RegExp(`\\b${importName}\\b`, "g"), type: "reference" },
-      { regex: new RegExp(`type\\s+\\w+.*\\b${importName}\\b`, "g"), type: "type usage" },
-      { regex: new RegExp(`as\\s+${importName}\\b`, "g"), type: "type assertion" },
+      { regex: new RegExp(`\\b${escapedName}\\s*\\(`, "g"), type: "function call" },
+      { regex: new RegExp(`\\b${escapedName}\\.`, "g"), type: "property access" },
+      { regex: new RegExp(`<${escapedName}[\\s/>]`, "g"), type: "JSX component" },
+      { regex: new RegExp(`\\b${escapedName}\\b`, "g"), type: "reference" },
+      { regex: new RegExp(`type\\s+\\w+.*\\b${escapedName}\\b`, "g"), type: "type usage" },
+      { regex: new RegExp(`as\\s+${escapedName}\\b`, "g"), type: "type assertion" },
     ];
 
     for (const { regex, type } of patterns) {
       const matches = content.match(regex);
-      if (matches && matches.length > 1) {
+      if (matches && matches.length >= 1) {
         return { isUsed: true, usageType: type };
       }
     }
@@ -1147,31 +1195,36 @@ async function checkFileImports(
   issue: DeadCodeIssue,
   ctx: VerificationContext,
 ): Promise<{ isImported: boolean; importers: string[] }> {
-  const fileName = path.basename(issue.name || issue.file);
+  // Use in-memory project context instead of reading every file from disk.
+  // The reverseImportGraph + raw import data is already available and up-to-date.
   const importers: string[] = [];
+  const fileName = issue.name || issue.file;
 
-  for (const [filePath] of ctx.projectContext.files) {
-    if (filePath === issue.file) continue;
-
-    try {
-      const content = await fs.readFile(filePath, "utf-8");
-      
-      const importPatterns = [
-        new RegExp(`from\\s+['"][^'"]*${path.basename(fileName, ".ts")}['"]`, "g"),
-      ];
-
-      for (const pattern of importPatterns) {
-        if (pattern.test(content)) {
-          importers.push(filePath);
-          break;
-        }
-      }
-    } catch {
-      // Skip files we can't read
+  // 1. Check reverseImportGraph (resolved imports)
+  for (const [absPath, reverseList] of ctx.projectContext.reverseImportGraph) {
+    // Match by absolute path or by basename
+    if (absPath === fileName || absPath.endsWith(`/${fileName}`) || path.basename(absPath).replace(/\.[^.]+$/, "") === path.basename(fileName).replace(/\.[^.]+$/, "")) {
+      importers.push(...reverseList);
     }
   }
 
-  return { isImported: importers.length > 0, importers };
+  if (importers.length > 0) {
+    return { isImported: true, importers: [...new Set(importers)] };
+  }
+
+  // 2. Fallback: check raw import sources in context (catches unresolved imports)
+  const baseName = path.basename(fileName).replace(/\.[^.]+$/, "");
+  for (const [filePath, fileInfo] of ctx.projectContext.files) {
+    if (filePath === issue.file) continue;
+    for (const imp of fileInfo.imports) {
+      if (imp.source.includes(baseName)) {
+        importers.push(filePath);
+        break;
+      }
+    }
+  }
+
+  return { isImported: importers.length > 0, importers: [...new Set(importers)] };
 }
 
 async function checkIfEntryPoint(

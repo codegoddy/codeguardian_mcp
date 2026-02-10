@@ -914,7 +914,13 @@ export function extractJSUsages(
             // Skip built-in objects (console, window, etc.) but NOT imported symbols
             // We need to track method calls on imported symbols for validation
             // e.g., screen from @testing-library/react shadows the browser's window.screen
-            if (isJSBuiltin(obj) && !externalSymbols.has(obj)) {
+            //
+            // EXCEPTION: If the builtin is cast to `any` (e.g., `(window as any).foo()`),
+            // do NOT skip — the `as any` cast is a deliberate type-safety bypass,
+            // which is a strong signal of a stealth hallucination.
+            const rawObjText = getText(objNode, code);
+            const isCastToAny = rawObjText.includes("as any") || rawObjText.includes("as unknown");
+            if (isJSBuiltin(obj) && !externalSymbols.has(obj) && !isCastToAny) {
               // Skip method calls on built-in objects (Array.map, String.split, etc.)
               // These are standard library methods we don't need to validate
             } else {

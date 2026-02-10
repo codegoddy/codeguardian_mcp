@@ -640,12 +640,11 @@ export async function refreshFileContext(
     cached.fileHashes.delete(filePath);
   }
 
-  // Save updated context to disk
-  try {
-    await saveContextToDisk(projectPath, cached);
-  } catch (err) {
-    logger.warn(`Failed to save refreshed context to disk: ${err instanceof Error ? err.message : String(err)}`);
-  }
+  // Debounce disk writes — during rapid vibecoding, dozens of refreshes fire
+  // within seconds. Writing to disk on every one causes I/O contention and
+  // concurrent writes to the same file. Instead, schedule a single write
+  // after a 2-second quiet period.
+  debouncedSaveContextToDisk(projectPath, cached);
 
   return cached.context;
 }
@@ -1069,8 +1068,8 @@ async function updateFileInContext(
     }
   }
 
-  // Remove dependencies originating from this file
-  context.dependencies = context.dependencies.filter(d => d.from !== filePath);
+  // Remove dependencies originating from this file AND pointing to this file
+  context.dependencies = context.dependencies.filter(d => d.from !== filePath && d.to !== filePath);
   
   // Update reverse import graph: remove this file from everyone it imported
   const oldImports = context.importGraph.get(filePath) || [];
@@ -1079,6 +1078,18 @@ async function updateFileInContext(
     context.reverseImportGraph.set(impPath, reverse.filter(f => f !== filePath));
   }
   context.importGraph.delete(filePath);
+
+  // Clean up files that imported the deleted file:
+  // remove the deleted file from their importGraph entries
+  const importersOfDeleted = context.reverseImportGraph.get(filePath) || [];
+  for (const importerPath of importersOfDeleted) {
+    const importerImports = context.importGraph.get(importerPath);
+    if (importerImports) {
+      context.importGraph.set(importerPath, importerImports.filter(f => f !== filePath));
+    }
+  }
+  // Remove the deleted file's own reverse import graph entry
+  context.reverseImportGraph.delete(filePath);
 
   // Remove from entry points
   context.entryPoints = context.entryPoints.filter(f => f !== filePath);
@@ -1166,6 +1177,59 @@ async function updateFileInContext(
         }
       }
       context.importGraph.set(filePath, fileImports);
+
+      // 3b. Re-resolve OTHER files' unresolved imports that might now point to this file.
+      // When a new file is created during vibecoding (e.g., OrbitMap.tsx), existing files
+      // (e.g., App.tsx) may have had unresolved imports to it. We check if any other file
+      // has a relative import whose resolution target matches this new file's path.
+      const fileBaseName = path.basename(filePath).replace(/\.[^.]+$/, ""); // e.g., "OrbitMap"
+      for (const [otherPath, otherInfo] of context.files) {
+        if (otherPath === filePath) continue;
+        
+        // Quick check: does this file have any import whose source contains our filename?
+        const hasRelevantImport = otherInfo.imports.some(imp => 
+          imp.isRelative && imp.source.includes(fileBaseName)
+        );
+        if (!hasRelevantImport) continue;
+
+        // Check if any of this file's imports should resolve to the new/modified file
+        for (const imp of otherInfo.imports) {
+          if (!imp.isRelative) continue;
+          
+          const resolved = resolveImport(imp.source, otherPath, allFiles);
+          if (resolved !== filePath) continue;
+
+          // This import resolves to our file! Check if this edge already exists.
+          const existingEdge = context.dependencies.some(
+            d => d.from === otherPath && d.to === filePath
+          );
+          if (existingEdge) continue;
+
+          // Add the missing dependency edge
+          const importedSymbols = [...imp.namedImports, imp.defaultImport].filter(Boolean) as string[];
+          context.dependencies.push({
+            from: otherPath,
+            to: filePath,
+            importedSymbols,
+          });
+
+          // Update import graph
+          const otherImports = context.importGraph.get(otherPath) || [];
+          if (!otherImports.includes(filePath)) {
+            otherImports.push(filePath);
+            context.importGraph.set(otherPath, otherImports);
+          }
+
+          // Update reverse import graph
+          if (!context.reverseImportGraph.has(filePath)) {
+            context.reverseImportGraph.set(filePath, []);
+          }
+          const reverseList = context.reverseImportGraph.get(filePath)!;
+          if (!reverseList.includes(otherPath)) {
+            reverseList.push(otherPath);
+          }
+        }
+      }
     }
   } catch (err) {
     logger.warn(`Failed to incrementally update context for ${filePath}: ${err instanceof Error ? err.message : String(err)}`);
@@ -2503,6 +2567,29 @@ async function loadContextFromDisk(
     logger.warn(`Failed to load context from disk: ${error instanceof Error ? error.message : String(error)}`);
     return null;
   }
+}
+
+/**
+ * Debounced wrapper for saveContextToDisk.
+ * During rapid vibecoding, dozens of refreshFileContext calls fire within seconds.
+ * Each one previously called saveContextToDisk immediately, causing concurrent writes
+ * to the same file. This debouncer coalesces them into a single write after a 2-second
+ * quiet period.
+ */
+const pendingSaveTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+
+function debouncedSaveContextToDisk(projectPath: string, cachedContext: CachedContext): void {
+  const existing = pendingSaveTimers.get(projectPath);
+  if (existing) {
+    clearTimeout(existing);
+  }
+  const timer = setTimeout(() => {
+    pendingSaveTimers.delete(projectPath);
+    saveContextToDisk(projectPath, cachedContext).catch(err => {
+      logger.warn(`Failed to save refreshed context to disk: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }, 2_000);
+  pendingSaveTimers.set(projectPath, timer);
 }
 
 /**

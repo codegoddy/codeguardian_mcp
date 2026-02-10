@@ -32,6 +32,7 @@ class ContextLineageClass {
   private git: SimpleGit | null = null;
   private projectPath: string = "";
   private cache: Map<string, LineageContext> = new Map();
+  private pendingFetch: Map<string, Promise<LineageContext | null>> = new Map();
   private readonly CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
   /**
@@ -61,6 +62,25 @@ class ContextLineageClass {
       return cached;
     }
 
+    // Lock: if another call is already fetching this, wait for it instead
+    // of spawning another ~50+ git subprocesses in parallel
+    const pending = this.pendingFetch.get(cacheKey);
+    if (pending) {
+      return pending;
+    }
+
+    const fetchPromise = this.fetchLineageContext(projectPath, cacheKey, commitDepth, minChangeFrequency);
+    this.pendingFetch.set(cacheKey, fetchPromise);
+    fetchPromise.finally(() => this.pendingFetch.delete(cacheKey));
+    return fetchPromise;
+  }
+
+  private async fetchLineageContext(
+    projectPath: string,
+    cacheKey: string,
+    commitDepth: number,
+    minChangeFrequency: number,
+  ): Promise<LineageContext | null> {
     try {
       if (!this.git || this.projectPath !== projectPath) {
         await this.initialize(projectPath);
@@ -80,11 +100,16 @@ class ContextLineageClass {
       // Get recent commits
       const log = await this.git.log({ maxCount: commitDepth });
 
-      // Build file histories
-      const fileHistories = await this.buildFileHistories(log, commitDepth);
+      // Fetch commit file lists ONCE and reuse across all analyses.
+      // Previously buildFileHistories, getRecentlyModifiedFiles, and findRelatedFiles
+      // each called `git show` per commit independently — tripling subprocess count.
+      const commitFilesMap = await this.fetchCommitFiles(log);
 
-      // Identify recently modified files (last 10 commits)
-      const recentlyModifiedFiles = await this.getRecentlyModifiedFiles(10);
+      // Build file histories (reuses pre-fetched data)
+      const fileHistories = this.buildFileHistoriesFromCache(log, commitFilesMap);
+
+      // Identify recently modified files (reuses pre-fetched data)
+      const recentlyModifiedFiles = this.getRecentlyModifiedFilesFromCache(log, commitFilesMap, 10);
 
       // Identify hotspot files (high change frequency)
       const hotspotFiles = this.identifyHotspots(
@@ -92,8 +117,8 @@ class ContextLineageClass {
         minChangeFrequency,
       );
 
-      // Find files often changed together
-      const relatedFiles = await this.findRelatedFiles(log);
+      // Find files often changed together (reuses pre-fetched data)
+      const relatedFiles = this.findRelatedFilesFromCache(log, commitFilesMap);
 
       const context: LineageContext = {
         recentlyModifiedFiles,
@@ -166,17 +191,17 @@ class ContextLineageClass {
   }
 
   /**
-   * Build file histories from git log
+   * Fetch file lists for all commits ONCE. Reused by buildFileHistories,
+   * getRecentlyModifiedFiles, and findRelatedFiles to avoid spawning
+   * redundant git subprocesses (was ~110 subprocesses, now ~50).
    */
-  private async buildFileHistories(
+  private async fetchCommitFiles(
     log: LogResult,
-    commitDepth: number,
-  ): Promise<Map<string, FileHistory>> {
-    const histories = new Map<string, FileHistory>();
+  ): Promise<Map<string, string[]>> {
+    const commitFilesMap = new Map<string, string[]>();
 
-    if (!this.git) return histories;
+    if (!this.git) return commitFilesMap;
 
-    // Get file stats for each commit
     for (const commit of log.all) {
       try {
         const diff = await this.git.show([
@@ -187,35 +212,51 @@ class ContextLineageClass {
         const files = diff
           .split("\n")
           .filter((f) => f.trim() && !f.startsWith("diff"));
-
-        for (const file of files) {
-          if (!histories.has(file)) {
-            histories.set(file, {
-              filePath: file,
-              lastModified: new Date(commit.date),
-              commitCount: 0,
-              recentCommits: [],
-              authors: new Set(),
-              changeFrequency: 0,
-            });
-          }
-
-          const history = histories.get(file)!;
-          history.commitCount++;
-          if (history.recentCommits.length < 5) {
-            history.recentCommits.push(commit.hash);
-          }
-          history.authors.add(commit.author_name);
-
-          // Update last modified if this commit is more recent
-          const commitDate = new Date(commit.date);
-          if (commitDate > history.lastModified) {
-            history.lastModified = commitDate;
-          }
-        }
+        commitFilesMap.set(commit.hash, files);
       } catch (error) {
-        // Skip commits that fail
-        continue;
+        commitFilesMap.set(commit.hash, []);
+      }
+    }
+
+    return commitFilesMap;
+  }
+
+  /**
+   * Build file histories from pre-fetched commit data (no git subprocesses)
+   */
+  private buildFileHistoriesFromCache(
+    log: LogResult,
+    commitFilesMap: Map<string, string[]>,
+  ): Map<string, FileHistory> {
+    const histories = new Map<string, FileHistory>();
+
+    for (const commit of log.all) {
+      const files = commitFilesMap.get(commit.hash) || [];
+
+      for (const file of files) {
+        if (!histories.has(file)) {
+          histories.set(file, {
+            filePath: file,
+            lastModified: new Date(commit.date),
+            commitCount: 0,
+            recentCommits: [],
+            authors: new Set(),
+            changeFrequency: 0,
+          });
+        }
+
+        const history = histories.get(file)!;
+        history.commitCount++;
+        if (history.recentCommits.length < 5) {
+          history.recentCommits.push(commit.hash);
+        }
+        history.authors.add(commit.author_name);
+
+        // Update last modified if this commit is more recent
+        const commitDate = new Date(commit.date);
+        if (commitDate > history.lastModified) {
+          history.lastModified = commitDate;
+        }
       }
     }
 
@@ -233,40 +274,24 @@ class ContextLineageClass {
   }
 
   /**
-   * Get files modified in recent commits
+   * Get files modified in recent commits from pre-fetched data (no git subprocesses)
    */
-  private async getRecentlyModifiedFiles(
+  private getRecentlyModifiedFilesFromCache(
+    log: LogResult,
+    commitFilesMap: Map<string, string[]>,
     commitCount: number,
-  ): Promise<string[]> {
-    if (!this.git) return [];
+  ): string[] {
+    const files = new Set<string>();
+    const recentCommits = log.all.slice(0, commitCount);
 
-    try {
-      const log = await this.git.log({ maxCount: commitCount });
-      const files = new Set<string>();
-
-      for (const commit of log.all) {
-        try {
-          const diff = await this.git.show([
-            "--name-only",
-            "--format=",
-            commit.hash,
-          ]);
-          const commitFiles = diff
-            .split("\n")
-            .filter((f) => f.trim() && !f.startsWith("diff"));
-
-          for (const file of commitFiles) {
-            files.add(file);
-          }
-        } catch (error) {
-          continue;
-        }
+    for (const commit of recentCommits) {
+      const commitFiles = commitFilesMap.get(commit.hash) || [];
+      for (const file of commitFiles) {
+        files.add(file);
       }
-
-      return Array.from(files);
-    } catch (error) {
-      return [];
     }
+
+    return Array.from(files);
   }
 
   /**
@@ -284,43 +309,31 @@ class ContextLineageClass {
   }
 
   /**
-   * Find files that are often changed together
+   * Find files that are often changed together from pre-fetched data (no git subprocesses)
    */
-  private async findRelatedFiles(
+  private findRelatedFilesFromCache(
     log: LogResult,
-  ): Promise<Map<string, string[]>> {
+    commitFilesMap: Map<string, string[]>,
+  ): Map<string, string[]> {
     const relatedFiles = new Map<string, string[]>();
     const coChangeMatrix = new Map<string, Map<string, number>>();
 
-    if (!this.git) return relatedFiles;
-
-    // Build co-change matrix
+    // Build co-change matrix from pre-fetched data
     for (const commit of log.all) {
-      try {
-        const diff = await this.git.show([
-          "--name-only",
-          "--format=",
-          commit.hash,
-        ]);
-        const files = diff
-          .split("\n")
-          .filter((f) => f.trim() && !f.startsWith("diff"));
+      const files = commitFilesMap.get(commit.hash) || [];
 
-        // Record co-changes
-        for (const file1 of files) {
-          if (!coChangeMatrix.has(file1)) {
-            coChangeMatrix.set(file1, new Map());
-          }
+      // Record co-changes
+      for (const file1 of files) {
+        if (!coChangeMatrix.has(file1)) {
+          coChangeMatrix.set(file1, new Map());
+        }
 
-          for (const file2 of files) {
-            if (file1 !== file2) {
-              const matrix = coChangeMatrix.get(file1)!;
-              matrix.set(file2, (matrix.get(file2) || 0) + 1);
-            }
+        for (const file2 of files) {
+          if (file1 !== file2) {
+            const matrix = coChangeMatrix.get(file1)!;
+            matrix.set(file2, (matrix.get(file2) || 0) + 1);
           }
         }
-      } catch (error) {
-        continue;
       }
     }
 

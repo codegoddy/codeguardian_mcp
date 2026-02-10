@@ -1192,6 +1192,42 @@ export function validateSymbols(
         if (isJSBuiltin(used.name) || isPythonBuiltin(used.name)) {
           continue;
         }
+
+        // STEALTH HALLUCINATION DETECTION:
+        // If the code casts a well-known global object to `any`/`unknown` and calls a
+        // non-standard method, this is a high-confidence hallucination pattern.
+        // e.g., `(window as any).applyMolecularStability?.()`
+        // The `as any` cast is a deliberate type-safety bypass — the developer (or AI)
+        // knows this method doesn't exist on the type. Combined with a non-standard
+        // method name on a well-known global, this is a strong hallucination signal.
+        //
+        // We only flag this for true browser/Node globals (window, document, etc.),
+        // NOT for generic whitelisted objects (db, prisma, etc.) where `as any` may
+        // be a legitimate workaround for missing type definitions.
+        const STEALTH_HALLUCINATION_GLOBALS = new Set([
+          "window", "navigator", "document", "location", "history",
+          "localStorage", "sessionStorage", "console", "process",
+          "global", "globalThis", "Intl",
+        ]);
+
+        if (STEALTH_HALLUCINATION_GLOBALS.has(rootObject)) {
+          const codeLine = used.code || "";
+          if (codeLine.includes("as any") || codeLine.includes("as unknown")) {
+            issues.push({
+              type: "nonExistentMethod",
+              severity: "critical",
+              message: `Stealth hallucination: '${used.name}' does not exist on '${rootObject}' (called via unsafe 'as any' cast)`,
+              line: used.line,
+              file: filePath,
+              code: used.code,
+              suggestion: `Remove the hallucinated method call. '${rootObject}' does not have a '${used.name}' method. The 'as any' cast was used to bypass type checking.`,
+              confidence: 96,
+              reasoning: `Builtin global '${rootObject}' is cast to 'any'/'unknown' to call non-existent method '${used.name}'. This type-safety bypass combined with a non-standard method name is a strong indicator of AI hallucination.`,
+            });
+            continue;
+          }
+        }
+
         // If the method is NOT whitelisted, we still proceed to check if it exists in the project
         // but we've already validated the object.
       }

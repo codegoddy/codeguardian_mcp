@@ -16,11 +16,22 @@ export interface GitInfo {
   isRepo: boolean;
 }
 
+// Short-lived cache for getGitInfo to avoid spawning redundant git subprocesses
+// during rapid file changes (e.g., vibecoding)
+const gitInfoCache: Map<string, { info: GitInfo | null; timestamp: number }> = new Map();
+const GIT_INFO_CACHE_TTL_MS = 5_000; // 5 seconds
+
 /**
  * Get current git branch and commit SHA for a project
  * Returns null if not a git repository
  */
 export async function getGitInfo(projectPath: string): Promise<GitInfo | null> {
+  // Return cached result if fresh enough (avoids spawning 2-3 git subprocesses per call)
+  const cached = gitInfoCache.get(projectPath);
+  if (cached && Date.now() - cached.timestamp < GIT_INFO_CACHE_TTL_MS) {
+    return cached.info;
+  }
+
   try {
     const git: SimpleGit = simpleGit(projectPath);
 
@@ -28,6 +39,7 @@ export async function getGitInfo(projectPath: string): Promise<GitInfo | null> {
     const isRepo = await git.checkIsRepo();
     if (!isRepo) {
       logger.debug(`${projectPath} is not a git repository`);
+      gitInfoCache.set(projectPath, { info: null, timestamp: Date.now() });
       return null;
     }
 
@@ -39,13 +51,16 @@ export async function getGitInfo(projectPath: string): Promise<GitInfo | null> {
 
     logger.debug(`Git info for ${projectPath}: ${branch}@${commitSHA}`);
 
-    return {
+    const info: GitInfo = {
       branch: branch.trim(),
       commitSHA: commitSHA.trim(),
       isRepo: true,
     };
+    gitInfoCache.set(projectPath, { info, timestamp: Date.now() });
+    return info;
   } catch (error) {
     logger.debug(`Failed to get git info for ${projectPath}:`, error);
+    gitInfoCache.set(projectPath, { info: null, timestamp: Date.now() });
     return null;
   }
 }

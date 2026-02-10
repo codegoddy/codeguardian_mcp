@@ -392,6 +392,88 @@ async function isSymbolUsedAnywhere(
 }
 
 // ============================================================================
+// Per-File Unused Local Detection
+// ============================================================================
+
+/**
+ * Detect unused local functions and constants within a single file.
+ * Skips exported symbols (they may be used by other files).
+ * Used by both autoValidator (perFileOnly mode) and validationJob (start_validation).
+ */
+export function detectUnusedLocals(code: string, filePath: string): DeadCodeIssue[] {
+  const issues: DeadCodeIssue[] = [];
+  const lines = code.split("\n");
+
+  // Build a set of exported names so we can skip them
+  const exportedNames = new Set<string>();
+  const exportPatterns = [
+    /export\s+(?:default\s+)?function\s+([a-zA-Z0-9_$]+)/g,
+    /export\s+(?:default\s+)?class\s+([a-zA-Z0-9_$]+)/g,
+    /export\s+(?:const|let|var)\s+([a-zA-Z0-9_$]+)/g,
+    /export\s+\{([^}]+)\}/g,
+    // Python: top-level __all__ exports
+    /__all__\s*=\s*\[([^\]]+)\]/g,
+  ];
+  for (const pattern of exportPatterns) {
+    let match;
+    while ((match = pattern.exec(code)) !== null) {
+      const names = match[1].split(",").map(n => n.trim().replace(/\s+as\s+\w+/, "").replace(/['"]/g, ""));
+      for (const name of names) {
+        if (name) exportedNames.add(name);
+      }
+    }
+  }
+
+  // Find defined local symbols (functions and constants)
+  const definedSymbols: { name: string; type: "function" | "constant"; line: number }[] = [];
+  const defPatterns = [
+    { pattern: /function\s+([a-zA-Z0-9_$]+)\s*\(/g, type: "function" as const },
+    { pattern: /(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*(?:async\s*)?\(/g, type: "function" as const },
+    { pattern: /(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*.*=>/g, type: "function" as const },
+    { pattern: /(?:const|let|var)\s+([A-Z][A-Z0-9_$]{2,})\s*=/g, type: "constant" as const },
+    { pattern: /def\s+([a-zA-Z0-9_$]+)\s*\(/g, type: "function" as const },
+  ];
+
+  for (const { pattern, type } of defPatterns) {
+    let match;
+    while ((match = pattern.exec(code)) !== null) {
+      const name = match[1];
+      // Skip exported symbols — they may be used by other files
+      if (exportedNames.has(name)) continue;
+      // Skip common framework/lifecycle patterns
+      if (name.startsWith("use") || name === "default" || name === "constructor") continue;
+
+      // Find the line number
+      const offset = match.index;
+      let line = 1;
+      for (let i = 0; i < offset && i < code.length; i++) {
+        if (code[i] === "\n") line++;
+      }
+
+      definedSymbols.push({ name, type, line });
+    }
+  }
+
+  // Check each defined symbol for usage (more than just the definition)
+  for (const sym of definedSymbols) {
+    const escaped = sym.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const count = (code.match(new RegExp(`\\b${escaped}\\b`, "g")) || []).length;
+    if (count <= 1) {
+      issues.push({
+        type: sym.type === "function" ? "unusedFunction" : "unusedExport",
+        severity: "medium",
+        name: sym.name,
+        file: filePath,
+        line: sym.line,
+        message: `${sym.type === "function" ? "Function" : "Constant"} '${sym.name}' is defined but never used in this file`,
+      });
+    }
+  }
+
+  return issues;
+}
+
+// ============================================================================
 // Main Dead Code Detection Function
 // ============================================================================
 
@@ -421,8 +503,18 @@ export async function detectDeadCode(
   context: ProjectContext,
   newCode?: string,
   filePathFilter?: (filePath: string) => boolean,
+  perFileOnly?: boolean,
 ): Promise<DeadCodeIssue[]> {
   const issues: DeadCodeIssue[] = [];
+
+  // Per-file mode: only check for unused functions/constants in newCode.
+  // Skip ALL project-wide scans (unused exports, orphaned files) — these are slow,
+  // race-prone during rapid vibecoding, and belong in the initial health check.
+  if (perFileOnly && newCode) {
+    return detectUnusedLocals(newCode, "(new code)");
+  } else if (perFileOnly) {
+    return issues; // No newCode to check
+  }
 
   // Load ignore patterns
   const ignorePatterns = await loadIgnorePatterns(context.projectPath);
@@ -447,9 +539,14 @@ export async function detectDeadCode(
     }
   }
 
-  // Track JSX and Wildcard usage
+  // Track JSX and Wildcard usage + build raw import name set for safety checks
   const wildcardImportedModules = new Map<string, string>(); // Local Name -> Module Path
   const allFileKeysEarly = Array.from(context.files.keys()); // Cache once for all resolveImport calls
+  // allRawImportedNames: ALL symbol names imported anywhere, from raw file analysis.
+  // Unlike symbolsImportedFromFile (which depends on dependency resolution), this set
+  // is always up-to-date because it comes from the parsed import statements directly.
+  // Used as a safety net in orphaned file detection to catch graph staleness.
+  const allRawImportedNames = new Set<string>();
 
   for (const [filePath, fileInfo] of context.files) {
     for (const imp of fileInfo.imports) {
@@ -460,6 +557,14 @@ export async function detectDeadCode(
         if (/^[A-Z]/.test(name)) {
           jsxUsedComponents.add(name);
         }
+      }
+
+      // Build raw import name set (all named + default imports regardless of resolution)
+      if (imp.defaultImport) {
+        allRawImportedNames.add(imp.defaultImport);
+      }
+      for (const name of imp.namedImports) {
+        allRawImportedNames.add(name);
       }
 
       // Track Wildcard imports: import * as utils from './utils'
@@ -830,6 +935,29 @@ export async function detectDeadCode(
         if (isSymbolImported(exp.name, filePath, symbolsImportedFromFile)) {
           anyExportUsed = true;
           break;
+        }
+      }
+
+      // Safety net: check against RAW import data (immune to dependency graph staleness).
+      // During rapid vibecoding, the dependency graph can be temporarily stale
+      // (e.g., reverseImportGraph missing entries because refreshFileContext hasn't
+      // re-resolved all importers). Raw import names come directly from file analysis
+      // and are always up-to-date.
+      if (!anyExportUsed) {
+        for (const exp of fileInfo.exports) {
+          if (jsxUsedComponents.has(exp.name) || allRawImportedNames.has(exp.name)) {
+            anyExportUsed = true;
+            break;
+          }
+        }
+        // Also check symbols (some exports are tracked as symbols, not in exports array)
+        if (!anyExportUsed) {
+          for (const sym of fileInfo.symbols) {
+            if (sym.exported && (jsxUsedComponents.has(sym.name) || allRawImportedNames.has(sym.name))) {
+              anyExportUsed = true;
+              break;
+            }
+          }
         }
       }
 
