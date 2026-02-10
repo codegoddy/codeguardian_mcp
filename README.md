@@ -129,6 +129,37 @@ Copy the path from step 1 and add it to your client's MCP configuration:
 }
 ```
 
+**OpenCode** (`opencode.json` in your project root):
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "codeguardian": {
+      "type": "local",
+      "command": ["node", "/home/youruser/codeguardian_mcp/dist/server.js"],
+      "enabled": true
+    }
+  }
+}
+```
+
+**Gemini CLI / Antigravity** (`settings.json`):
+```json
+{
+  "mcpServers": {
+    "codeguardian": {
+      "command": "node",
+      "args": ["/home/youruser/codeguardian_mcp/dist/server.js"]
+    }
+  }
+}
+```
+
+**Claude Code** (CLI):
+```bash
+claude mcp add --transport stdio codeguardian -- node /home/youruser/codeguardian_mcp/dist/server.js
+```
+
 > **Important:** Replace the path with the actual output from step 1. The path depends on where **you** cloned the repo.
 
 ### 3. Restart your MCP client
