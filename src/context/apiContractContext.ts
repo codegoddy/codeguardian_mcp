@@ -374,17 +374,17 @@ async function extractFrontendServices(
         f.path.includes("/lib/")),
   );
 
-  console.log(`[API Contract] Found ${serviceFiles.length} service files in ${frontendPath}`);
+  logger.debug(`[API Contract] Found ${serviceFiles.length} service files in ${frontendPath}`);
 
   for (const fileInfo of serviceFiles) {
     try {
-      console.log(`[API Contract] Extracting from: ${fileInfo.path}`);
+      logger.debug(`[API Contract] Extracting from: ${fileInfo.path}`);
       // Use AST-based extraction
       const fileServices = await extractServicesFromFileAST(fileInfo.path);
-      console.log(`[API Contract] Extracted ${fileServices.length} services from ${fileInfo.path}`);
+      logger.debug(`[API Contract] Extracted ${fileServices.length} services from ${fileInfo.path}`);
       services.push(...fileServices);
     } catch (err) {
-      console.log(`[API Contract] Failed to extract services from ${fileInfo.path}: ${err}`);
+      logger.warn(`[API Contract] Failed to extract services from ${fileInfo.path}: ${err}`);
     }
   }
 
@@ -414,17 +414,17 @@ async function extractFrontendTypes(
         f.path.includes("/lib/")),
   );
 
-  console.log(`[API Contract] Found ${typeFiles.length} type files in ${frontendPath}`);
+  logger.debug(`[API Contract] Found ${typeFiles.length} type files in ${frontendPath}`);
 
   for (const fileInfo of typeFiles) {
     try {
-      console.log(`[API Contract] Extracting types from: ${fileInfo.path}`);
+      logger.debug(`[API Contract] Extracting types from: ${fileInfo.path}`);
       // Use AST-based extraction
       const fileTypes = await extractTypesFromFileAST(fileInfo.path);
-      console.log(`[API Contract] Extracted ${fileTypes.length} types from ${fileInfo.path}`);
+      logger.debug(`[API Contract] Extracted ${fileTypes.length} types from ${fileInfo.path}`);
       types.push(...fileTypes);
     } catch (err) {
-      console.log(`[API Contract] Failed to extract types from ${fileInfo.path}: ${err}`);
+      logger.warn(`[API Contract] Failed to extract types from ${fileInfo.path}: ${err}`);
     }
   }
 

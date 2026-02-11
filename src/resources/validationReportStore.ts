@@ -67,9 +67,13 @@ class ValidationReportStore {
   constructor(baseDir: string = REPORTS_DIR) {
     this.reportsDir = baseDir;
     
-    // Initialize persistence
+    // Initialize persistence (non-blocking, with error handling)
     this.initializePersistence().then(() => {
         // Start cleanup interval after initialization
+        this.cleanupInterval = setInterval(() => this.cleanup(), 60 * 1000);
+    }).catch((err) => {
+        logger.error("Failed to initialize report store persistence:", err);
+        // Still start cleanup even if persistence failed
         this.cleanupInterval = setInterval(() => this.cleanup(), 60 * 1000);
     });
   }
