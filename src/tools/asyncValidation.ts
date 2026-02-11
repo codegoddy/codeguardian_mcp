@@ -6,9 +6,14 @@
  * 2. get_validation_status - Check job progress
  * 3. get_validation_results - Retrieve completed results
  *
+ * Results are saved to BOTH:
+ * - `.codeguardian/reports/` (internal cache, gitignored)
+ * - `codeguardian-report.json` (LLM-readable, at project root)
+ *
  * @format
  */
 
+import * as path from "path";
 import { ToolDefinition } from "../types/tools.js";
 import { logger } from "../utils/logger.js";
 import { jobQueue } from "../queue/jobQueue.js";
@@ -22,7 +27,7 @@ export const startValidationTool: ToolDefinition = {
   definition: {
     name: "start_validation",
     description:
-      "Start a background validation job for large codebases (>50 files) to avoid timeouts. Use 'get_validation_status' to poll for progress.",
+      "Start a background validation job for large codebases (>50 files) to avoid timeouts. Use 'get_validation_status' to poll for progress. Results are saved to codeguardian-report.json at the project root (readable by file tools, NOT inside .codeguardian/).",
     inputSchema: {
       type: "object",
       properties: {
@@ -74,15 +79,20 @@ export const startValidationTool: ToolDefinition = {
 
     try {
       const jobId = await jobQueue.submitJob("validation", args);
+      const resolvedPath = path.resolve(args.projectPath);
+      const reportFilePath = validationReportStore.getLLMReportPath(resolvedPath);
 
       return formatResponse({
         success: true,
         jobId,
         status: "queued",
         message: "Validation job submitted successfully",
+        reportFile: reportFilePath,
         nextSteps: [
           `Use get_validation_status({ jobId: "${jobId}" }) to check progress`,
           `Use get_validation_results({ jobId: "${jobId}" }) to get results when complete`,
+          `When complete, results will be saved to: ${reportFilePath}`,
+          `You can read the report file directly with your file-reading tool (it's NOT inside .codeguardian/)`,
         ],
       });
     } catch (error) {
@@ -156,7 +166,7 @@ export const getValidationStatusTool: ToolDefinition = {
 export const getValidationResultsTool: ToolDefinition = {
   definition: {
     name: "get_validation_results",
-    description: "Retrieve final results for a completed validation job.",
+    description: "Retrieve final results for a completed validation job. Results are also saved to codeguardian-report.json at the project root, readable by file tools.",
     inputSchema: {
       type: "object",
       properties: {
@@ -243,11 +253,12 @@ export const getValidationResultsTool: ToolDefinition = {
       }
 
       // Store the report in the resource store (if not already stored)
+      const job = jobQueue.getJob(args.jobId);
+      const projectPath = (job?.input as any)?.projectPath || "";
+      
       if (!validationReportStore.has(args.jobId)) {
-        const job = jobQueue.getJob(args.jobId);
-        const projectPath = (job?.input as any)?.projectPath || "";
-        
         // Wait for the report to be written to disk
+        // This saves to BOTH .codeguardian/reports/ AND codeguardian-report.json (LLM-readable)
         await validationReportStore.store(args.jobId, projectPath, {
           summary: fullResult.summary,
           stats: fullResult.stats,
@@ -257,6 +268,11 @@ export const getValidationResultsTool: ToolDefinition = {
           recommendation: fullResult.recommendation,
         });
       }
+
+      // Get LLM-readable report file path
+      const reportFilePath = projectPath
+        ? validationReportStore.getLLMReportPath(projectPath)
+        : undefined;
 
       const totalIssues = (fullResult.hallucinations?.length || 0) + (fullResult.deadCode?.length || 0);
       const isLargeResult = totalIssues > 50;
@@ -275,21 +291,26 @@ export const getValidationResultsTool: ToolDefinition = {
           status: results.status,
           // COMPACT RESPONSE: URI + Summary only
           reportUri,
-          message: `Large result set (${totalIssues} issues). Report stored as MCP Resource.`,
+          reportFile: reportFilePath,
+          message: `Large result set (${totalIssues} issues). Full report saved to ${reportFilePath || 'MCP Resource'}. Use your file-reading tool to access it.`,
           summary: (summary as any)?.summary,
           stats: (summary as any)?.stats,
           score: (summary as any)?.score,
           recommendation: (summary as any)?.recommendation,
           totalHallucinations: (summary as any)?.totalHallucinations,
           totalDeadCode: (summary as any)?.totalDeadCode,
-          // Instructions for the LLM/IDE to fetch chunks
+          // Instructions for the LLM/IDE to fetch chunks or read file
+          fileAccess: {
+            reportFile: reportFilePath,
+            tip: "Use your file-reading tool (e.g. read_file) to read the codeguardian-report.json file for full details. This file is at the project root and NOT inside .codeguardian/.",
+          },
           resourceAccess: {
             summaryUri: reportUri,
             hallucinationsUri: `${reportUri}/hallucinations/0`,
             deadCodeUri: `${reportUri}/dead-code/0`,
             bySeverityUri: `${reportUri}/by-severity/critical`,
             byTypeUri: `${reportUri}/by-type/dependencyHallucination`,
-            tip: "Use 'list_resources' to see available reports, then 'read_resource' to fetch chunks. Or use filters (fileFilter, severityFilter) with this tool for specific queries.",
+            tip: "Alternatively, use MCP Resources or filters (fileFilter, severityFilter) with this tool for specific queries.",
           },
         });
       }
@@ -307,6 +328,10 @@ export const getValidationResultsTool: ToolDefinition = {
           score: fullResult.score,
           totalIssues,
           reportUri: validationReportStore.getReportUri(args.jobId),
+          reportFile: reportFilePath,
+          hint: reportFilePath
+            ? `Full report saved to ${reportFilePath}. Use your file-reading tool to access it.`
+            : undefined,
         });
       }
 
@@ -333,6 +358,7 @@ export const getValidationResultsTool: ToolDefinition = {
         jobId: args.jobId,
         status: results.status,
         reportUri: validationReportStore.getReportUri(args.jobId),
+        reportFile: reportFilePath,
         issues: filtered.issues,
         pagination: {
           total: filtered.total,
@@ -342,6 +368,9 @@ export const getValidationResultsTool: ToolDefinition = {
         },
         summary: fullResult.summary,
         score: fullResult.score,
+        hint: reportFilePath
+          ? `Full report also available at ${reportFilePath}. Use your file-reading tool to access it.`
+          : undefined,
       });
     } catch (error) {
       logger.error("Error getting job results:", error);

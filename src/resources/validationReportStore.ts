@@ -1,9 +1,16 @@
 /**
  * Validation Report Store
- * 
+ *
  * In-memory store for validation reports, exposed via MCP Resources.
  * This allows LLMs to receive a compact URI instead of massive JSON blobs.
- * 
+ *
+ * Reports are saved in TWO locations:
+ * 1. `.codeguardian/reports/` - internal cache (gitignored)
+ * 2. `codeguardian-report.json` - LLM-readable file at project root (NOT gitignored)
+ *
+ * The LLM-readable file allows AI assistants to access results via standard
+ * file-reading tools, even when `.codeguardian/` is in `.gitignore`.
+ *
  * @format
  */
 
@@ -12,6 +19,13 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 
 const REPORTS_DIR = ".codeguardian/reports";
+
+/**
+ * The LLM-readable report filename.
+ * This is placed at the project root, outside `.codeguardian/`, so that
+ * LLM file-reading tools (which often respect .gitignore) can access it.
+ */
+const LLM_REPORT_FILENAME = "codeguardian-report.json";
 
 // ============================================================================
 // Types
@@ -47,6 +61,9 @@ class ValidationReportStore {
   private readonly CHUNK_SIZE = 25; // Issues per chunk
   private reportsDir: string;
 
+  // Map from jobId → projectPath for tracking which project owns which report
+  private jobProjectMap: Map<string, string> = new Map();
+
   constructor(baseDir: string = REPORTS_DIR) {
     this.reportsDir = baseDir;
     
@@ -71,10 +88,19 @@ class ValidationReportStore {
   }
 
   /**
-   * Save report to disk in the project-specific directory
+   * Save report to disk in the project-specific directory.
+   *
+   * Saves to TWO locations:
+   * 1. `.codeguardian/reports/{jobId}.json` - internal cache (gitignored)
+   * 2. `codeguardian-report.json` - LLM-readable file at project root
+   *
+   * The LLM-readable file is placed OUTSIDE `.codeguardian/` so that
+   * AI assistants using file-reading tools (which often respect .gitignore)
+   * can still access the validation results.
    */
   private async saveReportToDisk(projectPath: string, report: StoredReport): Promise<void> {
     try {
+      // 1. Save to internal cache (.codeguardian/reports/)
       const reportsDir = path.resolve(projectPath, ".codeguardian/reports");
       await fs.mkdir(reportsDir, { recursive: true });
       
@@ -82,25 +108,143 @@ class ValidationReportStore {
       await fs.writeFile(filePath, JSON.stringify(report, null, 2), "utf-8");
       
       logger.info(`Report saved to project disk: ${filePath}`);
+
+      // 2. Save LLM-readable report to project root (outside .codeguardian/)
+      await this.saveLLMReadableReport(projectPath, report);
     } catch (error) {
       logger.error(`Failed to save report ${report.jobId} to project ${projectPath}:`, error);
     }
   }
 
   /**
-   * Delete report from disk (best effort across known paths or just memory cleanup)
+   * Save an LLM-readable report file at the project root.
+   *
+   * This file is NOT inside `.codeguardian/` so it can be read by
+   * LLM file-reading tools that respect `.gitignore`.
+   *
+   * The file is intentionally compact: it includes the summary, score,
+   * recommendation, and the full issues list. For very large reports,
+   * the LLM can use pagination via the MCP Resources API.
    */
-  private async deleteReportFromDisk(jobId: string): Promise<void> {
-    // Note: Deleting from project disk is complex if we don't track which project owned which job
-    // For now, we mainly manage the in-memory life and the initial save.
+  private async saveLLMReadableReport(projectPath: string, report: StoredReport): Promise<void> {
+    try {
+      const resolvedPath = path.resolve(projectPath);
+      const llmReportPath = path.join(resolvedPath, LLM_REPORT_FILENAME);
+      
+      // Build a compact but complete report
+      const llmReport = {
+        _meta: {
+          generatedBy: "CodeGuardian MCP",
+          generatedAt: new Date(report.createdAt).toISOString(),
+          purpose: "LLM-readable validation report. This file is placed outside .codeguardian/ so AI assistants can read it.",
+          jobId: report.jobId,
+          expiresAt: new Date(report.expiresAt).toISOString(),
+        },
+        summary: report.summary,
+        stats: report.stats,
+        score: report.score,
+        recommendation: report.recommendation,
+        hallucinations: report.hallucinations,
+        deadCode: report.deadCode,
+      };
+
+      await fs.writeFile(llmReportPath, JSON.stringify(llmReport, null, 2), "utf-8");
+      logger.info(`LLM-readable report saved: ${llmReportPath}`);
+    } catch (error) {
+      logger.error(`Failed to save LLM-readable report for ${report.jobId}:`, error);
+    }
   }
 
   /**
-   * Load all reports from disk
-   * (Simplified: for now we focus on active session reports, but we could scan known project paths)
+   * Get the path to the LLM-readable report file for a project
+   */
+  getLLMReportPath(projectPath: string): string {
+    return path.join(path.resolve(projectPath), LLM_REPORT_FILENAME);
+  }
+
+  /**
+   * Get the project path associated with a job
+   */
+  getJobProjectPath(jobId: string): string | undefined {
+    return this.jobProjectMap.get(jobId);
+  }
+
+  /**
+   * Delete report from disk
+   */
+  private async deleteReportFromDisk(jobId: string): Promise<void> {
+    const projectPath = this.jobProjectMap.get(jobId);
+    if (!projectPath) return;
+
+    try {
+      // Delete from internal cache
+      const filePath = path.join(path.resolve(projectPath), ".codeguardian/reports", `${jobId}.json`);
+      await fs.unlink(filePath).catch(() => {});
+
+      // Note: We don't delete the LLM-readable report here because it may have been
+      // overwritten by a newer validation run. It will be overwritten on next validation.
+      logger.debug(`Report deleted from disk: ${jobId}`);
+    } catch (error) {
+      // Ignore deletion errors
+    }
+
+    this.jobProjectMap.delete(jobId);
+  }
+
+  /**
+   * Load all reports from disk by scanning known project paths
+   * from guardian persistence configs.
    */
   private async loadAllReports(): Promise<void> {
-    // This could be enhanced to scan the current directory's .codeguardian/reports if needed
+    try {
+      // Try to load guardian configs to discover project paths
+      const { guardianPersistence } = await import('../agent/guardianPersistence.js');
+      const configs = await guardianPersistence.loadAllGuardians();
+      
+      const projectPaths = new Set<string>();
+      for (const config of configs) {
+        projectPaths.add(config.projectPath);
+      }
+
+      // Scan each project's .codeguardian/reports/ directory
+      for (const projectPath of projectPaths) {
+        try {
+          const reportsDir = path.resolve(projectPath, ".codeguardian/reports");
+          const files = await fs.readdir(reportsDir);
+          
+          for (const file of files) {
+            if (!file.endsWith('.json')) continue;
+            
+            try {
+              const content = await fs.readFile(path.join(reportsDir, file), 'utf-8');
+              const report = JSON.parse(content) as StoredReport;
+              
+              // Skip expired reports
+              if (report.expiresAt < Date.now()) {
+                logger.debug(`Skipping expired report: ${report.jobId}`);
+                continue;
+              }
+
+              this.reports.set(report.jobId, report);
+              this.jobProjectMap.set(report.jobId, projectPath);
+              logger.debug(`Loaded persisted report: ${report.jobId}`);
+            } catch (err) {
+              logger.warn(`Failed to load report file ${file}:`, err);
+            }
+          }
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+            logger.warn(`Failed to scan reports in ${projectPath}:`, err);
+          }
+        }
+      }
+
+      if (this.reports.size > 0) {
+        logger.info(`Loaded ${this.reports.size} persisted validation report(s) from disk`);
+      }
+    } catch (error) {
+      logger.warn("Failed to load persisted reports:", error);
+    }
   }
 
   /**
@@ -120,8 +264,14 @@ class ValidationReportStore {
 
     this.reports.set(jobId, storedReport);
     
+    // Track project path for this job
+    if (projectPath) {
+      this.jobProjectMap.set(jobId, path.resolve(projectPath));
+    }
+    
     // Save to the specific project path and wait for it to complete
     // This ensures the file exists immediately when the method returns
+    // Saves to BOTH .codeguardian/reports/ AND codeguardian-report.json (LLM-readable)
     if (projectPath) {
       try {
         await this.saveReportToDisk(projectPath, storedReport);

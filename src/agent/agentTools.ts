@@ -154,6 +154,8 @@ Each Guardian watches its own path and language.`,
         logger.warn("Failed to persist guardian config:", err);
       });
 
+      const alertsFilePath = guardianPersistence.getLLMAlertsPath(absolutePath);
+
       return {
         content: [
           {
@@ -161,10 +163,12 @@ Each Guardian watches its own path and language.`,
             text: JSON.stringify({
               success: true,
               message: `Started ${agent_name} at ${absolutePath} (${language}). Initialization running in background.`,
+              alertsFile: alertsFilePath,
               status: {
                   ...guardian.getStatus(),
                   state: "initializing"
               },
+              hint: `Alerts will be saved to ${alertsFilePath} (readable by file tools, NOT inside .codeguardian/). Use get_guardian_alerts or read the file directly to check for issues.`,
             }),
           },
         ],
@@ -281,7 +285,7 @@ export const stopGuardianTool: ToolDefinition = {
 export const getGuardianAlertsTool: ToolDefinition = {
   definition: {
     name: "get_guardian_alerts",
-    description: `Get pending alerts from all active Guardians.`,
+    description: `Get pending alerts from all active Guardians. Returns a compact summary with a pointer to the full LLM-readable alerts file (codeguardian-alerts.json) in the project root.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -290,13 +294,29 @@ export const getGuardianAlertsTool: ToolDefinition = {
           description: "Deprecated: Alerts are now persistent until issues are resolved. This flag is ignored.",
           default: false,
         },
+        summaryOnly: {
+          type: "boolean",
+          description: "If true, returns only a compact summary with file path to full alerts. Useful to avoid LLM context overflow. Default: false.",
+          default: false,
+        },
       },
     },
   },
 
   async handler(args: any) {
+    const { summaryOnly = false } = args;
+
     // Get all active alerts
     const alerts = Array.from(fileAlerts.values());
+
+    // Collect LLM-readable file paths from all active guardians
+    const alertsFilePaths: string[] = [];
+    for (const guardian of activeGuardians.values()) {
+      const status = guardian.getStatus();
+      if (status.projectPath) {
+        alertsFilePaths.push(guardianPersistence.getLLMAlertsPath(status.projectPath));
+      }
+    }
 
     if (alerts.length === 0) {
       return {
@@ -307,13 +327,49 @@ export const getGuardianAlertsTool: ToolDefinition = {
               success: true,
               hasAlerts: false,
               message: "No active issues. All clear! (Alerts automatically clear when issues are fixed)",
+              alertsFiles: alertsFilePaths.length > 0 ? alertsFilePaths : undefined,
             }),
           },
         ],
       };
     }
 
-    // Format alerts for LLM consumption
+    // Count issues by severity
+    const severityCounts: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0, warning: 0 };
+    let totalIssues = 0;
+    for (const alert of alerts) {
+      for (const issue of alert.issues) {
+        const sev = issue.severity || "low";
+        severityCounts[sev] = (severityCounts[sev] || 0) + 1;
+        totalIssues++;
+      }
+    }
+
+    // For summaryOnly mode or large alert sets, return compact summary + file path
+    if (summaryOnly || totalIssues > 50) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              hasAlerts: true,
+              alertCount: alerts.length,
+              totalIssues,
+              bySeverity: severityCounts,
+              affectedFiles: alerts.map(a => a.file),
+              alertsFiles: alertsFilePaths,
+              message: totalIssues > 50
+                ? `Large alert set (${totalIssues} issues across ${alerts.length} files). Full details available in the alertsFiles listed above. Use read_file to access them.`
+                : `${totalIssues} issues across ${alerts.length} files. Full details available in the alertsFiles listed above.`,
+              hint: "The codeguardian-alerts.json file in the project root contains the full alert details. Use your file-reading tool to access it.",
+            }),
+          },
+        ],
+      };
+    }
+
+    // Format alerts for LLM consumption (full inline for small result sets)
     const llmMessages = alerts.map((a) => a.llmMessage).join("\n\n---\n\n");
 
     return {
@@ -324,8 +380,12 @@ export const getGuardianAlertsTool: ToolDefinition = {
             success: true,
             hasAlerts: true,
             alertCount: alerts.length,
+            totalIssues,
+            bySeverity: severityCounts,
             alerts: alerts,
             llmSummary: llmMessages,
+            alertsFiles: alertsFilePaths,
+            hint: "Full alerts are also persisted at the codeguardian-alerts.json file(s) in the project root. Use your file-reading tool to access them across sessions.",
           }),
         },
       ],

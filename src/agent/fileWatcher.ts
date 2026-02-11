@@ -48,6 +48,9 @@ export class FileWatcher extends EventEmitter {
         "**/venv/**",
         "**/__pycache__/**",
         "**/.codeguardian/**",
+        // Ignore LLM-readable report/alert files (our own output)
+        "**/codeguardian-report.json",
+        "**/codeguardian-alerts.json",
       ],
       persistent: true,
       ignoreInitial: true,

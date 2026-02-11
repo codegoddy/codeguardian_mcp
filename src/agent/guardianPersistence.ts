@@ -7,12 +7,27 @@
  * On startup, the server reads persisted configs and auto-restores
  * guardians without requiring the LLM to call start_guardian again.
  *
+ * Alerts are saved in TWO locations:
+ * 1. `.codeguardian/guardians/alerts.json` - internal cache (gitignored)
+ * 2. `codeguardian-alerts.json` - LLM-readable file at project root (NOT gitignored)
+ *
  * @format
  */
 
 import * as fs from "fs/promises";
 import * as path from "path";
 import { logger } from "../utils/logger.js";
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+/**
+ * LLM-readable alerts filename.
+ * Placed at the project root, outside `.codeguardian/`, so that
+ * LLM file-reading tools (which often respect .gitignore) can access it.
+ */
+const LLM_ALERTS_FILENAME = "codeguardian-alerts.json";
 
 // ============================================================================
 // Types
@@ -192,7 +207,11 @@ class GuardianPersistence {
   // --------------------------------------------------------------------------
 
   /**
-   * Save all current file alerts to disk
+   * Save all current file alerts to disk.
+   *
+   * Saves to TWO locations:
+   * 1. `.codeguardian/guardians/alerts.json` - internal cache (gitignored)
+   * 2. `codeguardian-alerts.json` - LLM-readable file at project root(s)
    */
   async saveAlerts(
     alerts: Map<string, PersistedAlert>
@@ -203,9 +222,87 @@ class GuardianPersistence {
       const data = Object.fromEntries(alerts.entries());
       await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
       logger.debug(`Saved ${alerts.size} alerts to disk`);
+
+      // Also save LLM-readable alerts to project root(s)
+      await this.saveLLMReadableAlerts(alerts);
     } catch (error) {
       logger.error("Failed to save alerts:", error);
     }
+  }
+
+  /**
+   * Save LLM-readable alerts file to each guardian's project root.
+   *
+   * This is placed OUTSIDE `.codeguardian/` so that LLM file-reading tools
+   * (which often respect .gitignore) can access the alert data.
+   */
+  private async saveLLMReadableAlerts(
+    alerts: Map<string, PersistedAlert>
+  ): Promise<void> {
+    try {
+      // Discover project paths from persisted guardian configs
+      const configs = await this.loadAllGuardians();
+      const projectPaths = new Set<string>();
+      for (const config of configs) {
+        projectPaths.add(config.projectPath);
+      }
+
+      if (projectPaths.size === 0) return;
+
+      // Build a structured alert report
+      const alertEntries = Array.from(alerts.values());
+      const groupedByFile: Record<string, PersistedAlert> = {};
+      for (const [file, alert] of alerts.entries()) {
+        groupedByFile[file] = alert;
+      }
+
+      // Count by severity
+      const severityCounts: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0, warning: 0 };
+      for (const alert of alertEntries) {
+        for (const issue of alert.issues) {
+          const sev = issue.severity || "low";
+          severityCounts[sev] = (severityCounts[sev] || 0) + 1;
+        }
+      }
+
+      const totalIssues = alertEntries.reduce((sum, a) => sum + a.issues.length, 0);
+
+      const llmAlerts = {
+        _meta: {
+          generatedBy: "CodeGuardian MCP - Guardian Agent",
+          generatedAt: new Date().toISOString(),
+          purpose: "LLM-readable guardian alerts. This file is placed outside .codeguardian/ so AI assistants can read it.",
+        },
+        summary: {
+          totalFiles: alerts.size,
+          totalIssues,
+          bySeverity: severityCounts,
+        },
+        alerts: groupedByFile,
+      };
+
+      const content = JSON.stringify(llmAlerts, null, 2);
+
+      // Write to each project root
+      for (const projectPath of projectPaths) {
+        try {
+          const llmAlertsPath = path.join(projectPath, LLM_ALERTS_FILENAME);
+          await fs.writeFile(llmAlertsPath, content, "utf-8");
+          logger.debug(`LLM-readable alerts saved: ${llmAlertsPath}`);
+        } catch (err) {
+          logger.warn(`Failed to save LLM-readable alerts to ${projectPath}:`, err);
+        }
+      }
+    } catch (error) {
+      logger.warn("Failed to save LLM-readable alerts:", error);
+    }
+  }
+
+  /**
+   * Get the LLM-readable alerts file path for a project
+   */
+  getLLMAlertsPath(projectPath: string): string {
+    return path.join(projectPath, LLM_ALERTS_FILENAME);
   }
 
   /**
@@ -231,12 +328,23 @@ class GuardianPersistence {
   }
 
   /**
-   * Clear persisted alerts
+   * Clear persisted alerts (both internal cache and LLM-readable files)
    */
   async clearAlerts(): Promise<void> {
     try {
       const filePath = path.join(this.guardiansDir, ALERTS_FILE);
       await fs.unlink(filePath).catch(() => {});
+
+      // Also clean up LLM-readable alerts from project roots
+      const configs = await this.loadAllGuardians();
+      for (const config of configs) {
+        try {
+          const llmAlertsPath = path.join(config.projectPath, LLM_ALERTS_FILENAME);
+          await fs.unlink(llmAlertsPath).catch(() => {});
+        } catch {
+          // Ignore
+        }
+      }
     } catch (error) {
       // Ignore
     }
