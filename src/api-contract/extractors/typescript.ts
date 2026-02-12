@@ -118,6 +118,17 @@ function traverseNode(
 }
 
 /**
+ * Common patterns for direct API helper function names
+ */
+const API_HELPER_PATTERNS = [
+  /^fetch/i,          // fetchApi, fetchData, fetchJson
+  /^api(?:Call|Request|Fetch)?$/i,   // api, apiCall, apiRequest, apiFetch
+  /^(?:make|do|send)Request$/i,      // makeRequest, doRequest, sendRequest
+  /^request$/i,
+  /^http(?:Client|Request)?$/i,
+];
+
+/**
  * Extract service from a call expression node
  */
 function extractServiceFromCall(
@@ -129,7 +140,7 @@ function extractServiceFromCall(
   const functionNode = node.childForFieldName("function");
   if (!functionNode) return null;
 
-  // Check if it's a method call like ApiService.post or api.get
+  // Case 1: Method call like ApiService.post or api.get
   if (functionNode.type === "member_expression") {
     const objectNode = functionNode.childForFieldName("object");
     const propertyNode = functionNode.childForFieldName("property");
@@ -173,6 +184,37 @@ function extractServiceFromCall(
     };
   }
 
+  // Case 2: Direct function call like fetchApi('/endpoint', { method: 'POST' })
+  // This handles wrapper functions (fetchApi, apiCall, request, etc.)
+  if (functionNode.type === "identifier") {
+    const funcName = getNodeText(functionNode, content);
+
+    // Check if the function name matches common API helper patterns
+    const isApiHelper = API_HELPER_PATTERNS.some(p => p.test(funcName));
+    if (!isApiHelper) return null;
+
+    // Extract arguments
+    const argumentsNode = node.childForFieldName("arguments");
+    if (!argumentsNode) return null;
+
+    const endpoint = extractEndpointFromArguments(argumentsNode, content);
+    if (!endpoint) return null;
+
+    // Try to detect HTTP method from the options argument (e.g., { method: 'POST' })
+    const httpMethod = extractHttpMethodFromArguments(argumentsNode, content) || "GET";
+
+    // Try to find the enclosing function/method name
+    const enclosingFunction = findEnclosingFunction(node, content);
+
+    return {
+      name: enclosingFunction || `${funcName}_${endpoint.replace(/[^a-zA-Z0-9]/g, "_")}`,
+      method: httpMethod,
+      endpoint,
+      file: filePath,
+      line: node.startPosition.row + 1,
+    };
+  }
+
   return null;
 }
 
@@ -205,7 +247,49 @@ function extractEndpointFromArguments(argumentsNode: any, content: string): stri
 }
 
 /**
- * Extract string value from string/template node
+ * Extract HTTP method from call arguments (for direct function calls).
+ * Looks for patterns like: fetchApi(url, { method: 'POST', ... })
+ */
+function extractHttpMethodFromArguments(
+  argumentsNode: any,
+  content: string,
+): ServiceDefinition["method"] | null {
+  // Walk through arguments looking for an object with a "method" property
+  for (const child of argumentsNode.children || []) {
+    if (child.type === "object") {
+      return extractMethodFromObject(child, content);
+    }
+  }
+  return null;
+}
+
+/**
+ * Extract the HTTP method from an object literal node (e.g., { method: 'POST' })
+ */
+function extractMethodFromObject(node: any, content: string): ServiceDefinition["method"] | null {
+  for (const child of node.children || []) {
+    if (child.type === "pair") {
+      const keyNode = child.childForFieldName("key");
+      const valueNode = child.childForFieldName("value");
+      if (keyNode && valueNode) {
+        const key = getNodeText(keyNode, content);
+        if (key === "method") {
+          const value = getNodeText(valueNode, content).replace(/^["']|["']$/g, "");
+          return mapToHttpMethod(value.toLowerCase()) || null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Extract string value from string/template node.
+ * For template strings, extracts the static base path before dynamic interpolation.
+ * Handles patterns like:
+ *   `/pantry${category ? '?cat=...' : ''}` → `/pantry`
+ *   `/pantry/${id}` → `/pantry`
+ *   `/recipes/${id}/match` → `/recipes` (first static segment)
  */
 function extractStringValue(node: any, content: string): string | null {
   if (node.type === "string") {
@@ -217,10 +301,16 @@ function extractStringValue(node: any, content: string): string | null {
   if (node.type === "template_string") {
     // For template strings like `/api/clients/${id}`, extract the base path
     const text = getNodeText(node, content);
-    // Extract the static parts
+
+    // Check if there's any interpolation
     const match = text.match(/`([^$]*)\$\{/);
     if (match) {
-      return match[1].replace(/\/$/, ""); // Remove trailing slash
+      let basePath = match[1];
+      // Remove trailing slash (the slash before ${id})
+      basePath = basePath.replace(/\/$/, "");
+      // If basePath is empty (e.g., `${API_BASE}${endpoint}`), skip
+      if (!basePath || basePath === "/") return null;
+      return basePath;
     }
     // If no interpolation, just return the string content
     return text.replace(/^`/, "").replace(/`$/, "");

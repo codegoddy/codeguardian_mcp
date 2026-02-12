@@ -30,7 +30,7 @@ import {
   validateUsagePatterns,
   getLineFromCode,
 } from "../tools/validation/validation.js";
-import { detectDeadCode } from "../tools/validation/deadCode.js";
+import { detectDeadCode, detectUnusedLocals } from "../tools/validation/deadCode.js";
 import { impactAnalyzer } from "../analyzers/impactAnalyzer.js";
 import { logger } from "../utils/logger.js";
 import { sendNotification } from "./mcpNotifications.js";
@@ -246,7 +246,7 @@ export class AutoValidator {
     let pythonRoot: string | undefined;
     let tsRoot: string | undefined;
 
-    // Quick heuristic: check for common full-stack markers
+    // Quick heuristic: check for common full-stack markers at project root
     const markers = [
       { path: "requirements.txt", lang: "python" },
       { path: "pyproject.toml", lang: "python" },
@@ -265,50 +265,55 @@ export class AutoValidator {
       }
     }
 
-    // Also check for backend/frontend directory patterns
-    const dirChecks = [
-      { path: "backend", lang: "python" },
-      { path: "server", lang: "python" },
-      { path: "frontend", lang: "typescript" },
-      { path: "client", lang: "typescript" },
+    // Helper to detect language of a subdirectory based on its manifest files
+    const detectDirLanguage = async (dirPath: string): Promise<"python" | "typescript" | "both" | "unknown"> => {
+      let dirHasPython = false;
+      let dirHasTS = false;
+      for (const m of ["requirements.txt", "pyproject.toml", "Pipfile"]) {
+        try { await fs.access(path.join(dirPath, m)); dirHasPython = true; break; } catch { /* Not found */ }
+      }
+      for (const m of ["package.json", "tsconfig.json"]) {
+        try { await fs.access(path.join(dirPath, m)); dirHasTS = true; break; } catch { /* Not found */ }
+      }
+      if (dirHasPython && dirHasTS) return "both";
+      if (dirHasPython) return "python";
+      if (dirHasTS) return "typescript";
+      return "unknown";
+    };
+
+    // Check common subdirectory patterns — detect ACTUAL language from manifests,
+    // not from directory name (a "backend/" can be Python OR TypeScript)
+    const dirCandidates = [
+      { path: "backend", role: "backend" },
+      { path: "server", role: "backend" },
+      { path: "frontend", role: "frontend" },
+      { path: "client", role: "frontend" },
     ];
 
-    for (const check of dirChecks) {
+    for (const check of dirCandidates) {
       try {
-        const stat = await fs.stat(path.join(this.projectPath, check.path));
+        const dirPath = path.join(this.projectPath, check.path);
+        const stat = await fs.stat(dirPath);
         if (stat.isDirectory()) {
-          if (check.lang === "python" && !pythonRoot) {
+          const lang = await detectDirLanguage(dirPath);
+          if (lang === "python" || lang === "both") {
             hasPython = true;
-            pythonRoot = path.join(this.projectPath, check.path);
+            if (!pythonRoot) pythonRoot = dirPath;
           }
-          if (check.lang === "typescript" && !tsRoot) {
+          if (lang === "typescript" || lang === "both") {
             hasTypeScript = true;
-            tsRoot = path.join(this.projectPath, check.path);
+            // For TS: prefer frontend-role dirs as tsRoot, backend-role dirs as separate
+            if (check.role === "frontend" && !tsRoot) {
+              tsRoot = dirPath;
+            } else if (check.role === "backend" && !tsRoot) {
+              // Backend is also TS — tsRoot tracks the frontend for structure
+              // but we still know it's TypeScript on both sides (NOT full-stack Python+TS)
+              tsRoot = tsRoot || dirPath;
+            }
           }
         }
       } catch {
         // Not found
-      }
-    }
-
-    // For subdirectories, also check if manifests exist inside them
-    // (e.g., backend/requirements.txt, frontend/package.json)
-    if (pythonRoot && !hasPython) {
-      for (const m of ["requirements.txt", "pyproject.toml", "Pipfile"]) {
-        try {
-          await fs.access(path.join(pythonRoot, m));
-          hasPython = true;
-          break;
-        } catch { /* Not found */ }
-      }
-    }
-    if (tsRoot && !hasTypeScript) {
-      for (const m of ["package.json", "tsconfig.json"]) {
-        try {
-          await fs.access(path.join(tsRoot, m));
-          hasTypeScript = true;
-          break;
-        } catch { /* Not found */ }
       }
     }
 
@@ -392,9 +397,18 @@ export class AutoValidator {
     isLenient: boolean
   ): any[] {
     if (isLenient) {
-      // In lenient mode, only show critical and high severity issues
-      return issues.filter(issue => 
-        issue.severity === 'critical' || issue.severity === 'high'
+      // In lenient mode, show critical/high severity issues
+      // PLUS keep issue types that the later lenient filter explicitly preserves:
+      // - unusedImport, unusedFunction, unusedExport (per-file code hygiene)
+      // - dependencyHallucination, missingDependency (build-breaking or suspicious)
+      return issues.filter(issue =>
+        issue.severity === 'critical' ||
+        issue.severity === 'high' ||
+        issue.type === 'unusedImport' ||
+        issue.type === 'unusedFunction' ||
+        issue.type === 'unusedExport' ||
+        issue.type === 'dependencyHallucination' ||
+        issue.type === 'missingDependency'
       );
     }
     
@@ -539,6 +553,89 @@ export class AutoValidator {
       } else {
         logger.info("Initial scan: No issues found in existing codebase");
       }
+
+      // Phase 3: Per-file hallucination and local dead code scan
+      // This catches issues that project-wide scans miss:
+      // - Hallucinated imports (packages not in package.json / requirements.txt)
+      // - Unused local functions/constants (non-exported dead code)
+      // The project-wide scan only finds unused EXPORTS and orphaned files.
+      // This per-file scan finds hallucinated dependencies and local dead code.
+      logger.info("Running per-file hallucination and local dead code scan...");
+      const perFileHallucinations: any[] = [];
+      const perFileDeadCode: any[] = [];
+
+      const MAX_INITIAL_FILES_TO_SCAN = 100;
+      let filesScanned = 0;
+
+      for (const [filePath, fileInfo] of context.files) {
+        if (filesScanned >= MAX_INITIAL_FILES_TO_SCAN) break;
+        if (fileInfo.isTest || fileInfo.isConfig || fileInfo.isEntryPoint) continue;
+
+        const fileLang = AutoValidator.detectFileLanguage(filePath);
+        if (fileLang === "unknown") continue;
+
+        try {
+          const content = await fs.readFile(filePath, "utf-8");
+          filesScanned++;
+
+          // Tier 0: Manifest validation — catches hallucinated imports
+          const imports = extractImportsAST(content, fileLang);
+          const fileManifest = this.getManifestForLanguage(fileLang);
+          if (fileManifest) {
+            const manifestIssues = await validateManifest(imports, fileManifest, content, fileLang, filePath);
+            for (const issue of manifestIssues) {
+              // Attach file path so the verifier can read the file
+              issue.file = filePath;
+              perFileHallucinations.push(issue);
+            }
+          }
+
+          // Tier 2: Local dead code — catches unused non-exported functions/constants
+          const localDeadCode = detectUnusedLocals(content, filePath);
+          perFileDeadCode.push(...localDeadCode);
+        } catch (err) {
+          logger.debug(`Skipping initial scan of ${filePath}: ${err}`);
+        }
+      }
+
+      logger.info(`Per-file scan complete: ${filesScanned} files, ${perFileHallucinations.length} hallucinations, ${perFileDeadCode.length} local dead code`);
+
+      // Verify per-file findings to eliminate false positives
+      const allPerFileFindings = [...perFileHallucinations, ...perFileDeadCode];
+      if (allPerFileFindings.length > 0) {
+        logger.debug(`Verifying ${allPerFileFindings.length} per-file findings...`);
+        const perFileVerification = await verifyFindingsAutomatically(
+          perFileHallucinations,
+          perFileDeadCode,
+          context,
+          this.projectPath,
+          verifyLang,
+        );
+        const confirmedPerFile = getConfirmedFindings(perFileVerification);
+        const confirmedPerFileAll = [...confirmedPerFile.hallucinations, ...confirmedPerFile.deadCode];
+        logger.debug(`Per-file verification: ${confirmedPerFileAll.length} confirmed (filtered ${perFileVerification.stats.falsePositiveCount} false positives)`);
+
+        if (confirmedPerFileAll.length > 0) {
+          const perFileAlert: ValidationAlert = {
+            file: "INITIAL_FILE_SCAN",
+            issues: confirmedPerFileAll.map((issue: any) => ({
+              type: issue.type || "unknown",
+              severity: issue.severity || "medium",
+              message: issue.message || "",
+              suggestion: issue.suggestion,
+              line: issue.line,
+            })),
+            timestamp: Date.now(),
+            llmMessage: this.createPerFileScanMessage(confirmedPerFile.hallucinations, confirmedPerFile.deadCode),
+            isInitialScan: true,
+          };
+
+          logger.info(`Per-file scan found ${confirmedPerFileAll.length} confirmed issues`);
+          if (this.onAlert) {
+            this.onAlert(perFileAlert);
+          }
+        }
+      }
     } catch (err) {
       logger.error("Error running initial health check:", err);
     }
@@ -546,6 +643,41 @@ export class AutoValidator {
 
   private createInitialScanMessage(deadCodeIssues: any[]): string {
     return `📋 **${this.agentName}: Initial Scan Complete** - Found **${deadCodeIssues.length} potential issues** in existing codebase. Use 'get_guardian_alerts' to see details.`;
+  }
+
+  private createPerFileScanMessage(hallucinations: any[], deadCode: any[]): string {
+    const parts: string[] = [];
+    parts.push(`🔍 **${this.agentName}: Per-File Scan Complete**`);
+    parts.push("");
+
+    if (hallucinations.length > 0) {
+      parts.push(`**${hallucinations.length} Hallucinated Import(s):**`);
+      for (const h of hallucinations.slice(0, 5)) {
+        const relFile = path.relative(this.projectPath, h.file || "");
+        parts.push(`- [${h.severity?.toUpperCase()}] ${h.message}${relFile ? ` in \`${relFile}\`` : ""}`);
+        if (h.suggestion) parts.push(`  Suggestion: ${h.suggestion}`);
+      }
+      if (hallucinations.length > 5) {
+        parts.push(`  ... and ${hallucinations.length - 5} more`);
+      }
+      parts.push("");
+    }
+
+    if (deadCode.length > 0) {
+      parts.push(`**${deadCode.length} Unused Local Function(s)/Constant(s):**`);
+      for (const dc of deadCode.slice(0, 5)) {
+        const relFile = path.relative(this.projectPath, dc.file || "");
+        parts.push(`- [${dc.severity?.toUpperCase()}] ${dc.message}${relFile ? ` in \`${relFile}\`` : ""}`);
+      }
+      if (deadCode.length > 5) {
+        parts.push(`  ... and ${deadCode.length - 5} more`);
+      }
+      parts.push("");
+    }
+
+    parts.push("Use 'get_guardian_alerts' to see all details.");
+
+    return parts.join("\n");
   }
 
   private createApiContractMessage(result: { issues: ApiContractIssue[]; summary: { totalIssues: number; critical: number; high: number; medium: number; low: number; matchedEndpoints: number; matchedTypes: number; unmatchedFrontend: number; unmatchedBackend: number; }; }): string {
