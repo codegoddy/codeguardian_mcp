@@ -1,6 +1,7 @@
 # CodeGuardian MCP
 
 <p align="center">
+  <img src="https://img.shields.io/npm/v/codeguardian-mcp?style=for-the-badge&color=FF6B6B" alt="npm version">
   <img src="https://img.shields.io/badge/TypeScript-007ACC?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript">
   <img src="https://img.shields.io/badge/JavaScript-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black" alt="JavaScript">
   <img src="https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python">
@@ -66,64 +67,64 @@ CodeGuardian validates AI-generated code against your **actual codebase** before
 ### Prerequisites
 
 - **Node.js** v20 or higher ([Download](https://nodejs.org/))
-- **pnpm** package manager ([Install](https://pnpm.io/installation))
 
-### Clone & Build
+### Install from npm
 
 ```bash
-# Clone the repository
+# Using npx (no install needed — recommended)
+npx codeguardian-mcp
+
+# Or install globally
+npm install -g codeguardian-mcp
+
+# Or with pnpm
+pnpm add -g codeguardian-mcp
+```
+
+### Install from source (for contributors)
+
+```bash
 git clone https://github.com/codegoddy/codeguardian_mcp.git
 cd codeguardian_mcp
-
-# Install dependencies
 pnpm install
-
-# Build the project
 pnpm run build
 ```
 
 ## Connecting to Your MCP Client
 
-After building, you need to tell your MCP client (Claude Desktop, Windsurf, Cursor, etc.) where CodeGuardian lives.
-
-The key is the **absolute path** to `dist/server.js` inside wherever you cloned the repo.
-
-### 1. Find your path
-
-Run this from inside the cloned repo to get the exact path:
-
-```bash
-echo "$(pwd)/dist/server.js"
-```
-
-This will output something like:
-- **Linux**: `/home/youruser/codeguardian_mcp/dist/server.js`
-- **macOS**: `/Users/youruser/codeguardian_mcp/dist/server.js`
-- **Windows**: `C:\Users\youruser\codeguardian_mcp\dist\server.js`
-
-### 2. Add to your MCP client config
-
-Copy the path from step 1 and add it to your client's MCP configuration:
+Add CodeGuardian to your MCP client config. No cloning or building required — `npx` handles everything.
 
 **Claude Desktop** (`claude_desktop_config.json`):
 ```json
 {
   "mcpServers": {
     "codeguardian": {
-      "command": "node",
-      "args": ["/home/youruser/codeguardian_mcp/dist/server.js"]
+      "command": "npx",
+      "args": ["-y", "codeguardian-mcp"]
     }
   }
 }
 ```
 
-**Windsurf / Cursor** (`mcp_config.json`):
+**Windsurf** (`mcp_config.json`):
 ```json
 {
   "mcpServers": {
     "codeguardian": {
-      "command": "node",
-      "args": ["/home/youruser/codeguardian_mcp/dist/server.js"]
+      "command": "npx",
+      "args": ["-y", "codeguardian-mcp"]
+    }
+  }
+}
+```
+
+**Cursor** (`.cursor/mcp.json`):
+```json
+{
+  "mcpServers": {
+    "codeguardian": {
+      "command": "npx",
+      "args": ["-y", "codeguardian-mcp"]
     }
   }
 }
@@ -136,20 +137,20 @@ Copy the path from step 1 and add it to your client's MCP configuration:
   "mcp": {
     "codeguardian": {
       "type": "local",
-      "command": ["node", "/home/youruser/codeguardian_mcp/dist/server.js"],
+      "command": ["npx", "-y", "codeguardian-mcp"],
       "enabled": true
     }
   }
 }
 ```
 
-**Gemini CLI / Antigravity** (`settings.json`):
+**Gemini CLI** (`settings.json`):
 ```json
 {
   "mcpServers": {
     "codeguardian": {
-      "command": "node",
-      "args": ["/home/youruser/codeguardian_mcp/dist/server.js"]
+      "command": "npx",
+      "args": ["-y", "codeguardian-mcp"]
     }
   }
 }
@@ -157,14 +158,12 @@ Copy the path from step 1 and add it to your client's MCP configuration:
 
 **Claude Code** (CLI):
 ```bash
-claude mcp add --transport stdio codeguardian -- node /home/youruser/codeguardian_mcp/dist/server.js
+claude mcp add --transport stdio codeguardian -- npx -y codeguardian-mcp
 ```
 
-> **Important:** Replace the path with the actual output from step 1. The path depends on where **you** cloned the repo.
-
-### 3. Restart your MCP client
-
 Restart your IDE / MCP client for the changes to take effect. You should see CodeGuardian's tools become available.
+
+> **Note:** If you installed globally (`npm install -g codeguardian-mcp`), you can use `"command": "codeguardian-mcp"` with no args instead of `npx`.
 
 ## Quick Start
 

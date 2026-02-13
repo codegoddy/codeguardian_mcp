@@ -1269,15 +1269,44 @@ async function checkImportUsage(
     // isUsed=true because the regex matches the definition.
     const escapedName = importName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const issueLine = issue.line; // 1-indexed line number of the finding
-    const content = rawContent
-      .split("\n")
+    // Strip entire import blocks (including multi-line destructured imports).
+    // A multi-line import like:
+    //   import {
+    //     Users,
+    //     HelpCircle,
+    //   } from "lucide-react";
+    // must be fully excluded — not just the first line.
+    const rawLines = rawContent.split("\n");
+    let inImportBlock = false;
+    const content = rawLines
       .filter((line, index) => {
+        const trimmed = line.trim();
+
+        // Track multi-line JS/TS import blocks FIRST — this must run before
+        // the issueLine check because the issue line itself may be the start
+        // of a multi-line import (e.g., `import {` on the flagged line).
+        // If we skip it via issueLine early, inImportBlock never gets set.
+        if (trimmed.startsWith("import ") || trimmed.startsWith("import{")) {
+          // Check if the import is completed on this line (has 'from' or no braces)
+          if (trimmed.includes(" from ") || trimmed.endsWith(";")) {
+            return false; // Single-line import
+          }
+          // Multi-line import starts here (e.g., `import {`)
+          inImportBlock = true;
+          return false;
+        }
+        if (inImportBlock) {
+          // Check if this line ends the import block
+          // The closing line typically has `} from "..."` or just `} from '...'`
+          if (trimmed.includes(" from ") || trimmed.startsWith("} from")) {
+            inImportBlock = false;
+          }
+          return false;
+        }
+
         // Exclude the definition/declaration line itself (prevents local dead code
         // findings like GHOST_REGISTRY_ID from matching their own definition)
         if (issueLine && index + 1 === issueLine) return false;
-        const trimmed = line.trim();
-        // Exclude import lines
-        if (trimmed.startsWith("import ") || trimmed.startsWith("import{")) return false;
         // Exclude from...import lines (Python)
         if (trimmed.startsWith("from ")) return false;
         // Exclude comment-only lines (JS/TS/Python)
