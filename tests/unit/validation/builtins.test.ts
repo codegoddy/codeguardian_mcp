@@ -125,7 +125,7 @@ describe("builtins module", () => {
 
     it("should return false for non-builtins", () => {
       expect(isJSBuiltin("myFunction")).toBe(false);
-      expect(isJSBuiltin("React")).toBe(false);
+      expect(isJSBuiltin("DefinitelyNotBuiltin")).toBe(false);
     });
   });
 

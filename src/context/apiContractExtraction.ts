@@ -9,9 +9,16 @@
 
 import * as fs from "fs/promises";
 import * as path from "path";
-import { getParser } from "../tools/validation/parser.js";
 import { logger } from "../utils/logger.js";
 import { extractImportsAST } from "../tools/validation/extractors/index.js";
+import {
+  extractPydanticModelsFromPythonAST,
+  extractRoutesFromPythonAST,
+} from "../api-contract/extractors/pythonAstUtils.js";
+import {
+  extractServicesFromFile as extractServicesFromFileTS,
+  extractTypesFromFile as extractTypesFromFileTS,
+} from "../api-contract/extractors/typescript.js";
 import type { ASTImport } from "../tools/validation/types.js";
 import type {
   ApiServiceDefinition,
@@ -31,380 +38,24 @@ import type {
 export async function extractServicesFromFileAST(
   filePath: string,
 ): Promise<ApiServiceDefinition[]> {
-  const services: ApiServiceDefinition[] = [];
-
   try {
     const content = await fs.readFile(filePath, "utf-8");
-    const parser = getParser("typescript");
-    const tree = parser.parse(content);
-
-    // Traverse AST to find API calls
-    traverseForServices(tree.rootNode, content, filePath, services);
+    const services = extractServicesFromFileTS(content, filePath);
+    return services.map((s) => ({
+      name: s.name,
+      method: s.method,
+      endpoint: s.endpoint,
+      requestType: s.requestType,
+      responseType: s.responseType,
+      queryParams: s.queryParams as ApiParameter[] | undefined,
+      file: s.file,
+      line: s.line,
+    }));
   } catch (err) {
     logger.debug(`AST parsing failed for ${filePath}: ${err}`);
   }
 
-  return services;
-}
-
-function traverseForServices(
-  node: any,
-  content: string,
-  filePath: string,
-  services: ApiServiceDefinition[],
-): void {
-  if (!node) return;
-
-  // Look for call expressions (method calls)
-  if (node.type === "call_expression") {
-    const service = extractServiceFromCall(node, content, filePath);
-    if (service) {
-      services.push(service);
-    }
-  }
-
-  // Recursively traverse children
-  for (const child of node.children || []) {
-    traverseForServices(child, content, filePath, services);
-  }
-}
-
-function extractServiceFromCall(
-  node: any,
-  content: string,
-  filePath: string,
-): ApiServiceDefinition | null {
-  // Get the function being called
-  const functionNode = node.childForFieldName("function");
-  if (!functionNode) return null;
-
-  // Check if it's a method call like ApiService.post or api.get
-  if (functionNode.type === "member_expression") {
-    const objectNode = functionNode.childForFieldName("object");
-    const propertyNode = functionNode.childForFieldName("property");
-
-    if (!objectNode || !propertyNode) return null;
-
-    const objectName = getNodeText(objectNode, content);
-    const methodName = getNodeText(propertyNode, content);
-
-    // Check if it's an API call pattern
-    const isApiCall =
-      objectName === "ApiService" ||
-      objectName === "api" ||
-      objectName === "axios" ||
-      objectName === "client" ||
-      objectName.endsWith("Api") ||
-      objectName.endsWith("Service");
-
-    if (!isApiCall) return null;
-
-    // Map method name to HTTP method
-    const httpMethod = mapToHttpMethod(methodName);
-    if (!httpMethod) return null;
-
-    // Extract arguments
-    const argumentsNode = node.childForFieldName("arguments");
-    if (!argumentsNode) return null;
-
-    const extracted = extractEndpointFromArguments(argumentsNode, content);
-    if (!extracted) return null;
-
-    // Try to find the enclosing function/method name
-    const enclosingFunction = findEnclosingFunction(node, content);
-
-    // Extract request and response types from the enclosing function
-    const { requestType, responseType } = extractTypesFromEnclosingFunction(node, content);
-
-    return {
-      name: enclosingFunction || `${methodName}_${extracted.endpoint.replace(/[^a-zA-Z0-9]/g, "_")}`,
-      method: httpMethod,
-      endpoint: extracted.endpoint,
-      requestType,
-      responseType,
-      queryParams: extracted.queryParams.length > 0 ? extracted.queryParams : undefined,
-      file: filePath,
-      line: node.startPosition.row + 1,
-    };
-  }
-
-  // Check if it's a direct function call like authenticatedApiCall("/api/notifications", { method: "GET" })
-  if (functionNode.type === "identifier") {
-    const funcName = getNodeText(functionNode, content);
-    const isApiCall =
-      funcName === "authenticatedApiCall" ||
-      funcName === "apiCall" ||
-      funcName === "fetchApi" ||
-      funcName === "apiFetch";
-
-    if (!isApiCall) return null;
-
-    const argumentsNode = node.childForFieldName("arguments");
-    if (!argumentsNode) return null;
-
-    // First arg is endpoint, second arg is config object with { method: "GET" }
-    const args: any[] = [];
-    for (const child of argumentsNode.children || []) {
-      if (child.type !== "," && child.type !== "(" && child.type !== ")") {
-        args.push(child);
-      }
-    }
-
-    if (args.length < 1) return null;
-
-    const extracted = extractStringValue(args[0], content);
-    if (!extracted) return null;
-
-    // Try to extract HTTP method from config object
-    let httpMethod: ApiServiceDefinition["method"] = "GET";
-    if (args.length >= 2) {
-      const configText = getNodeText(args[1], content);
-      const methodMatch = configText.match(/method\s*:\s*["'](\w+)["']/);
-      if (methodMatch) {
-        const mapped = mapToHttpMethod(methodMatch[1].toLowerCase());
-        if (mapped) httpMethod = mapped;
-      }
-    }
-
-    const enclosingFunction = findEnclosingFunction(node, content);
-
-    return {
-      name: enclosingFunction || `${funcName}_${extracted.endpoint.replace(/[^a-zA-Z0-9]/g, "_")}`,
-      method: httpMethod,
-      endpoint: extracted.endpoint,
-      file: filePath,
-      line: node.startPosition.row + 1,
-    };
-  }
-
-  return null;
-}
-
-function mapToHttpMethod(methodName: string): ApiServiceDefinition["method"] | null {
-  const methodMap: Record<string, ApiServiceDefinition["method"]> = {
-    get: "GET",
-    post: "POST",
-    put: "PUT",
-    patch: "PATCH",
-    delete: "DELETE",
-  };
-
-  return methodMap[methodName.toLowerCase()] || null;
-}
-
-function extractEndpointFromArguments(argumentsNode: any, content: string): { endpoint: string; queryParams: ApiParameter[] } | null {
-  // First argument should be the endpoint
-  for (const child of argumentsNode.children || []) {
-    if (child.type === "string" || child.type === "template_string") {
-      const result = extractStringValue(child, content);
-      if (result) return result;
-    }
-  }
-  return null;
-}
-
-function extractStringValue(node: any, content: string): { endpoint: string; queryParams: ApiParameter[] } | null {
-  if (node.type === "string") {
-    const text = getNodeText(node, content);
-    const cleaned = text.replace(/^["']|["']$/g, "");
-    const queryParams = extractQueryParamsFromUrl(cleaned);
-    return { endpoint: cleaned.split("?")[0], queryParams };
-  }
-
-  if (node.type === "template_string") {
-    // For template strings like `/api/clients/${id}`, extract the full path with placeholders
-    const text = getNodeText(node, content);
-    // Remove backticks first
-    let fullUrl = text.replace(/^`/, "").replace(/`$/, "");
-    // Extract query params before stripping them
-    const queryParams = extractQueryParamsFromUrl(fullUrl);
-    // Strip query parameters (anything after ?)
-    let result = fullUrl.split("?")[0];
-    // Replace ${...} with {varName} to match backend format
-    // But skip variables that are likely query string builders (at end of path, named query/params)
-    result = result.replace(/\$\{([^}]+)\}/g, (match, varName) => {
-      // If variable name suggests it's a query string, return empty string
-      if (/^(query|params|searchParams|queryString)$/i.test(varName)) {
-        return "";
-      }
-      // Convert camelCase to snake_case to match Python conventions
-      const snakeCase = varName.replace(/[A-Z]/g, (letter: string) => `_${letter.toLowerCase()}`);
-      return `{${snakeCase}}`;
-    });
-    return { endpoint: result, queryParams };
-  }
-
-  return null;
-}
-
-/**
- * Extract query parameter names from a URL string (plain or template literal)
- * e.g., "/api/pr-status?pr_url=${encodeURIComponent(prUrl)}&provider=${provider}"
- * returns [{name: "pr_url", ...}, {name: "provider", ...}]
- */
-function extractQueryParamsFromUrl(url: string): ApiParameter[] {
-  const queryStart = url.indexOf("?");
-  if (queryStart === -1) return [];
-
-  const queryString = url.substring(queryStart + 1);
-  const params: ApiParameter[] = [];
-
-  // Split on & to get individual param pairs
-  const pairs = queryString.split("&");
-  for (const pair of pairs) {
-    const eqIndex = pair.indexOf("=");
-    if (eqIndex > 0) {
-      const name = pair.substring(0, eqIndex).trim();
-      if (name && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
-        params.push({ name, type: "string", required: true });
-      }
-    }
-  }
-
-  return params;
-}
-
-function findEnclosingFunction(node: any, content: string): string | null {
-  let current = node;
-
-  while (current) {
-    // Check for function declaration
-    if (current.type === "function_declaration") {
-      const nameNode = current.childForFieldName("name");
-      if (nameNode) {
-        return getNodeText(nameNode, content);
-      }
-    }
-
-    // Check for arrow function in variable declaration
-    if (current.type === "variable_declarator") {
-      const nameNode = current.childForFieldName("name");
-      if (nameNode) {
-        return getNodeText(nameNode, content);
-      }
-    }
-
-    // Check for method definition
-    if (current.type === "method_definition") {
-      const nameNode = current.childForFieldName("name");
-      if (nameNode) {
-        return getNodeText(nameNode, content);
-      }
-    }
-
-    // Check for object property (like clientsApi: { getClients: ... })
-    if (current.type === "property_definition" || current.type === "pair") {
-      const keyNode = current.childForFieldName("key") || current.childForFieldName("name");
-      if (keyNode) {
-        return getNodeText(keyNode, content);
-      }
-    }
-
-    current = current.parent;
-  }
-
-  return null;
-}
-
-/**
- * Extract request and response types from the enclosing function
- * Looks at the enclosing arrow function or method for type annotations
- */
-function extractTypesFromEnclosingFunction(
-  node: any,
-  content: string,
-): { requestType?: string; responseType?: string } {
-  let current = node;
-  const result: { requestType?: string; responseType?: string } = {};
-
-  while (current) {
-    // Check for arrow function
-    if (current.type === "arrow_function") {
-      // Extract return type (response type)
-      const returnTypeNode = current.childForFieldName("return_type");
-      if (returnTypeNode) {
-        const returnTypeText = getNodeText(returnTypeNode, content);
-        // Handle Promise<Type> pattern
-        const promiseMatch = returnTypeText.match(/Promise<(.+)>/);
-        if (promiseMatch) {
-          result.responseType = promiseMatch[1].trim();
-        } else {
-          result.responseType = returnTypeText.replace(/^:\s*/, "").trim();
-        }
-      }
-
-      // Extract parameter types (request type for POST/PUT/PATCH)
-      const parametersNode = current.childForFieldName("parameters");
-      if (parametersNode) {
-        // Collect all parameters with their types
-        const params: Array<{ node: any; type: string | null; name: string }> = [];
-        for (const child of parametersNode.children || []) {
-          if (child.type === "identifier" || child.type === "required_parameter" || child.type === "optional_parameter") {
-            const nameNode = child.childForFieldName("name") || child;
-            const name = getNodeText(nameNode, content);
-            const typeAnnotation = child.childForFieldName("type");
-            const type = typeAnnotation ? getNodeText(typeAnnotation, content).replace(/^:\s*/, "").trim() : null;
-            params.push({ node: child, type, name });
-          }
-        }
-
-        // Find the body parameter (not a primitive type like string/number)
-        // Usually the body parameter has an object/interface type
-        for (const param of params) {
-          if (param.type && !isPrimitiveType(param.type)) {
-            result.requestType = param.type;
-            break;
-          }
-        }
-      }
-
-      return result;
-    }
-
-    // Check for method definition
-    if (current.type === "method_definition") {
-      // Extract return type
-      const returnTypeNode = current.childForFieldName("return_type");
-      if (returnTypeNode) {
-        const returnTypeText = getNodeText(returnTypeNode, content);
-        const promiseMatch = returnTypeText.match(/Promise<(.+)>/);
-        if (promiseMatch) {
-          result.responseType = promiseMatch[1].trim();
-        } else {
-          result.responseType = returnTypeText.replace(/^:\s*/, "").trim();
-        }
-      }
-
-      // Extract parameter types
-      const parametersNode = current.childForFieldName("parameters");
-      if (parametersNode) {
-        const params: Array<{ node: any; type: string | null; name: string }> = [];
-        for (const child of parametersNode.children || []) {
-          if (child.type === "identifier" || child.type === "required_parameter" || child.type === "optional_parameter") {
-            const nameNode = child.childForFieldName("name") || child;
-            const name = getNodeText(nameNode, content);
-            const typeAnnotation = child.childForFieldName("type");
-            const type = typeAnnotation ? getNodeText(typeAnnotation, content).replace(/^:\s*/, "").trim() : null;
-            params.push({ node: child, type, name });
-          }
-        }
-
-        // Find the body parameter (not a primitive type)
-        for (const param of params) {
-          if (param.type && !isPrimitiveType(param.type)) {
-            result.requestType = param.type;
-            break;
-          }
-        }
-      }
-
-      return result;
-    }
-
-    current = current.parent;
-  }
-
-  return result;
+  return [];
 }
 
 // ============================================================================
@@ -417,125 +68,21 @@ function extractTypesFromEnclosingFunction(
 export async function extractTypesFromFileAST(
   filePath: string,
 ): Promise<ApiTypeDefinition[]> {
-  const types: ApiTypeDefinition[] = [];
-
   try {
     const content = await fs.readFile(filePath, "utf-8");
-    const parser = getParser("typescript");
-    const tree = parser.parse(content);
-
-    traverseForTypes(tree.rootNode, content, filePath, types);
+    const types = extractTypesFromFileTS(content, filePath);
+    return types.map((t) => ({
+      name: t.name,
+      fields: t.fields,
+      file: t.file,
+      line: t.line,
+      kind: t.kind,
+    }));
   } catch (err) {
     logger.debug(`AST parsing failed for ${filePath}: ${err}`);
   }
 
-  return types;
-}
-
-function traverseForTypes(
-  node: any,
-  content: string,
-  filePath: string,
-  types: ApiTypeDefinition[],
-): void {
-  if (!node) return;
-
-  // Interface declaration
-  if (node.type === "interface_declaration") {
-    const type = extractInterface(node, content, filePath);
-    if (type) types.push(type);
-  }
-
-  // Type alias declaration
-  if (node.type === "type_alias_declaration") {
-    const type = extractTypeAlias(node, content, filePath);
-    if (type) types.push(type);
-  }
-
-  // Recursively traverse children
-  for (const child of node.children || []) {
-    traverseForTypes(child, content, filePath, types);
-  }
-}
-
-function extractInterface(
-  node: any,
-  content: string,
-  filePath: string,
-): ApiTypeDefinition | null {
-  const nameNode = node.childForFieldName("name");
-  if (!nameNode) return null;
-
-  const name = getNodeText(nameNode, content);
-  const bodyNode = node.childForFieldName("body");
-  if (!bodyNode) return null;
-
-  const fields = extractFieldsFromBody(bodyNode, content);
-
-  return {
-    name,
-    fields,
-    file: filePath,
-    line: node.startPosition.row + 1,
-    kind: "interface",
-  };
-}
-
-function extractTypeAlias(
-  node: any,
-  content: string,
-  filePath: string,
-): ApiTypeDefinition | null {
-  const nameNode = node.childForFieldName("name");
-  if (!nameNode) return null;
-
-  const name = getNodeText(nameNode, content);
-
-  // For object type aliases
-  const valueNode = node.childForFieldName("value");
-  if (valueNode && valueNode.type === "object_type") {
-    const fields = extractFieldsFromBody(valueNode, content);
-
-    return {
-      name,
-      fields,
-      file: filePath,
-      line: node.startPosition.row + 1,
-      kind: "type",
-    };
-  }
-
-  return null;
-}
-
-function extractFieldsFromBody(bodyNode: any, content: string) {
-  const fields: Array<{ name: string; type: string; required: boolean; optional?: boolean }> = [];
-
-  for (const child of bodyNode.children || []) {
-    if (child.type === "property_signature" || child.type === "field_definition") {
-      const nameNode = child.childForFieldName("name");
-      const typeNode = child.childForFieldName("type");
-
-      if (nameNode) {
-        const name = getNodeText(nameNode, content);
-        const type = typeNode ? getNodeText(typeNode, content) : "any";
-
-        // Check if optional
-        const isOptional =
-          child.type === "property_signature" &&
-          child.children.some((c: any) => c.type === "?");
-
-        fields.push({
-          name,
-          type,
-          required: !isOptional,
-          optional: isOptional,
-        });
-      }
-    }
-  }
-
-  return fields;
+  return [];
 }
 
 // ============================================================================
@@ -554,6 +101,26 @@ export async function extractRoutesFromFile(
 
   try {
     const content = await fs.readFile(filePath, "utf-8");
+
+    // Prefer AST-based extraction (tree-sitter-python is available)
+    try {
+      const astRoutes = extractRoutesFromPythonAST(content, filePath, framework);
+      if (astRoutes.length > 0) {
+        return astRoutes.map((r) => ({
+          method: r.method,
+          path: r.path,
+          handler: r.handler,
+          requestModel: r.requestModel,
+          responseModel: r.responseModel,
+          queryParams: r.queryParams as ApiParameter[] | undefined,
+          file: filePath,
+          line: r.line,
+        }));
+      }
+    } catch {
+      // Fall back to legacy regex below
+    }
+
     const lines = content.split("\n");
 
     for (let i = 0; i < lines.length; i++) {
@@ -705,6 +272,28 @@ export async function extractModelsFromFile(filePath: string): Promise<ApiModelD
 
   try {
     const content = await fs.readFile(filePath, "utf-8");
+
+    // Prefer AST-based extraction
+    try {
+      const astModels = extractPydanticModelsFromPythonAST(content, filePath);
+      if (astModels.length > 0) {
+        return astModels.map((m) => ({
+          name: m.name,
+          fields: m.fields.map((f) => ({
+            name: f.name,
+            type: f.type,
+            required: f.required,
+            default: f.default,
+          })),
+          file: filePath,
+          line: m.line,
+          baseClasses: m.baseClasses,
+        }));
+      }
+    } catch {
+      // Fall back to legacy regex below
+    }
+
     const lines = content.split("\n");
 
     let currentModel: Partial<ApiModelDefinition> | null = null;
@@ -791,14 +380,10 @@ export async function extractModelsFromFile(filePath: string): Promise<ApiModelD
   return models;
 }
 
+
 // ============================================================================
 // Utility Functions
 // ============================================================================
-
-function getNodeText(node: any, content: string): string {
-  if (!node) return "";
-  return content.slice(node.startIndex, node.endIndex);
-}
 
 function isPrimitiveType(typeName: string): boolean {
   // Python primitives

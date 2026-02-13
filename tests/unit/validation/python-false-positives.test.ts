@@ -9,9 +9,9 @@
  * @format
  */
 
-import { describe, it, expect } from "@jest/globals";
-import Parser from "tree-sitter";
-import Python from "tree-sitter-python";
+import { describe, it, expect } from "vitest";
+import type ParserT from "tree-sitter";
+import { getParser } from "../../../src/tools/validation/parser.js";
 import {
   extractPythonUsages,
   extractPythonImports,
@@ -30,10 +30,8 @@ import type {
 } from "../../../src/tools/validation/types.js";
 
 // Helper to parse Python code and extract usages
-function parsePython(code: string): Parser.SyntaxNode {
-  const parser = new Parser();
-  parser.setLanguage(Python as unknown as Parser.Language);
-  const tree = parser.parse(code);
+function parsePython(code: string): ParserT.SyntaxNode {
+  const tree = getParser("python").parse(code);
   return tree.rootNode;
 }
 

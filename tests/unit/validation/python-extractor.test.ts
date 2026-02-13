@@ -5,9 +5,9 @@
  * @format
  */
 
-import { describe, it, expect } from "@jest/globals";
-import Parser from "tree-sitter";
-import Python from "tree-sitter-python";
+import { describe, it, expect } from "vitest";
+import type ParserT from "tree-sitter";
+import { getParser } from "../../../src/tools/validation/parser.js";
 import {
   extractPythonSymbols,
   extractPythonUsages,
@@ -23,10 +23,8 @@ import type {
 } from "../../../src/tools/validation/types.js";
 
 // Helper to parse Python code
-function parsePython(code: string): Parser.SyntaxNode {
-  const parser = new Parser();
-  parser.setLanguage(Python as unknown as Parser.Language);
-  const tree = parser.parse(code);
+function parsePython(code: string): ParserT.SyntaxNode {
+  const tree = getParser("python").parse(code);
   return tree.rootNode;
 }
 
@@ -127,14 +125,16 @@ describe("Python Extractor", () => {
       expect(usages).toHaveLength(0);
     });
 
-    it("should skip imported symbols", () => {
+    it("should include imported symbols as usages (for unused import tracking)", () => {
       const code = "result = imported_func()";
       const root = parsePython(code);
       const usages: ASTUsage[] = [];
       const importedSymbols = new Set(["imported_func"]);
       extractPythonUsages(root, code, usages, importedSymbols);
 
-      expect(usages).toHaveLength(0);
+      expect(usages).toHaveLength(1);
+      expect(usages[0].type).toBe("call");
+      expect(usages[0].name).toBe("imported_func");
     });
   });
 

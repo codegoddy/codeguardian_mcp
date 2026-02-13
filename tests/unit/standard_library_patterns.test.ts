@@ -17,6 +17,7 @@ import {
   getContextualReason,
   BUILTIN_PATTERNS,
 } from "../../src/tools/validation/contextualNaming.js";
+import { isJSBuiltin, isPythonBuiltin } from "../../src/tools/validation/builtins.js";
 import type { ASTUsage } from "../../src/tools/validation/types.js";
 
 // Helper to create a method call usage
@@ -293,17 +294,14 @@ describe("Global Method Whitelist (Always Trusted)", () => {
     
     // BUT! validation.ts also calls isJSBuiltin(used.name).
     // isJSBuiltin uses COMMON_LIBRARY_METHODS which now includes preventDefault.
-    const { isJSBuiltin } = require("../../src/tools/validation/builtins.js");
     expect(isJSBuiltin("preventDefault")).toBe(true);
   });
 
   it("should recognize 'myDate.setDate()' as valid via global whitelist", () => {
-    const { isJSBuiltin } = require("../../src/tools/validation/builtins.js");
     expect(isJSBuiltin("setDate")).toBe(true);
   });
 
   it("should recognize 'anything.append()' as valid for Python via global whitelist", () => {
-    const { isPythonBuiltin } = require("../../src/tools/validation/builtins.js");
     expect(isPythonBuiltin("append")).toBe(true);
   });
 });
@@ -340,19 +338,10 @@ describe("Pattern coverage", () => {
   });
 
   it("should have ALL_PATTERNS include all pattern types", () => {
-    // All patterns should be merged into ALL_PATTERNS
-    const totalPatterns =
-      BUILTIN_PATTERNS.EVENT_PATTERNS.length +
-      BUILTIN_PATTERNS.HTTP_PATTERNS.length +
-      BUILTIN_PATTERNS.ERROR_PATTERNS.length +
-      BUILTIN_PATTERNS.CONTEXT_PATTERNS.length +
-      BUILTIN_PATTERNS.DATE_PATTERNS.length +
-      BUILTIN_PATTERNS.ARRAY_PATTERNS.length +
-      BUILTIN_PATTERNS.PROMISE_PATTERNS.length +
-      BUILTIN_PATTERNS.MAP_PATTERNS.length +
-      BUILTIN_PATTERNS.SET_PATTERNS.length +
-      BUILTIN_PATTERNS.STRING_PATTERNS.length;
+    const totalPatterns = Object.entries(BUILTIN_PATTERNS)
+      .filter(([key]) => key !== "ALL_PATTERNS")
+      .reduce((sum, [, patterns]) => sum + (patterns as any[]).length, 0);
 
-    expect(BUILTIN_PATTERNS.ALL_PATTERNS.length).toBe(totalPatterns);
+    expect(BUILTIN_PATTERNS.ALL_PATTERNS).toHaveLength(totalPatterns);
   });
 });

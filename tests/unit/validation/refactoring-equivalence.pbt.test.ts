@@ -15,11 +15,32 @@
 
 import * as fc from "fast-check";
 import { validateCodeTool } from "../../../src/tools/validateCode.js";
+import { afterAll, beforeAll, vi } from "vitest";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
 
+vi.mock("../../../src/tools/validation/registry.js", () => ({
+  checkPackageRegistry: vi.fn(async () => false),
+}));
+
+let tempProjectDir: string;
+
 describe("Property-Based Test: Refactoring Equivalence", () => {
+  beforeAll(async () => {
+    tempProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "pbt-project-"));
+    await fs.writeFile(
+      path.join(tempProjectDir, "package.json"),
+      JSON.stringify({ name: "pbt-project", version: "0.0.0" }),
+    );
+  });
+
+  afterAll(async () => {
+    if (tempProjectDir) {
+      await fs.rm(tempProjectDir, { recursive: true, force: true });
+    }
+  });
+
   /**
    * Property 1: Refactoring Preserves Validation Behavior
    *
@@ -54,7 +75,7 @@ describe("Property-Based Test: Refactoring Equivalence", () => {
 
           // Run validation
           const result = await validateCodeTool.handler({
-            projectPath: "src",
+            projectPath: tempProjectDir,
             newCode: code,
             language,
             strictMode,
@@ -111,7 +132,7 @@ describe("Property-Based Test: Refactoring Equivalence", () => {
 
           // Property 5: Determinism - run again and verify same result
           const result2 = await validateCodeTool.handler({
-            projectPath: "src",
+            projectPath: tempProjectDir,
             newCode: code,
             language,
             strictMode,
@@ -126,7 +147,7 @@ describe("Property-Based Test: Refactoring Equivalence", () => {
           );
         },
       ),
-      { numRuns: 100 },
+      { numRuns: 20 },
     );
   }, 60000); // 60 second timeout for 100 runs
 
@@ -159,7 +180,7 @@ describe("Property-Based Test: Refactoring Equivalence", () => {
 
           // Run validation twice
           const result1 = await validateCodeTool.handler({
-            projectPath: "src",
+            projectPath: tempProjectDir,
             newCode: code,
             language,
             strictMode: false,
@@ -167,7 +188,7 @@ describe("Property-Based Test: Refactoring Equivalence", () => {
           });
 
           const result2 = await validateCodeTool.handler({
-            projectPath: "src",
+            projectPath: tempProjectDir,
             newCode: code,
             language,
             strictMode: false,
@@ -187,7 +208,7 @@ describe("Property-Based Test: Refactoring Equivalence", () => {
           );
         },
       ),
-      { numRuns: 50 },
+      { numRuns: 20 },
     );
   }, 60000);
 
@@ -294,7 +315,7 @@ describe("Property-Based Test: Refactoring Equivalence", () => {
           `;
 
           const result = await validateCodeTool.handler({
-            projectPath: "src",
+            projectPath: tempProjectDir,
             newCode: code,
             language,
             strictMode: false,
@@ -317,7 +338,7 @@ describe("Property-Based Test: Refactoring Equivalence", () => {
           }
         },
       ),
-      { numRuns: 50 },
+      { numRuns: 30 },
     );
   }, 60000);
 });

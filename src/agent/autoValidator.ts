@@ -15,6 +15,8 @@ import { refreshFileContext, markGuardianActive, markGuardianInactive } from "..
 import {
   extractUsagesAST,
   extractImportsAST,
+  extractImportsASTWithOptions,
+  extractTypeReferencesAST,
 } from "../tools/validation/extractors/index.js";
 import {
   loadManifestDependencies,
@@ -58,6 +60,7 @@ export interface ValidationAlert {
     message: string;
     suggestion?: string;
     line?: number;
+    file?: string; // Source file path (for initial scan issues, used to scrub stale alerts)
   }>;
   timestamp: number;
   llmMessage: string;
@@ -473,7 +476,7 @@ export class AutoValidator {
       const apiContractResult = await validateApiContracts(this.projectPath);
 
       if (apiContractResult.issues.length > 0) {
-        const apiContractAlert: ValidationAlert = {
+         const apiContractAlert: ValidationAlert = {
           file: "API_CONTRACT_SCAN",
           issues: apiContractResult.issues.map((issue) => ({
             type: issue.type,
@@ -481,6 +484,7 @@ export class AutoValidator {
             message: issue.message,
             suggestion: issue.suggestion,
             line: issue.line,
+            file: issue.file ? path.relative(this.projectPath, issue.file) : undefined,
           })),
           timestamp: Date.now(),
           llmMessage: this.createApiContractMessage(apiContractResult),
@@ -539,6 +543,7 @@ export class AutoValidator {
             message: dc.message,
             suggestion: (dc as any).suggestion,
             line: (dc as any).line,
+            file: (dc as any).file ? path.relative(this.projectPath, (dc as any).file) : undefined,
           })),
           timestamp: Date.now(),
           llmMessage: this.createInitialScanMessage(confirmedDeadCode),
@@ -624,6 +629,7 @@ export class AutoValidator {
               message: issue.message || "",
               suggestion: issue.suggestion,
               line: issue.line,
+              file: issue.file ? path.relative(this.projectPath, issue.file) : undefined,
             })),
             timestamp: Date.now(),
             llmMessage: this.createPerFileScanMessage(confirmedPerFile.hallucinations, confirmedPerFile.deadCode),
@@ -755,6 +761,21 @@ export class AutoValidator {
       
       logger.debug(`File deleted: ${event.path} (${fileLang}) - removing from context...`);
       refreshPromise = this.throttledRefresh(event.path, refreshLang);
+
+      // File is deleted — emit a clear alert immediately instead of trying to validate.
+      // This clears both the per-file alert and any matching initial scan issues.
+      const relativePath = path.relative(this.projectPath, event.path);
+      if (this.onAlert) {
+        const clearAlert: ValidationAlert = {
+          file: relativePath,
+          issues: [],
+          timestamp: Date.now(),
+          llmMessage: `🗑️ ${this.agentName}: File deleted - ${relativePath}. Issues cleared.`,
+        };
+        this.onAlert(clearAlert);
+      }
+      // Skip validation queueing for deleted files — nothing to validate
+      return;
     }
 
     // Track the pending refresh so validateFile can await ALL pending refreshes
@@ -866,15 +887,18 @@ export class AutoValidator {
       const context = orchestration.projectContext;
 
       // Extract symbols and imports using the FILE's language (not the project language)
-      const imports = extractImportsAST(content, fileLang);
-      const usedSymbols = extractUsagesAST(content, fileLang, imports);
+      const imports = extractImportsASTWithOptions(content, fileLang, {
+        filePath,
+      });
+      const usedSymbols = extractUsagesAST(content, fileLang, imports, { filePath });
       const symbolTable = buildSymbolTable(context, orchestration.relevantSymbols);
       
       // Extract type references for unused import detection
       // This is essential for TypeScript where imports might only be used as types
-      const typeReferences = (fileLang === "typescript" || fileLang === "javascript") ? 
-        (await import("../tools/validation/extractors/index.js")).extractTypeReferencesAST(content, fileLang) : 
-        [];
+      const typeReferences =
+        fileLang === "typescript" || fileLang === "javascript" ?
+          extractTypeReferencesAST(content, fileLang, { filePath })
+        : [];
 
       // Tier 0: Check manifest dependencies (use the correct manifest for this file's language)
       let manifestIssues: any[] = [];
@@ -935,16 +959,10 @@ export class AutoValidator {
       // Project-wide checks (orphaned files, unused exports) run in the initial health check,
       // NOT on every file change — they are slow, race-prone during rapid vibecoding,
       // and produce false positives when the dependency graph is mid-update.
-      let deadCodeIssues: any[] = [];
-      deadCodeIssues = await detectDeadCode(context, content, undefined, true);
-
-      // Fix file paths — detectUnusedLocals uses "(new code)" as placeholder;
-      // replace with the actual file path so verification reads the real file.
-      for (const issue of deadCodeIssues) {
-        if (issue.file === "(new code)") {
-          issue.file = filePath;
-        }
-      }
+      // 
+      // Use detectUnusedLocals directly for per-file dead code detection.
+      // This finds unused local functions and constants within the file.
+      const deadCodeIssues = detectUnusedLocals(content, filePath);
 
       // Tier 3: API Contract Validation (for service/route files)
       // Debounced to at most once per 30s to avoid full project-wide scans on every keystroke

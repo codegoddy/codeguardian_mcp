@@ -1,0 +1,31 @@
+{
+  "_meta": {
+    "generatedBy": "CodeGuardian MCP",
+    "generatedAt": "2026-02-13T14:19:00.741Z",
+    "purpose": "LLM-readable validation report. This file is placed outside .codeguardian/ so AI assistants can read it.",
+    "jobId": "sync_1770992340740_v80ar",
+    "expiresAt": "2026-02-14T14:19:00.741Z"
+  },
+  "summary": "Code is clean. No issues detected.",
+  "stats": {
+    "filesScanned": 0,
+    "symbolsInProject": 0,
+    "hallucinationsFound": 0,
+    "deadCodeFound": 0,
+    "analysisTime": "59ms",
+    "verification": {
+      "confirmed": 0,
+      "falsePositivesFiltered": 0,
+      "uncertain": 0
+    }
+  },
+  "score": 100,
+  "recommendation": {
+    "verdict": "ACCEPT",
+    "riskLevel": "low",
+    "message": "✅ LOOKS GOOD - No hallucinations or dead code detected",
+    "action": "Code appears consistent with your project"
+  },
+  "hallucinations": [],
+  "deadCode": []
+}

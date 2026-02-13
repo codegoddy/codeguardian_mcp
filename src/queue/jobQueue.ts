@@ -73,6 +73,9 @@ export class JobQueue extends EventEmitter {
       () => this.cleanupExpiredJobs(),
       60 * 1000,
     ); // Every minute
+
+    // Don't keep the process alive just for periodic cleanup
+    this.cleanupInterval.unref?.();
   }
 
   /**

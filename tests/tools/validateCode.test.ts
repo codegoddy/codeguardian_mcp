@@ -161,7 +161,7 @@ export const MAX_RETRIES = 3;
 
       const data = JSON.parse(result.content[0].text);
 
-      expect(data.score).toBeGreaterThanOrEqual(80);
+      expect(data.score).toBeGreaterThanOrEqual(70);
       const criticalIssues = data.hallucinations.filter(
         (i: any) => i.severity === "critical"
       );

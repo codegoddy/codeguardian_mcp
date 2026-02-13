@@ -94,7 +94,7 @@ describe("API Contract Guardian - Service Extraction", () => {
         expect(services[1]).toMatchObject({
           name: "getClient",
           method: "GET",
-          endpoint: "/api/clients/{param}",
+          endpoint: "/api/clients/{id}",
         });
         expect(services[2]).toMatchObject({
           name: "createClient",
@@ -123,7 +123,7 @@ describe("API Contract Guardian - Service Extraction", () => {
       try {
         const services = await extractServicesFromFileAST(tmpFile);
         expect(services).toHaveLength(1);
-        expect(services[0].endpoint).toBe("/api/users/{param}/posts/{param}");
+        expect(services[0].endpoint).toBe("/api/users/{user_id}/posts/{post_id}");
       } finally {
         await fs.rm(tmpDir, { recursive: true });
       }

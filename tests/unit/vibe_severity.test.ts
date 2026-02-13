@@ -9,10 +9,11 @@
 import { validateManifest } from "../../src/tools/validation/validation.js";
 import { checkPackageRegistry } from "../../src/tools/validation/registry.js";
 import { ManifestDependencies } from "../../src/tools/validation/types.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the registry lookup
-jest.mock("../../src/tools/validation/registry.js", () => ({
-  checkPackageRegistry: jest.fn(),
+vi.mock("../../src/tools/validation/registry.js", () => ({
+  checkPackageRegistry: vi.fn(),
 }));
 
 describe("Vibe-Centric Severity", () => {
@@ -25,12 +26,12 @@ describe("Vibe-Centric Severity", () => {
   const code = "import { x } from 'pkg';";
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   it("should flag hallucinated package as CRITICAL (dependencyHallucination)", async () => {
     // Setup: 'unknown-pkg' does NOT exist in registry
-    (checkPackageRegistry as jest.Mock).mockResolvedValue(false);
+    vi.mocked(checkPackageRegistry).mockResolvedValue(false);
 
     const imports = [
       {
@@ -51,7 +52,7 @@ describe("Vibe-Centric Severity", () => {
 
   it("should flag uninstalled real package as LOW (missingDependency)", async () => {
     // Setup: 'axios' EXISTS in registry
-    (checkPackageRegistry as jest.Mock).mockResolvedValue(true);
+    vi.mocked(checkPackageRegistry).mockResolvedValue(true);
 
     const imports = [
       {

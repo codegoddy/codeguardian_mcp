@@ -439,30 +439,45 @@ function extractApolloOperations(content: string, filePath: string): GraphQLFron
     const parser = getParser("typescript");
     const tree = parser.parse(content);
 
-    // Traverse AST to find tagged template expressions like gql`...`
+    // Traverse AST to find gql`...` (Tree-sitter TSX parses this as a call_expression
+    // with a template_string argument) and, in some grammars, tagged_template_expression.
     function traverse(node: any) {
       if (!node) return;
 
-      // Look for tagged_template_expression (gql`...`)
+      const addOperationFromTemplate = (templateNode: any) => {
+        if (!templateNode) return;
+        const raw = content.slice(templateNode.startIndex, templateNode.endIndex);
+        const graphqlString = raw.replace(/^`/, "").replace(/`$/, "").trim();
+        const line = node.startPosition.row + 1;
+
+        const operation = parseGraphQLOperationString(graphqlString, filePath, line);
+        if (operation) operations.push(operation);
+      };
+
+      // TSX grammar: gql`...` => call_expression(function: identifier, arguments: template_string)
+      if (node.type === "call_expression") {
+        const functionNode = node.childForFieldName("function");
+        const argsNode = node.childForFieldName("arguments");
+        if (functionNode && argsNode) {
+          const funcText = content.slice(functionNode.startIndex, functionNode.endIndex).trim();
+          if (funcText === "gql") {
+            const templateNode =
+              argsNode.type === "template_string"
+                ? argsNode
+                : (argsNode.children || []).find((c: any) => c?.type === "template_string");
+            addOperationFromTemplate(templateNode);
+          }
+        }
+      }
+
+      // Other grammars: tagged_template_expression(tag: gql, template: template_string)
       if (node.type === "tagged_template_expression") {
         const tagNode = node.childForFieldName("tag");
         const templateNode = node.childForFieldName("template");
-
         if (tagNode && templateNode) {
-          const tagName = content.slice(tagNode.startIndex, tagNode.endIndex);
-
-          // Check if it's a gql tag
+          const tagName = content.slice(tagNode.startIndex, tagNode.endIndex).trim();
           if (tagName === "gql") {
-            // Extract the template literal content
-            const templateContent = content.slice(templateNode.startIndex, templateNode.endIndex);
-            // Remove backticks and get the GraphQL string
-            const graphqlString = templateContent.replace(/^`/, "").replace(/`$/, "");
-            const line = node.startPosition.row + 1;
-
-            const operation = parseGraphQLOperationString(graphqlString, filePath, line);
-            if (operation) {
-              operations.push(operation);
-            }
+            addOperationFromTemplate(templateNode);
           }
         }
       }
@@ -539,24 +554,24 @@ function parseGraphQLOperationString(
   filePath: string,
   line: number
 ): GraphQLFrontendOperation | null {
-  const lines = operationString.split("\n");
-  const firstLine = lines[0].trim();
+  const trimmed = operationString.trim();
+  if (!trimmed) return null;
 
-  // Determine operation type
-  let type: GraphQLFrontendOperation["type"] = "query";
-  if (firstLine.toLowerCase().startsWith("mutation")) {
-    type = "mutation";
-  } else if (firstLine.toLowerCase().startsWith("subscription")) {
-    type = "subscription";
+  // Find the first operation keyword (allow leading whitespace/comments/newlines)
+  const opMatch = /\b(query|mutation|subscription)\b\s*(\w+)?/i.exec(trimmed);
+  if (!opMatch) {
+    return null;
   }
 
-  // Extract operation name
-  const nameMatch = firstLine.match(/(?:query|mutation|subscription)\s+(\w+)/);
-  const name = nameMatch ? nameMatch[1] : "anonymous";
+  const type = opMatch[1]!.toLowerCase() as GraphQLFrontendOperation["type"];
+  const name = opMatch[2] || "anonymous";
+
+  const headerEnd = trimmed.indexOf("{", opMatch.index);
+  const header = headerEnd >= 0 ? trimmed.slice(opMatch.index, headerEnd) : trimmed.slice(opMatch.index);
 
   // Extract variables
   const variables: GraphQLVariable[] = [];
-  const varMatch = firstLine.match(/\(([^)]+)\)/);
+  const varMatch = header.match(/\(([^)]+)\)/);
   if (varMatch) {
     const varDefs = varMatch[1].split(",");
     for (const varDef of varDefs) {
@@ -572,7 +587,7 @@ function parseGraphQLOperationString(
   }
 
   // Extract selections (fields being requested)
-  const selections = parseSelections(operationString);
+  const selections = parseSelections(trimmed);
 
   return {
     name,
@@ -689,65 +704,102 @@ function validateSingleOperation(
   const issues: GraphQLIssue[] = [];
   let score = 100;
 
-  // Find matching schema operation
-  const schemaOp = schemaOperations.find(op => 
-    op.name === operation.name && op.type === operation.type
-  );
+  const schemaOpsOfType = schemaOperations.filter(op => op.type === operation.type);
+  const opByName = schemaOpsOfType.find(op => op.name === operation.name);
 
-  if (!schemaOp) {
+  const rootSelections = operation.selections || [];
+  const matchedRoot = rootSelections
+    .map(sel => ({
+      selection: sel,
+      schemaOp: schemaOpsOfType.find(op => op.name === sel.name),
+    }))
+    .filter((m): m is { selection: GraphQLSelection; schemaOp: GraphQLOperation } => Boolean(m.schemaOp));
+
+  // If none of the root selections match and the operation name doesn't match a schema field, treat as missing.
+  if (matchedRoot.length === 0 && !opByName) {
     issues.push({
       severity: "error",
       type: "missing_operation",
       message: `Operation '${operation.name}' of type '${operation.type}' not found in schema`,
     });
-    score = 0;
-    return { operation, issues, score };
+    return { operation, issues, score: 0 };
   }
 
-  // Validate selections against return type
-  const returnType = typeMap.get(schemaOp.returnType);
-  if (returnType) {
-    for (const selection of operation.selections) {
-      const field = returnType.fields.find(f => f.name === selection.name);
+  const validateFieldsOnType = (
+    selections: GraphQLSelection[],
+    typeName: string,
+  ) => {
+    const t = typeMap.get(typeName);
+    if (!t) return;
+
+    for (const selection of selections) {
+      const field = t.fields.find(f => f.name === selection.name);
       if (!field) {
         issues.push({
           severity: "error",
           type: "missing_field",
-          message: `Field '${selection.name}' does not exist on type '${returnType.name}'`,
+          message: `Field '${selection.name}' does not exist on type '${t.name}'`,
           field: selection.name,
         });
         score -= 20;
+        continue;
+      }
+
+      if (selection.subSelections && selection.subSelections.length > 0) {
+        validateFieldsOnType(selection.subSelections, field.type.replace(/[\[\]!]/g, ""));
       }
     }
-  }
+  };
 
-  // Validate variables
-  for (const variable of operation.variables) {
-    const schemaArg = schemaOp.arguments?.find(a => a.name === variable.name);
-    if (!schemaArg) {
-      issues.push({
-        severity: "warning",
-        type: "unused_variable",
-        message: `Variable '$${variable.name}' is not used by operation '${operation.name}'`,
-        field: variable.name,
-      });
-      score -= 10;
-    } else if (schemaArg.type !== variable.type) {
-      issues.push({
-        severity: "error",
-        type: "type_mismatch",
-        message: `Variable '$${variable.name}' type mismatch: expected '${schemaArg.type}', got '${variable.type}'`,
-        field: variable.name,
-        expectedType: schemaArg.type,
-        actualType: variable.type,
-      });
-      score -= 15;
+  // Strategy A: validate using schema root fields (Query/Mutation/Subscription fields)
+  // This is the primary strategy when we can match root selections.
+  if (matchedRoot.length > 0) {
+    for (const { selection, schemaOp } of matchedRoot) {
+      if (selection.subSelections && selection.subSelections.length > 0) {
+        validateFieldsOnType(selection.subSelections, schemaOp.returnType);
+      }
+    }
+  } else if (opByName) {
+    // Strategy B (fallback): match by operation name and validate selections directly on return type.
+    const returnType = typeMap.get(opByName.returnType);
+    if (returnType) {
+      const anyDirectMatch = rootSelections.some(sel => returnType.fields.some(f => f.name === sel.name));
+      const selectionsToValidate =
+        !anyDirectMatch && rootSelections.length === 1 && rootSelections[0]?.subSelections
+          ? rootSelections[0].subSelections
+          : rootSelections;
+      validateFieldsOnType(selectionsToValidate || [], opByName.returnType);
     }
   }
 
-  // Check for missing required arguments
-  for (const arg of schemaOp.arguments || []) {
-    if (arg.required) {
+  // Variables: validate against the first matched root schema field if present, else operation-name fallback.
+  const schemaForArgs = matchedRoot[0]?.schemaOp ?? opByName;
+  if (schemaForArgs) {
+    for (const variable of operation.variables) {
+      const schemaArg = schemaForArgs.arguments?.find(a => a.name === variable.name);
+      if (!schemaArg) {
+        issues.push({
+          severity: "warning",
+          type: "unused_variable",
+          message: `Variable '$${variable.name}' is not used by operation '${operation.name}'`,
+          field: variable.name,
+        });
+        score -= 10;
+      } else if (schemaArg.type !== variable.type) {
+        issues.push({
+          severity: "error",
+          type: "type_mismatch",
+          message: `Variable '$${variable.name}' type mismatch: expected '${schemaArg.type}', got '${variable.type}'`,
+          field: variable.name,
+          expectedType: schemaArg.type,
+          actualType: variable.type,
+        });
+        score -= 15;
+      }
+    }
+
+    for (const arg of schemaForArgs.arguments || []) {
+      if (!arg.required) continue;
       const provided = operation.variables.find(v => v.name === arg.name);
       if (!provided) {
         issues.push({
@@ -763,7 +815,7 @@ function validateSingleOperation(
 
   return {
     operation,
-    schemaOperation: schemaOp,
+    schemaOperation: schemaForArgs,
     issues,
     score: Math.max(0, score),
   };

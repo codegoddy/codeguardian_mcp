@@ -8,6 +8,8 @@
 
 import { SymbolTable, Issue } from "../types/tools.js";
 import { logger } from "../utils/logger.js";
+import { extractTypeReferencesAST } from "../tools/validation/extractors/index.js";
+import { getParser } from "../tools/validation/parser.js";
 
 /**
  * Check type consistency in new code
@@ -28,67 +30,19 @@ export async function checkTypeConsistency(
   }
 
   try {
-    // Check for common type issues in TypeScript
+    // Check for common type issues in TypeScript (AST-based)
 
-    // 1. Check for 'any' type usage (AI often uses this)
-    const anyPattern = /:\s*any\b/g;
-    const lines = newCode.split("\n");
+    // 1) 'any' type usage in type positions
+    issues.push(...detectAnyTypeUsageAST(newCode));
 
-    lines.forEach((line, index) => {
-      if (anyPattern.test(line)) {
-        issues.push({
-          type: "typeMismatch",
-          severity: "medium",
-          message: "Usage of 'any' type defeats TypeScript's type safety",
-          line: index + 1,
-          column: line.indexOf("any"),
-          code: line.trim(),
-          suggestion: "Use a specific type instead of any",
-          confidence: 100,
-        });
-      }
-    });
+    // 2) Missing explicit return types on named functions/methods
+    issues.push(...detectMissingReturnTypesAST(newCode));
 
-    // 2. Check for missing return types on functions
-    const funcWithoutReturnType =
-      /function\s+\w+\([^)]*\)\s*{|const\s+\w+\s*=\s*\([^)]*\)\s*=>/g;
-    lines.forEach((line, index) => {
-      if (funcWithoutReturnType.test(line) && !line.includes(":")) {
-        issues.push({
-          type: "missingReturnType",
-          severity: "low",
-          message: "Function missing explicit return type",
-          line: index + 1,
-          column: 0,
-          code: line.trim(),
-          suggestion: "Add explicit return type annotation",
-          confidence: 80,
-        });
-      }
-    });
+    // 3) Implicit-any parameters on named functions/methods
+    issues.push(...detectImplicitAnyParamsAST(newCode));
 
-    // 3. Check for implicit any parameters
-    const implicitAnyParam = /\(\s*\w+\s*\)/g;
-    lines.forEach((line, index) => {
-      const matches = line.matchAll(implicitAnyParam);
-      for (const match of matches) {
-        if (line.includes("=>") || line.includes("function")) {
-          issues.push({
-            type: "implicitAny",
-            severity: "medium",
-            message: "Parameter has implicit any type",
-            line: index + 1,
-            column: match.index || 0,
-            code: line.trim(),
-            suggestion: "Add type annotation to parameter",
-            confidence: 75,
-          });
-        }
-      }
-    });
-
-    // 4. Check for non-existent type references (Scenario 3 fix)
-    const typeReferences = extractTypeReferences(newCode);
+    // 4. Check for non-existent type references (AST-based)
+    const typeReferences = extractTypeReferencesFromAST(newCode);
     for (const typeRef of typeReferences) {
       const existsInSymbolTable =
         symbolTable.classes.includes(typeRef.name) ||
@@ -109,8 +63,8 @@ export async function checkTypeConsistency(
       }
     }
 
-    // 5. Check for property access hallucinations (Scenario 8 fix)
-    const propertyAccesses = extractPropertyAccesses(newCode, symbolTable);
+    // 5. Check for property access hallucinations (AST-based)
+    const propertyAccesses = extractPropertyAccessesAST(newCode, symbolTable);
     for (const access of propertyAccesses) {
       issues.push({
         type: "nonExistentProperty",
@@ -132,79 +86,286 @@ export async function checkTypeConsistency(
   return issues;
 }
 
+// ============================================================================
+// AST-based TypeScript checks (regex migrations)
+// ============================================================================
+
+function getLineTextByLineNumber(code: string, line: number): string {
+  const lines = code.split("\n");
+  return lines[line - 1] || "";
+}
+
+function detectAnyTypeUsageAST(code: string): Issue[] {
+  const issues: Issue[] = [];
+  const parser = getParser("typescript");
+  const tree = parser.parse(code);
+  const root: any = tree.rootNode;
+
+  const getText = (node: { startIndex: number; endIndex: number }) =>
+    code.slice(node.startIndex, node.endIndex);
+
+  const isTypeContext = (node: any): boolean => {
+    let cur: any = node;
+    for (let i = 0; i < 8 && cur; i++) {
+      if (
+        cur.type === "type_annotation" ||
+        cur.type === "return_type" ||
+        cur.type === "type_alias_declaration" ||
+        cur.type === "interface_declaration" ||
+        cur.type === "extends_clause" ||
+        cur.type === "implements_clause" ||
+        cur.type === "generic_type" ||
+        cur.type === "type_arguments" ||
+        cur.type === "type_parameter" ||
+        cur.type === "mapped_type_clause" ||
+        cur.type === "as_expression"
+      ) {
+        return true;
+      }
+      cur = cur.parent;
+    }
+    return false;
+  };
+
+  const visit = (node: any) => {
+    if (!node) return;
+
+    // Tree-sitter TS represents `any` as a predefined type in type positions.
+    if (node.type === "predefined_type") {
+      const t = getText(node);
+      if (t === "any" && isTypeContext(node)) {
+        const line = node.startPosition?.row + 1 || 0;
+        issues.push({
+          type: "typeMismatch",
+          severity: "medium",
+          message: "Usage of 'any' type defeats TypeScript's type safety",
+          line,
+          column: node.startPosition?.column || 0,
+          code: getLineTextByLineNumber(code, line).trim(),
+          suggestion: "Use a specific type instead of any",
+          confidence: 100,
+        });
+      }
+    }
+
+    for (const child of node.children || []) {
+      visit(child);
+    }
+  };
+
+  visit(root);
+  return issues;
+}
+
+function detectMissingReturnTypesAST(code: string): Issue[] {
+  const issues: Issue[] = [];
+  const parser = getParser("typescript");
+  const tree = parser.parse(code);
+  const root: any = tree.rootNode;
+
+  const getText = (node: { startIndex: number; endIndex: number }) =>
+    code.slice(node.startIndex, node.endIndex);
+
+  const getFunctionName = (node: any): string | null => {
+    if (!node) return null;
+    if (node.type === "function_declaration") {
+      const nameNode = node.childForFieldName?.("name");
+      return nameNode ? getText(nameNode) : null;
+    }
+    if (node.type === "method_definition") {
+      const nameNode = node.childForFieldName?.("name");
+      if (!nameNode) return null;
+      const name = getText(nameNode);
+      if (name === "constructor") return null;
+      return name;
+    }
+    if (node.type === "arrow_function" || node.type === "function" || node.type === "function_expression") {
+      const parent = node.parent;
+      if (parent?.type === "variable_declarator") {
+        const nameNode = parent.childForFieldName?.("name");
+        if (nameNode?.type === "identifier") return getText(nameNode);
+      }
+    }
+    return null;
+  };
+
+  const hasReturnType = (node: any): boolean => {
+    // Common field name on TS nodes
+    if (node.childForFieldName?.("return_type")) return true;
+    // Some grammars attach return type as a named child
+    return (node.children || []).some((c: any) => c?.type === "return_type");
+  };
+
+  const visit = (node: any) => {
+    if (!node) return;
+
+    const isFunctionLike =
+      node.type === "function_declaration" ||
+      node.type === "method_definition" ||
+      node.type === "arrow_function" ||
+      node.type === "function" ||
+      node.type === "function_expression";
+
+    if (isFunctionLike) {
+      const name = getFunctionName(node);
+      if (name && !hasReturnType(node)) {
+        const line = node.startPosition?.row + 1 || 0;
+        issues.push({
+          type: "missingReturnType",
+          severity: "low",
+          message: "Function missing explicit return type",
+          line,
+          column: node.startPosition?.column || 0,
+          code: getLineTextByLineNumber(code, line).trim(),
+          suggestion: "Add explicit return type annotation",
+          confidence: 80,
+        });
+      }
+    }
+
+    for (const child of node.children || []) {
+      visit(child);
+    }
+  };
+
+  visit(root);
+  return issues;
+}
+
+function detectImplicitAnyParamsAST(code: string): Issue[] {
+  const issues: Issue[] = [];
+  const parser = getParser("typescript");
+  const tree = parser.parse(code);
+  const root: any = tree.rootNode;
+
+  const getText = (node: { startIndex: number; endIndex: number }) =>
+    code.slice(node.startIndex, node.endIndex);
+
+  const getFunctionNameForParams = (node: any): string | null => {
+    if (!node) return null;
+    if (node.type === "function_declaration") {
+      const nameNode = node.childForFieldName?.("name");
+      return nameNode ? getText(nameNode) : null;
+    }
+    if (node.type === "method_definition") {
+      const nameNode = node.childForFieldName?.("name");
+      if (!nameNode) return null;
+      const name = getText(nameNode);
+      if (name === "constructor") return null;
+      return name;
+    }
+    if (node.type === "arrow_function" || node.type === "function" || node.type === "function_expression") {
+      const parent = node.parent;
+      if (parent?.type === "variable_declarator") {
+        const nameNode = parent.childForFieldName?.("name");
+        if (nameNode?.type === "identifier") return getText(nameNode);
+      }
+    }
+    return null;
+  };
+
+  const paramsHaveTypeAnnotation = (paramNode: any): boolean => {
+    if (!paramNode) return false;
+    if (paramNode.childForFieldName?.("type")) return true;
+    // tree-sitter-typescript commonly uses `type_annotation` nodes
+    const stack: any[] = [paramNode];
+    while (stack.length) {
+      const n = stack.pop();
+      if (!n) continue;
+      if (n.type === "type_annotation") return true;
+      // Avoid walking into default value expressions too deeply
+      for (const c of n.children || []) {
+        stack.push(c);
+      }
+    }
+    return false;
+  };
+
+  const visit = (node: any) => {
+    if (!node) return;
+
+    const isFunctionLike =
+      node.type === "function_declaration" ||
+      node.type === "method_definition" ||
+      node.type === "arrow_function" ||
+      node.type === "function" ||
+      node.type === "function_expression";
+
+    if (isFunctionLike) {
+      const funcName = getFunctionNameForParams(node);
+      if (funcName) {
+        const paramsNode = node.childForFieldName?.("parameters") || node.childForFieldName?.("parameter");
+        if (paramsNode) {
+          // Consider children that are parameters (identifier / required_parameter / optional_parameter / rest_pattern)
+          for (const child of paramsNode.children || []) {
+            const patternNode = child.childForFieldName?.("pattern") || child;
+            if (patternNode?.type === "identifier") {
+              if (!paramsHaveTypeAnnotation(child)) {
+                const line = patternNode.startPosition?.row + 1 || 0;
+                issues.push({
+                  type: "implicitAny",
+                  severity: "medium",
+                  message: "Parameter has implicit any type",
+                  line,
+                  column: patternNode.startPosition?.column || 0,
+                  code: getLineTextByLineNumber(code, line).trim(),
+                  suggestion: "Add type annotation to parameter",
+                  confidence: 75,
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    for (const child of node.children || []) {
+      visit(child);
+    }
+  };
+
+  visit(root);
+  return issues;
+}
+
 /**
- * Extract type references from code
+ * Extract type references from code using Tree-sitter extractor.
  */
-function extractTypeReferences(code: string): Array<{
+function extractTypeReferencesFromAST(code: string): Array<{
   name: string;
   line: number;
   column: number;
   code: string;
 }> {
-  const refs: Array<{
-    name: string;
-    line: number;
-    column: number;
-    code: string;
-  }> = [];
+  const refs: Array<{ name: string; line: number; column: number; code: string }> = [];
+  const typeRefs = extractTypeReferencesAST(code, "typescript");
   const lines = code.split("\n");
 
-  lines.forEach((line, index) => {
-    // Skip comments and strings
-    if (
-      line.trim().startsWith("//") ||
-      line.trim().startsWith("*") ||
-      line.trim().startsWith("/*")
-    ) {
-      return;
+  for (const ref of typeRefs) {
+    const lineText = lines[ref.line - 1] || "";
+    // Best-effort column: first occurrence of the type name in the line.
+    const col = Math.max(0, lineText.indexOf(ref.name));
+    if (!isKeyword(ref.name, "typescript") && ref.name.length > 1) {
+      refs.push({
+        name: ref.name,
+        line: ref.line,
+        column: col,
+        code: lineText.trim(),
+      });
     }
-
-    // Pattern for type annotations: : TypeName
-    const typeAnnotationPattern = /:\s*([A-Z]\w+)/g;
-    let match;
-    while ((match = typeAnnotationPattern.exec(line)) !== null) {
-      const typeName = match[1];
-      if (!isKeyword(typeName, "typescript") && typeName.length > 1) {
-        refs.push({
-          name: typeName,
-          line: index + 1,
-          column: match.index + 1,
-          code: line.trim(),
-        });
-      }
-    }
-
-    // Pattern for return type: function(): TypeName
-    const returnTypePattern = /\)\s*:\s*([A-Z]\w+)/g;
-    while ((match = returnTypePattern.exec(line)) !== null) {
-      const typeName = match[1];
-      if (!isKeyword(typeName, "typescript") && typeName.length > 1) {
-        refs.push({
-          name: typeName,
-          line: index + 1,
-          column: match.index + 1,
-          code: line.trim(),
-        });
-      }
-    }
-
-    // Pattern for interface definitions (should be valid if defined in the code)
-    const interfaceDefPattern = /interface\s+(\w+)/g;
-    while ((match = interfaceDefPattern.exec(line)) !== null) {
-      // Skip if it's just defining the interface, not using it
-      if (!line.includes("extends")) {
-        continue;
-      }
-    }
-  });
+  }
 
   return refs;
 }
 
 /**
- * Extract property accesses from code
+ * Extract property accesses from code using Tree-sitter.
+ *
+ * We intentionally only emit accesses for *simple* object identifiers.
+ * This matches the original heuristic intent while avoiding regex false positives
+ * in strings/comments.
  */
-function extractPropertyAccesses(
+function extractPropertyAccessesAST(
   code: string,
   symbolTable: SymbolTable,
 ): Array<{
@@ -214,90 +375,61 @@ function extractPropertyAccesses(
   column: number;
   code: string;
 }> {
-  const accesses: Array<{
-    object: string;
-    property: string;
-    line: number;
-    column: number;
-    code: string;
-  }> = [];
+  const accesses: Array<{ object: string; property: string; line: number; column: number; code: string }> = [];
+  const parser = getParser("typescript");
+  const tree = parser.parse(code);
+  const root = tree.rootNode;
   const lines = code.split("\n");
 
-  lines.forEach((line, index) => {
-    // Skip comments
-    if (
-      line.trim().startsWith("//") ||
-      line.trim().startsWith("*") ||
-      line.trim().startsWith("/*")
-    ) {
-      return;
+  const getText = (node: { startIndex: number; endIndex: number }) =>
+    code.slice(node.startIndex, node.endIndex);
+
+  const unwrapParens = (node: any): any => {
+    if (!node) return node;
+    if (node.type !== "parenthesized_expression") return node;
+    // ( expr )
+    for (const c of node.children || []) {
+      if (c.type !== "(" && c.type !== ")") return c;
+    }
+    return node;
+  };
+
+  const visit = (node: any) => {
+    if (!node) return;
+
+    if (node.type === "member_expression") {
+      const objNode = unwrapParens(node.childForFieldName?.("object"));
+      const propNode = node.childForFieldName?.("property");
+
+      if (objNode && propNode) {
+        // Only treat simple identifiers as "objects" for this heuristic.
+        if (objNode.type === "identifier") {
+          const objectName = getText(objNode);
+          const propertyName = getText(propNode);
+          const line = node.startPosition?.row + 1 || 0;
+
+          if (!isBuiltInObject(objectName) &&
+              !isReturnObject(objectName) &&
+              !isKnownProperty(objectName, propertyName, symbolTable) &&
+              symbolTable.variables.includes(objectName)) {
+            accesses.push({
+              object: objectName,
+              property: propertyName,
+              line,
+              column: propNode.startPosition?.column || 0,
+              code: (lines[line - 1] || "").trim(),
+            });
+          }
+        }
+      }
     }
 
-    // Pattern for property access: object.property
-    const propAccessPattern = /(\w+)\.(\w+)/g;
-    let match;
-    while ((match = propAccessPattern.exec(line)) !== null) {
-      const objectName = match[1];
-      const propertyName = match[2];
-
-      // Skip built-in objects and their methods
-      if (isBuiltInObject(objectName)) {
-        continue;
-      }
-
-      // Skip if the property is a known property of the object
-      if (isKnownProperty(objectName, propertyName, symbolTable)) {
-        continue;
-      }
-
-      // Skip common return value properties (result.userId, data.id, etc.)
-      if (isReturnObject(objectName)) {
-        continue;
-      }
-
-      // Only flag if object exists in symbol table (variable or parameter)
-      // But NOT if it's a function (functions returning objects should have their properties tracked separately)
-      if (symbolTable.variables.includes(objectName)) {
-        accesses.push({
-          object: objectName,
-          property: propertyName,
-          line: index + 1,
-          column: match.index,
-          code: line.trim(),
-        });
-      }
+    for (const child of node.children || []) {
+      visit(child);
     }
+  };
 
-    // Pattern for nested property access: object.nested.property
-    const nestedPropAccessPattern = /(\w+)\.(\w+)\.(\w+)/g;
-    while ((match = nestedPropAccessPattern.exec(line)) !== null) {
-      const objectName = match[1];
-      const nestedProperty = match[2];
-      const finalProperty = match[3];
-
-      // Skip built-in objects
-      if (isBuiltInObject(objectName)) {
-        continue;
-      }
-
-      // Skip return objects
-      if (isReturnObject(objectName)) {
-        continue;
-      }
-
-      // Flag nested property access if the first object exists
-      if (symbolTable.variables.includes(objectName)) {
-        accesses.push({
-          object: `${objectName}.${nestedProperty}`,
-          property: finalProperty,
-          line: index + 1,
-          column: match.index,
-          code: line.trim(),
-        });
-      }
-    }
-  });
-
+  visit(root);
   return accesses;
 }
 

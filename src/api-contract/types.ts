@@ -47,9 +47,16 @@ export interface ServiceDefinition {
   endpoint: string;
   requestType?: string;
   responseType?: string;
+  queryParams?: QueryParam[];
   file: string;
   line: number;
   column?: number;
+}
+
+export interface QueryParam {
+  name: string;
+  type: string;
+  required: boolean;
 }
 
 export interface TypeField {

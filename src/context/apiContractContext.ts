@@ -9,8 +9,8 @@
 
 import * as fs from "fs/promises";
 import * as path from "path";
-import { glob } from "glob";
 import { logger } from "../utils/logger.js";
+import { detectProjectStructure as detectProjectStructureAuto } from "../api-contract/detector.js";
 import {
   extractServicesFromFileAST,
   extractTypesFromFileAST,
@@ -45,7 +45,10 @@ export async function extractApiContractContext(
 
   try {
     // Step 1: Detect project structure (frontend/backend)
-    const projectStructure = await detectProjectStructure(context.projectPath);
+    const projectStructure =
+      (await detectProjectStructureAuto(
+        path.resolve(context.projectPath),
+      )) as unknown as ApiContractContext["projectStructure"];
 
     if (!projectStructure.frontend && !projectStructure.backend) {
       logger.info("No frontend or backend detected - skipping API Contract extraction");
@@ -110,244 +113,6 @@ export async function extractApiContractContext(
     logger.error("Failed to extract API Contract context:", error);
     return undefined;
   }
-}
-
-// ============================================================================
-// Project Structure Detection
-// ============================================================================
-
-async function detectProjectStructure(projectPath: string): Promise<ApiContractContext["projectStructure"]> {
-  const result: ApiContractContext["projectStructure"] = {
-    relationship: "frontend-only",
-  };
-
-  // Resolve to absolute path for consistent comparison
-  const absoluteProjectPath = path.resolve(projectPath);
-
-  // Check for common folder structures
-  const commonFrontendPaths = ["frontend", "client", "web", "app", "src"];
-  const commonBackendPaths = ["backend", "server", "api", "services"];
-
-  let frontendPath: string | null = null;
-  let backendPath: string | null = null;
-
-  // Try to find frontend in common locations
-  for (const dir of commonFrontendPaths) {
-    const fullPath = path.join(absoluteProjectPath, dir);
-    if (await isDirectory(fullPath)) {
-      const detection = await detectFrontend(fullPath);
-      if (detection.confidence > 0.5) {
-        frontendPath = fullPath;
-        break;
-      }
-    }
-  }
-
-  // Try to find backend in common locations
-  for (const dir of commonBackendPaths) {
-    const fullPath = path.join(absoluteProjectPath, dir);
-    if (await isDirectory(fullPath)) {
-      const detection = await detectBackend(fullPath);
-      if (detection.confidence > 0.5) {
-        backendPath = fullPath;
-        break;
-      }
-    }
-  }
-
-  // If not found in common locations, check root
-  if (!frontendPath) {
-    const rootDetection = await detectFrontend(absoluteProjectPath);
-    if (rootDetection.confidence > 0.5) {
-      frontendPath = absoluteProjectPath;
-    }
-  }
-
-  if (!backendPath) {
-    const rootDetection = await detectBackend(absoluteProjectPath);
-    if (rootDetection.confidence > 0.5) {
-      backendPath = projectPath;
-    }
-  }
-
-  // Build result
-  if (frontendPath) {
-    const detection = await detectFrontend(frontendPath);
-    result.frontend = {
-      path: frontendPath,
-      framework: detection.framework || "react",
-      apiPattern: detection.apiPattern || "rest",
-      httpClient: detection.httpClient || "fetch",
-      apiBaseUrl: detection.apiBaseUrl,
-    };
-  }
-
-  if (backendPath) {
-    const detection = await detectBackend(backendPath);
-    result.backend = {
-      path: backendPath,
-      framework: detection.framework || "fastapi",
-      apiPattern: detection.apiPattern || "rest",
-      apiPrefix: "/api",
-    };
-  }
-
-  // Determine relationship
-  if (result.frontend && result.backend) {
-    result.relationship =
-      frontendPath === projectPath || backendPath === projectPath ? "monorepo" : "separate";
-  } else if (result.backend) {
-    result.relationship = "backend-only";
-  } else if (result.frontend) {
-    result.relationship = "frontend-only";
-  }
-
-  return result;
-}
-
-interface DetectionResult {
-  confidence: number;
-  framework?: string;
-  apiPattern?: string;
-  httpClient?: string;
-  apiBaseUrl?: string;
-}
-
-async function detectFrontend(projectPath: string): Promise<DetectionResult> {
-  let confidence = 0;
-  let framework = "react";
-  let apiPattern = "rest";
-  let httpClient = "fetch";
-  let apiBaseUrl: string | undefined;
-
-  // Check for package.json
-  const packageJsonPath = path.join(projectPath, "package.json");
-  const hasPackageJson = await fileExists(packageJsonPath);
-
-  if (!hasPackageJson) {
-    return { confidence: 0 };
-  }
-
-  confidence += 0.3;
-
-  try {
-    const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf-8"));
-    const deps = { ...packageJson.dependencies, ...packageJson.devDependencies };
-
-    // Detect framework
-    if (deps["next"]) {
-      framework = "nextjs";
-      confidence += 0.4;
-    } else if (deps["react"]) {
-      framework = "react";
-      confidence += 0.3;
-    } else if (deps["vue"]) {
-      framework = "vue";
-      confidence += 0.3;
-    }
-
-    // Detect HTTP client
-    if (deps["axios"]) {
-      httpClient = "axios";
-    } else if (deps["@tanstack/react-query"] || deps["react-query"]) {
-      httpClient = "react-query";
-    }
-
-    // Check for services folder
-    const servicesPaths = [
-      path.join(projectPath, "src/services"),
-      path.join(projectPath, "services"),
-      path.join(projectPath, "app/services"),
-    ];
-
-    for (const servicesPath of servicesPaths) {
-      if (await isDirectory(servicesPath)) {
-        confidence += 0.2;
-        break;
-      }
-    }
-  } catch {
-    // Ignore errors
-  }
-
-  return { confidence: Math.min(confidence, 1), framework, apiPattern, httpClient, apiBaseUrl };
-}
-
-async function detectBackend(projectPath: string): Promise<DetectionResult> {
-  let confidence = 0;
-  let framework = "fastapi";
-  let apiPattern = "rest";
-
-  // Check for Python backend
-  const requirementsPath = path.join(projectPath, "requirements.txt");
-  const pyprojectPath = path.join(projectPath, "pyproject.toml");
-  const hasPython = (await fileExists(requirementsPath)) || (await fileExists(pyprojectPath));
-
-  if (hasPython) {
-    confidence += 0.3;
-
-    try {
-      let deps = "";
-      if (await fileExists(requirementsPath)) {
-        deps = await fs.readFile(requirementsPath, "utf-8");
-      } else if (await fileExists(pyprojectPath)) {
-        deps = await fs.readFile(pyprojectPath, "utf-8");
-      }
-
-      if (deps.includes("fastapi")) {
-        framework = "fastapi";
-        confidence += 0.4;
-      } else if (deps.includes("flask")) {
-        framework = "flask";
-        confidence += 0.4;
-      } else if (deps.includes("django")) {
-        framework = "django";
-        confidence += 0.4;
-      }
-    } catch {
-      // Ignore errors
-    }
-  }
-
-  // Check for Node.js backend
-  const packageJsonPath = path.join(projectPath, "package.json");
-  const hasNode = await fileExists(packageJsonPath);
-
-  if (hasNode) {
-    confidence += 0.3;
-
-    try {
-      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf-8"));
-      const deps = { ...packageJson.dependencies, ...packageJson.devDependencies };
-
-      if (deps["express"]) {
-        framework = "express";
-        confidence += 0.4;
-      } else if (deps["@nestjs/core"]) {
-        framework = "nestjs";
-        confidence += 0.4;
-      }
-    } catch {
-      // Ignore errors
-    }
-  }
-
-  // Check for routes folder
-  const routesPaths = [
-    path.join(projectPath, "app/routes"),
-    path.join(projectPath, "routes"),
-    path.join(projectPath, "src/routes"),
-    path.join(projectPath, "api"),
-  ];
-
-  for (const routesPath of routesPaths) {
-    if (await isDirectory(routesPath)) {
-      confidence += 0.2;
-      break;
-    }
-  }
-
-  return { confidence: Math.min(confidence, 1), framework, apiPattern };
 }
 
 // ============================================================================
@@ -472,9 +237,25 @@ async function extractBackendRoutes(
       if (!fileInfo.path.endsWith(".py")) continue;
 
       try {
-        const content = await fs.readFile(fileInfo.path, "utf-8");
-        const fileRoutes = extractRoutesFromPythonContent(content, fileInfo.path, framework, routerPrefixes);
-        routes.push(...fileRoutes);
+        const moduleName = path.basename(fileInfo.path).replace(/\.py$/, "");
+        const mountPrefix = routerPrefixes.get(moduleName) || "";
+
+        const fileRoutes = await extractRoutesFromFile(fileInfo.path, framework);
+        for (const r of fileRoutes) {
+          const normalizedRoutePath = normalizeFullPath(r.path);
+          const normalizedMount = normalizeFullPath(mountPrefix);
+
+          const shouldPrefix =
+            Boolean(normalizedMount) &&
+            normalizedMount !== "/" &&
+            normalizedRoutePath !== normalizedMount &&
+            !normalizedRoutePath.startsWith(normalizedMount + "/");
+
+          routes.push({
+            ...r,
+            path: shouldPrefix ? normalizeFullPath(normalizedMount + normalizedRoutePath) : normalizedRoutePath,
+          });
+        }
       } catch (err) {
         logger.debug(`Failed to extract routes from ${fileInfo.path}`);
       }
@@ -943,8 +724,7 @@ async function extractBackendModels(context: ProjectContext, backendPath: string
 
     for (const fileInfo of modelFiles) {
       try {
-        const content = await fs.readFile(fileInfo.path, "utf-8");
-        const fileModels = extractModelsFromPythonContent(content, fileInfo.path);
+        const fileModels = await extractModelsFromFile(fileInfo.path);
         models.push(...fileModels);
       } catch (err) {
         logger.debug(`Failed to extract models from ${fileInfo.path}`);
@@ -1367,6 +1147,19 @@ function calculateFieldSimilarity(type: ApiTypeDefinition, model: ApiModelDefini
 
 function normalizePath(path: string): string {
   return path.replace(/\/+/g, "/").replace(/\/$/, "").replace(/^\//, "");
+}
+
+/**
+ * Normalize a URL/API path for storage/display (keeps a leading slash).
+ */
+function normalizeFullPath(p: string): string {
+  let out = (p || "").trim();
+  if (!out) return "";
+  out = out.replace(/\/+/g, "/");
+  if (!out.startsWith("/")) out = "/" + out;
+  // Strip trailing slash (except root)
+  if (out.length > 1) out = out.replace(/\/$/, "");
+  return out;
 }
 
 function removeApiPrefix(path: string): string {

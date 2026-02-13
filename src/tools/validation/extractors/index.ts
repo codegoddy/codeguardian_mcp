@@ -17,7 +17,8 @@ import type {
   ASTImport,
   ASTTypeReference,
 } from "../types.js";
-import { getParser, isSupportedLanguage } from "../parser.js";
+import { isSupportedLanguage } from "../parser.js";
+import { parseCodeCached } from "../parser.js";
 import {
   extractPythonSymbols,
   extractPythonUsages,
@@ -93,8 +94,12 @@ export function extractSymbolsAST(
     }
   }
 
-  const parser = getParser(language as any);
-  const tree = parser.parse(code);
+  const tree = parseCodeCached(code, language as any, {
+    filePath: filePath || undefined,
+    // Symbols extraction is often called multiple times per run; the default
+    // content hash cache covers that. File-path cache additionally helps the
+    // watcher path when we validate a changed file repeatedly.
+  });
   const symbols: ASTSymbol[] = [];
 
   if (language === "python") {
@@ -138,9 +143,9 @@ export function extractUsagesAST(
   code: string,
   language: string,
   imports: ASTImport[],
+  parseOptions: { filePath?: string; cacheKey?: string; useCache?: boolean } = {},
 ): ASTUsage[] {
-  const parser = getParser(language);
-  const tree = parser.parse(code);
+  const tree = parseCodeCached(code, language, parseOptions);
   const usages: ASTUsage[] = [];
 
   // Build set of ALL imported symbols to skip (both external AND internal)
@@ -185,8 +190,7 @@ export function extractUsagesAST(
  */
 export function collectLocalDefinitionsAST(code: string, language: string): Set<string> {
   const definitions = new Set<string>();
-  const parser = getParser(language);
-  const tree = parser.parse(code);
+  const tree = parseCodeCached(code, language);
 
   if (language === "python") {
     collectPythonLocalDefinitions(tree.rootNode, code, definitions);
@@ -215,8 +219,9 @@ export function collectLocalDefinitionsAST(code: string, language: string): Set<
  * ```
  */
 export function extractImportsAST(code: string, language: string): ASTImport[] {
-  const parser = getParser(language);
-  const tree = parser.parse(code);
+  // Note: we intentionally keep this API signature minimal.
+  // If you need watcher-friendly incremental parsing, use `extractImportsASTWithOptions`.
+  const tree = parseCodeCached(code, language);
   const imports: ASTImport[] = [];
 
   if (language === "python") {
@@ -257,9 +262,9 @@ export function extractImportsAST(code: string, language: string): ASTImport[] {
 export function extractTypeReferencesAST(
   code: string,
   language: string,
+  parseOptions: { filePath?: string; cacheKey?: string; useCache?: boolean } = {},
 ): ASTTypeReference[] {
-  const parser = getParser(language);
-  const tree = parser.parse(code);
+  const tree = parseCodeCached(code, language, parseOptions);
   const references: ASTTypeReference[] = [];
 
   if (language === "python") {
@@ -271,4 +276,27 @@ export function extractTypeReferencesAST(
   }
 
   return references;
+}
+
+/**
+ * Extract imports with explicit parse options.
+ *
+ * This is useful for watcher-driven paths that want to reuse the previous tree
+ * (filePath-based caching) across rapid edits.
+ */
+export function extractImportsASTWithOptions(
+  code: string,
+  language: string,
+  parseOptions: { filePath?: string; cacheKey?: string; useCache?: boolean } = {},
+): ASTImport[] {
+  const tree = parseCodeCached(code, language, parseOptions);
+  const imports: ASTImport[] = [];
+
+  if (language === "python") {
+    extractPythonImports(tree.rootNode, code, imports);
+  } else {
+    extractJSImports(tree.rootNode as any, code, imports);
+  }
+
+  return imports;
 }

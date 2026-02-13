@@ -28,6 +28,7 @@ import {
 import {
   extractUsagesAST,
   extractImportsAST,
+  extractImportsASTWithOptions,
   type ASTUsage,
   type ASTImport,
 } from "./validation/extractors/index.js";
@@ -134,11 +135,16 @@ export const validateCodeTool: ToolDefinition = {
     logger.info(`Validating code against project: ${projectPath} (strictMode: ${strictMode})`);
 
     try {
+      const virtualFilePath = sessionId ? `session:${sessionId}` : "new_code_validation";
+
       // Step 0: Parse imports first (needed for context orchestration)
       let imports: ASTImport[] = [];
       let importedSymbols: string[] = [];
       if (newCode) {
-        imports = extractImportsAST(newCode, language);
+        imports = extractImportsASTWithOptions(newCode, language, {
+          filePath: virtualFilePath,
+          cacheKey: virtualFilePath,
+        });
         importedSymbols = imports
           .flatMap((imp) => [...imp.names.map((n) => n.local)])
           .filter(Boolean);
@@ -150,6 +156,7 @@ export const validateCodeTool: ToolDefinition = {
         language,
         newCode,
         imports: importedSymbols,
+        useSmartContext,
         sessionId,
         recentlyEditedFiles,
       });
@@ -207,7 +214,10 @@ export const validateCodeTool: ToolDefinition = {
 
         // Tier 1: Validate symbols (hallucinations)
           // Don't skip imported symbols in extraction - we'll filter them intelligently in validation
-          usedSymbols = extractUsagesAST(newCode, language, []);
+          usedSymbols = extractUsagesAST(newCode, language, [], {
+            filePath: virtualFilePath,
+            cacheKey: virtualFilePath,
+          });
           
           const missingPackages = new Set<string>();
           for (const issue of manifestIssues) {
@@ -219,7 +229,10 @@ export const validateCodeTool: ToolDefinition = {
 
           // Extract type references for unused import detection
           // This is essential for TypeScript where imports might only be used as types
-          const typeReferences = extractTypeReferencesAST(newCode, language);
+          const typeReferences = extractTypeReferencesAST(newCode, language, {
+            filePath: virtualFilePath,
+            cacheKey: virtualFilePath,
+          });
 
           const symbolIssues = validateSymbols(
             usedSymbols,
@@ -282,23 +295,28 @@ export const validateCodeTool: ToolDefinition = {
       }
 
       // Step 6: ALWAYS check for dead code (comprehensive validation)
-      // Only skip if we're validating a very small snippet (< 10 lines)
-      const shouldCheckDeadCode = !newCode || newCode.split("\n").length > 10;
+      // Only run when validating large snippets (heuristic) or when no code is provided.
+      // This keeps validate_code fast for small snippets while still supporting
+      // full dead-code scans.
+      const shouldCheckDeadCode = !newCode || newCode.split("\n").length > 50;
       let deadCodeIssues: DeadCodeIssue[] = [];
 
       if (shouldCheckDeadCode) {
         const DEAD_CODE_TIMEOUT = 30000; // 30 seconds max
         const deadCodePromise = detectDeadCode(projectContext, newCode);
+        let timeoutId: NodeJS.Timeout | undefined;
         const timeoutPromise = new Promise<DeadCodeIssue[]>((resolve) => {
-          setTimeout(() => {
-            logger.warn(
-              `Dead code detection timed out after ${DEAD_CODE_TIMEOUT}ms`,
-            );
+          timeoutId = setTimeout(() => {
+            logger.warn(`Dead code detection timed out after ${DEAD_CODE_TIMEOUT}ms`);
             resolve([]);
           }, DEAD_CODE_TIMEOUT);
         });
 
-        deadCodeIssues = await Promise.race([deadCodePromise, timeoutPromise]);
+        try {
+          deadCodeIssues = await Promise.race([deadCodePromise, timeoutPromise]);
+        } finally {
+          if (timeoutId) clearTimeout(timeoutId);
+        }
       }
 
       // Step 7: Automated Verification (eliminates false positives)

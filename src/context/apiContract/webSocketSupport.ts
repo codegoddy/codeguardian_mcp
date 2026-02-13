@@ -172,8 +172,8 @@ function extractSocketIOServerConfig(content: string, filePath: string): WebSock
         line: i + 1,
       };
 
-      // Extract events from the connection handler
-      const events = extractSocketIOEvents(content, i);
+      // Extract events from the connection handler (start after the handler line)
+      const events = extractSocketIOEvents(content, i + 1);
       namespace.events.push(...events);
 
       config.namespaces.push(namespace);
@@ -191,7 +191,7 @@ function extractSocketIOServerConfig(content: string, filePath: string): WebSock
         line: i + 1,
       };
 
-      const events = extractSocketIOEvents(content, i);
+      const events = extractSocketIOEvents(content, i + 1);
       namespace.events.push(...events);
 
       config.namespaces.push(namespace);
@@ -375,8 +375,8 @@ function extractSocketIOClientConfig(content: string, filePath: string): WebSock
           if (funcText.match(/^io\s*$/)) {
             const argsNode = node.childForFieldName("arguments");
             if (argsNode && argsNode.children.length > 0) {
-              const firstArg = argsNode.children[0];
-              if (firstArg.type === "string") {
+              const firstArg = argsNode.children.find((c: any) => c?.type === "string");
+              if (firstArg) {
                 config.serverUrl = content.slice(firstArg.startIndex, firstArg.endIndex).replace(/['"]/g, "");
               }
             }
@@ -386,8 +386,8 @@ function extractSocketIOClientConfig(content: string, filePath: string): WebSock
           if (funcText.match(/socket\.on$/)) {
             const argsNode = node.childForFieldName("arguments");
             if (argsNode && argsNode.children.length > 0) {
-              const firstArg = argsNode.children[0];
-              if (firstArg.type === "string") {
+              const firstArg = argsNode.children.find((c: any) => c?.type === "string");
+              if (firstArg) {
                 const eventName = content.slice(firstArg.startIndex, firstArg.endIndex).replace(/['"]/g, "");
                 config.events.push({
                   name: eventName,
@@ -403,8 +403,8 @@ function extractSocketIOClientConfig(content: string, filePath: string): WebSock
           if (funcText.match(/socket\.emit$/)) {
             const argsNode = node.childForFieldName("arguments");
             if (argsNode && argsNode.children.length > 0) {
-              const firstArg = argsNode.children[0];
-              if (firstArg.type === "string") {
+              const firstArg = argsNode.children.find((c: any) => c?.type === "string");
+              if (firstArg) {
                 const eventName = content.slice(firstArg.startIndex, firstArg.endIndex).replace(/['"]/g, "");
                 config.events.push({
                   name: eventName,
@@ -420,8 +420,8 @@ function extractSocketIOClientConfig(content: string, filePath: string): WebSock
           if (funcText.match(/socket\.once$/)) {
             const argsNode = node.childForFieldName("arguments");
             if (argsNode && argsNode.children.length > 0) {
-              const firstArg = argsNode.children[0];
-              if (firstArg.type === "string") {
+              const firstArg = argsNode.children.find((c: any) => c?.type === "string");
+              if (firstArg) {
                 const eventName = content.slice(firstArg.startIndex, firstArg.endIndex).replace(/['"]/g, "");
                 config.events.push({
                   name: eventName,

@@ -30,6 +30,8 @@ const execAsync = promisify(exec);
 import * as fs from "fs/promises";
 import * as path from "path";
 import { extractSymbolsAST } from "../tools/validation/extractors/index.js";
+import { checkPackageRegistry } from "../tools/validation/registry.js";
+import { impactAnalyzer, type BlastRadius } from "./impactAnalyzer.js";
 
 // ============================================================================
 // Types
@@ -63,6 +65,39 @@ interface VerificationContext {
   language: string;
   gitAvailable: boolean;
   featureBranchCached?: boolean;
+  gitStatusBatch?: Map<string, GitFileStatus>;
+  fileContentCache: Map<string, string>;
+}
+
+/**
+ * Lightweight wrapper around the same semantic tracing that powers
+ * [`get_dependency_graph`](src/tools/getDependencyGraph.ts:61).
+ *
+ * Used during automated verification to eliminate "unused export" false positives
+ * without requiring the LLM to call a separate tool.
+ */
+function getDependencyEvidenceForSymbol(
+  symbolName: string,
+  ctx: VerificationContext,
+  depth: number = 2,
+  definedInFile?: string,
+): { blast: BlastRadius; isUsed: boolean } | null {
+  const graph = ctx.projectContext.symbolGraph;
+  if (!graph) return null;
+
+  // Safety: only use dependency evidence when the symbol is actually defined in the
+  // file associated with the finding. This reduces false negatives from name collisions
+  // (e.g., multiple "getById" methods across different files).
+  if (definedInFile) {
+    const definingFiles = graph.symbolToFiles.get(symbolName);
+    if (!definingFiles || !definingFiles.has(definedInFile)) {
+      return null;
+    }
+  }
+
+  const blast = impactAnalyzer.traceBlastRadius(symbolName, graph, Math.min(depth, 5));
+  const isUsed = blast.affectedFiles.length > 0 || blast.impactedSymbols.length > 0;
+  return { blast, isUsed };
 }
 
 /**
@@ -142,11 +177,18 @@ export async function verifyFindingsAutomatically(
     projectContext,
     language,
     gitAvailable: await checkGitAvailable(projectPath),
+    fileContentCache: new Map(),
   };
 
   // Group findings by file for efficient batch processing
   const fileBatches = groupFindingsByFile(allFindings);
   logger.info(`Grouped into ${fileBatches.length} file batches for concurrent processing`);
+
+  // Pre-batch git status for ALL files in a single git call (instead of per-file)
+  if (ctx.gitAvailable) {
+    ctx.gitStatusBatch = await batchGitStatus(ctx.projectPath);
+    ctx.featureBranchCached = await checkFeatureBranch(ctx);
+  }
 
   const progress: VerificationProgress = {
     totalFiles: fileBatches.length,
@@ -249,16 +291,13 @@ async function preloadFileCache(
   ctx: VerificationContext,
   cache: FileCache,
 ): Promise<void> {
-  // Pre-check git status (batched git call happens at project level)
-  if (ctx.gitAvailable) {
-    cache.gitStatus = await checkGitFileStatus(filePath, ctx);
+  // Use pre-batched git status (single git call for all files)
+  if (ctx.gitAvailable && ctx.gitStatusBatch) {
+    cache.gitStatus = ctx.gitStatusBatch.get(filePath) ?? { isNew: false, isModified: false };
   }
   
-  // Feature branch check is per-project — cache once on context, not per-file
+  // Feature branch is already cached on context during init
   if (ctx.gitAvailable) {
-    if (ctx.featureBranchCached === undefined) {
-      ctx.featureBranchCached = await checkFeatureBranch(ctx);
-    }
     cache.featureBranch = ctx.featureBranchCached;
   }
 }
@@ -399,6 +438,30 @@ async function verifyHallucinationWithCache(
       break;
     }
 
+    case "missingDependency": {
+      // Check if the package exists in a nearby package.json (subdirectory).
+      // The manifest loader may have already been fixed, but this is a safety net.
+      const missingPkgName = extractPackageName(issue.message);
+      if (missingPkgName) {
+        const foundInSubdir = await checkPackageInSubdirectoryManifest(missingPkgName, ctx.projectPath);
+        if (foundInSubdir) {
+          status = "false_positive";
+          confidence = 98;
+          method = "subdirectory_manifest_check";
+          reasons.push(`Package '${missingPkgName}' found in a subdirectory package.json`);
+          reasons.push("This is not missing — the manifest loader missed it");
+          break;
+        }
+      }
+      // If not found in subdirectory, it's a genuine missing dependency (but low severity)
+      status = "confirmed";
+      confidence = 70;
+      method = "manifest_check";
+      reasons.push("Package not found in any project manifest");
+      reasons.push("This is a missing dependency (not a hallucination — it exists on the registry)");
+      break;
+    }
+
     case "wrongParamCount": {
       const paramCheck = await verifyParameterCount(issue, ctx);
       
@@ -419,6 +482,42 @@ async function verifyHallucinationWithCache(
     }
 
     case "unusedImport": {
+      // Special case: async validation injects per-file "unused local" findings into the
+      // ValidationIssue stream using type=unusedImport.
+      // These findings look like:
+      //   "Variable 'getRecipeDetails' is defined but never used in this file"
+      // For exported/service methods, this is frequently a false positive.
+      // Use dependency tracing (same engine as get_dependency_graph) to confirm.
+      if (
+        issue.message.includes("defined but never used in this file") &&
+        typeof issue.file === "string" &&
+        issue.file.length > 0
+      ) {
+        const symbolName = extractSymbolName(issue);
+        if (symbolName) {
+          const dep = getDependencyEvidenceForSymbol(symbolName, ctx, 2, issue.file);
+          if (dep?.isUsed) {
+            status = "false_positive";
+            confidence = 98;
+            method = "dependency_graph";
+            reasons.push(
+              `Dependency graph shows '${symbolName}' is referenced by ${dep.blast.affectedFiles.length} file(s).`,
+            );
+            const sampleFiles = dep.blast.affectedFiles
+              .slice(0, 4)
+              .map((f) => f)
+              .join(", ");
+            if (sampleFiles) {
+              reasons.push(`Example consumers: ${sampleFiles}${dep.blast.affectedFiles.length > 4 ? ", …" : ""}`);
+            }
+            reasons.push(
+              "Not an unused local — this symbol is reachable via cross-file consumers",
+            );
+            break;
+          }
+        }
+      }
+
       const usageCheck = await checkImportUsage(issue, ctx);
       
       if (usageCheck.isUsed) {
@@ -516,6 +615,30 @@ async function verifyDeadCodeWithCache(
 
   switch (issue.type) {
     case "unusedExport": {
+      // Highest-signal guard: if the symbol graph shows *any* downstream usage,
+      // this is not dead code. This prevents the exact class of false positives
+      // where the dead-code scan misses a semantic consumer, but the dependency
+      // tracer can prove a call chain exists.
+      const dep = getDependencyEvidenceForSymbol(issue.name, ctx, 2);
+      if (dep?.isUsed) {
+        status = "false_positive";
+        confidence = 98;
+        method = "dependency_graph";
+
+        const sampleFiles = dep.blast.affectedFiles
+          .slice(0, 4)
+          .map((f) => f)
+          .join(", ");
+        reasons.push(
+          `Dependency graph shows '${issue.name}' is used by ${dep.blast.affectedFiles.length} file(s).`,
+        );
+        if (sampleFiles) {
+          reasons.push(`Example consumers: ${sampleFiles}${dep.blast.affectedFiles.length > 4 ? ", …" : ""}`);
+        }
+        reasons.push("Not dead code — keep this export or refactor with care");
+        break;
+      }
+
       // Use cached future feature detection
       const futureFeatureCheck = await detectFutureFeatureWithCache(issue, ctx, cache);
       if (futureFeatureCheck.isFutureFeature) {
@@ -705,28 +828,32 @@ async function checkGitAvailable(projectPath: string): Promise<boolean> {
   }
 }
 
-async function checkGitFileStatus(
-  filePath: string,
-  ctx: VerificationContext,
-): Promise<GitFileStatus> {
-  if (!ctx.gitAvailable || !filePath) {
-    return { isNew: false, isModified: false };
-  }
-
+/**
+ * Batch git status for ALL files in a single git call.
+ * Replaces per-file `git status --porcelain <file>` which spawned 100+ processes.
+ */
+async function batchGitStatus(projectPath: string): Promise<Map<string, GitFileStatus>> {
+  const statusMap = new Map<string, GitFileStatus>();
   try {
     const { stdout } = await execAsync(
-      `git status --porcelain "${filePath}"`,
-      { cwd: ctx.projectPath }
+      "git status --porcelain",
+      { cwd: projectPath, maxBuffer: 10 * 1024 * 1024 }
     );
-    const result = stdout.trim();
-
-    const isNew = result.startsWith("??") || result.startsWith("A");
-    const isModified = result.includes("M") || result.startsWith(" M");
-
-    return { isNew, isModified };
+    for (const line of stdout.split("\n")) {
+      if (!line || line.length < 4) continue;
+      const statusCode = line.substring(0, 2);
+      const filePart = line.substring(3).trim();
+      if (!filePart) continue;
+      const absPath = path.isAbsolute(filePart) ? filePart : path.join(projectPath, filePart);
+      statusMap.set(absPath, {
+        isNew: statusCode === "??" || statusCode.startsWith("A"),
+        isModified: statusCode.includes("M"),
+      });
+    }
   } catch {
-    return { isNew: false, isModified: false };
+    // git not available or error — return empty map
   }
+  return statusMap;
 }
 
 async function checkFeatureBranch(ctx: VerificationContext): Promise<boolean> {
@@ -1045,12 +1172,49 @@ async function checkPackageExistsOnRegistry(pkgName: string, language: string): 
     if (commonScopes.includes(scope)) return true;
   }
 
-  return false;
+  // Fall back to real registry check (cached + fail-open on network errors)
+  return checkPackageRegistry(pkgName, language);
 }
 
 function extractPackageName(message: string): string {
   const match = message.match(/Package ['"]([^'"]+)['"]/);
   return match?.[1] || "";
+}
+
+/**
+ * Check if a package exists in any subdirectory's package.json.
+ * This catches cases where the main manifest loader missed subdirectory manifests
+ * (e.g., monorepo-style projects with frontend/package.json + backend/package.json).
+ */
+async function checkPackageInSubdirectoryManifest(
+  pkgName: string,
+  projectPath: string,
+): Promise<boolean> {
+  const COMMON_SUBDIRS = ["frontend", "backend", "client", "server", "app", "web", "api"];
+
+  for (const subdir of COMMON_SUBDIRS) {
+    const pkgJsonPath = path.join(projectPath, subdir, "package.json");
+    try {
+      const content = await fs.readFile(pkgJsonPath, "utf-8");
+      const pkg = JSON.parse(content);
+      const allDeps = {
+        ...pkg.dependencies,
+        ...pkg.devDependencies,
+        ...pkg.peerDependencies,
+      };
+      if (pkgName in allDeps) {
+        return true;
+      }
+      // Also check @types/ mapping
+      if (`@types/${pkgName}` in (pkg.devDependencies || {})) {
+        return true;
+      }
+    } catch {
+      // File doesn't exist or can't be parsed
+    }
+  }
+
+  return false;
 }
 
 async function verifyParameterCount(
@@ -1088,7 +1252,11 @@ async function checkImportUsage(
   if (!importName || !issue.file) return { isUsed: false };
 
   try {
-    const rawContent = await fs.readFile(issue.file, "utf-8");
+    let rawContent = ctx.fileContentCache.get(issue.file);
+    if (!rawContent) {
+      rawContent = await fs.readFile(issue.file, "utf-8");
+      ctx.fileContentCache.set(issue.file, rawContent);
+    }
     
     // Strip import lines, comment-only lines, and the definition line so they
     // don't count as "usage".
@@ -1201,10 +1369,20 @@ async function checkFileImports(
   const fileName = issue.name || issue.file;
 
   // 1. Check reverseImportGraph (resolved imports)
-  for (const [absPath, reverseList] of ctx.projectContext.reverseImportGraph) {
-    // Match by absolute path or by basename
-    if (absPath === fileName || absPath.endsWith(`/${fileName}`) || path.basename(absPath).replace(/\.[^.]+$/, "") === path.basename(fileName).replace(/\.[^.]+$/, "")) {
-      importers.push(...reverseList);
+  const reverseImportGraph: any = (ctx.projectContext as any).reverseImportGraph;
+  if (reverseImportGraph && typeof reverseImportGraph[Symbol.iterator] === "function") {
+    for (const [absPath, reverseList] of reverseImportGraph as Iterable<
+      [string, string[]]
+    >) {
+      // Match by absolute path or by basename
+      if (
+        absPath === fileName ||
+        absPath.endsWith(`/${fileName}`) ||
+        path.basename(absPath).replace(/\.[^.]+$/, "") ===
+          path.basename(fileName).replace(/\.[^.]+$/, "")
+      ) {
+        importers.push(...reverseList);
+      }
     }
   }
 
@@ -1214,7 +1392,12 @@ async function checkFileImports(
 
   // 2. Fallback: check raw import sources in context (catches unresolved imports)
   const baseName = path.basename(fileName).replace(/\.[^.]+$/, "");
-  for (const [filePath, fileInfo] of ctx.projectContext.files) {
+  const files: any = (ctx.projectContext as any).files;
+  if (!files || typeof files[Symbol.iterator] !== "function") {
+    return { isImported: false, importers: [] };
+  }
+
+  for (const [filePath, fileInfo] of files as Iterable<[string, any]>) {
     if (filePath === issue.file) continue;
     for (const imp of fileInfo.imports) {
       if (imp.source.includes(baseName)) {

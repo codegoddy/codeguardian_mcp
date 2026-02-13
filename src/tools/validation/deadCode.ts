@@ -29,6 +29,10 @@ import * as path from "path";
 import { minimatch as minimatchFunc } from "minimatch";
 const minimatch = minimatchFunc;
 
+// Import the AST-based unused locals detection
+import { detectUnusedLocals, detectUnusedLocalsAST } from "./unusedLocals.js";
+export { detectUnusedLocals, detectUnusedLocalsAST };
+
 // ============================================================================
 // Caches for Performance
 // ============================================================================
@@ -163,9 +167,13 @@ export async function isSymbolCalledOrInstantiated(
     }
   }
 
-  // Fallback: Selective AST analysis (for symbols not in graph or dynamic usages)
+  // Fallback: Selective file content check with regex pre-filter
+  // Instead of parsing full AST for up to 50 files per symbol (very expensive),
+  // use a fast regex pre-filter on cached file content to find candidate files,
+  // then only do AST analysis on files that actually contain the symbol name.
   let checkedFiles = 0;
   const MAX_FILES_TO_CHECK = 50; // Limit scope to prevent timeout
+  const symbolRegex = new RegExp(`\\b${escapeRegex(symbolName)}\\b`);
 
   for (const [filePath, fileInfo] of context.files) {
     if (checkedFiles >= MAX_FILES_TO_CHECK) break;
@@ -184,6 +192,10 @@ export async function isSymbolCalledOrInstantiated(
 
     checkedFiles++;
 
+    // Fast pre-filter: skip files that don't even contain the symbol name
+    if (!symbolRegex.test(content)) continue;
+
+    // Only parse AST for files that actually reference the symbol
     const lang =
       fileInfo.language === "javascript" ? "javascript" : "typescript";
     const imports = extractImportsAST(content, lang);
@@ -195,27 +207,22 @@ export async function isSymbolCalledOrInstantiated(
         // If symbol has a scope (e.g., it's a method of an object), 
         // verify that the usage is via that object
         if (symbolScope && usage.type === "methodCall" && usage.object) {
-          // Check if the usage object matches the symbol's scope
-          // e.g., paymentsApi.getPaymentMethods - usage.object is "paymentsApi"
-          // and symbolScope should also be "paymentsApi"
           if (usage.object === symbolScope) {
             return true;
           }
-          // Also check if the object is imported from the file where symbol is defined
-          // This handles cases where the object is imported with a different name
-          const fileInfo = context.files.get(filePath);
-          if (fileInfo) {
-            for (const imp of fileInfo.imports) {
-              // Check if this import resolves to the file containing the symbol
-              const { resolveImport } = await import("../../context/projectContext.js");
-              const resolvedPath = resolveImport(imp.source, filePath, Array.from(context.files.keys()));
+          // Check if the object is imported from the file where symbol is defined
+          const fi = context.files.get(filePath);
+          if (fi) {
+            const allFileKeys = Array.from(context.files.keys());
+            for (const imp of fi.imports) {
+              const resolvedPath = resolveImport(imp.source, filePath, allFileKeys);
               if (resolvedPath) {
-                // Find the file that defines this symbol with the given scope
-                for (const [defFilePath, defFileInfo] of context.files) {
+                const defFileInfo = context.files.get(resolvedPath);
+                if (defFileInfo) {
                   const matchingSymbol = defFileInfo.symbols.find(
                     s => s.name === symbolName && s.scope === symbolScope && s.exported
                   );
-                  if (matchingSymbol && defFilePath === resolvedPath) {
+                  if (matchingSymbol) {
                     return true;
                   }
                 }
@@ -228,7 +235,6 @@ export async function isSymbolCalledOrInstantiated(
         }
       }
       // Check for method calls on objects (e.g., api.symbolName())
-      // This is the original check for backward compatibility
       if (usage.type === "methodCall" && usage.name === symbolName && !symbolScope) {
         return true;
       }
@@ -288,10 +294,13 @@ export async function isSymbolUsedInSameFileExports(
     }
   }
 
-  // Check for member access patterns by reading file content on-demand
-  // This is only done when necessary (not pre-cached for all files)
+  // Check for member access patterns using cached file content
   try {
-    const content = await fs.readFile(definedInFile, "utf-8");
+    let content = fileContentCache.get(definedInFile);
+    if (!content) {
+      content = await fs.readFile(definedInFile, "utf-8");
+      fileContentCache.set(definedInFile, content);
+    }
     
     // Pattern 1: symbolName followed by a dot (member access via dot notation)
     // Pattern 2: symbolName followed by [ (member access via bracket notation)
@@ -389,88 +398,6 @@ async function isSymbolUsedAnywhere(
 
   symbolUsageCache.set(cacheKey, false);
   return false;
-}
-
-// ============================================================================
-// Per-File Unused Local Detection
-// ============================================================================
-
-/**
- * Detect unused local functions and constants within a single file.
- * Skips exported symbols (they may be used by other files).
- * Used by both autoValidator (perFileOnly mode) and validationJob (start_validation).
- */
-export function detectUnusedLocals(code: string, filePath: string): DeadCodeIssue[] {
-  const issues: DeadCodeIssue[] = [];
-  const lines = code.split("\n");
-
-  // Build a set of exported names so we can skip them
-  const exportedNames = new Set<string>();
-  const exportPatterns = [
-    /export\s+(?:default\s+)?function\s+([a-zA-Z0-9_$]+)/g,
-    /export\s+(?:default\s+)?class\s+([a-zA-Z0-9_$]+)/g,
-    /export\s+(?:const|let|var)\s+([a-zA-Z0-9_$]+)/g,
-    /export\s+\{([^}]+)\}/g,
-    // Python: top-level __all__ exports
-    /__all__\s*=\s*\[([^\]]+)\]/g,
-  ];
-  for (const pattern of exportPatterns) {
-    let match;
-    while ((match = pattern.exec(code)) !== null) {
-      const names = match[1].split(",").map(n => n.trim().replace(/\s+as\s+\w+/, "").replace(/['"]/g, ""));
-      for (const name of names) {
-        if (name) exportedNames.add(name);
-      }
-    }
-  }
-
-  // Find defined local symbols (functions and constants)
-  const definedSymbols: { name: string; type: "function" | "constant"; line: number }[] = [];
-  const defPatterns = [
-    { pattern: /function\s+([a-zA-Z0-9_$]+)\s*\(/g, type: "function" as const },
-    { pattern: /(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*(?:async\s*)?\(/g, type: "function" as const },
-    { pattern: /(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*.*=>/g, type: "function" as const },
-    { pattern: /(?:const|let|var)\s+([A-Z][A-Z0-9_$]{2,})\s*=/g, type: "constant" as const },
-    { pattern: /def\s+([a-zA-Z0-9_$]+)\s*\(/g, type: "function" as const },
-  ];
-
-  for (const { pattern, type } of defPatterns) {
-    let match;
-    while ((match = pattern.exec(code)) !== null) {
-      const name = match[1];
-      // Skip exported symbols — they may be used by other files
-      if (exportedNames.has(name)) continue;
-      // Skip common framework/lifecycle patterns
-      if (name.startsWith("use") || name === "default" || name === "constructor") continue;
-
-      // Find the line number
-      const offset = match.index;
-      let line = 1;
-      for (let i = 0; i < offset && i < code.length; i++) {
-        if (code[i] === "\n") line++;
-      }
-
-      definedSymbols.push({ name, type, line });
-    }
-  }
-
-  // Check each defined symbol for usage (more than just the definition)
-  for (const sym of definedSymbols) {
-    const escaped = sym.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const count = (code.match(new RegExp(`\\b${escaped}\\b`, "g")) || []).length;
-    if (count <= 1) {
-      issues.push({
-        type: sym.type === "function" ? "unusedFunction" : "unusedExport",
-        severity: "medium",
-        name: sym.name,
-        file: filePath,
-        line: sym.line,
-        message: `${sym.type === "function" ? "Function" : "Constant"} '${sym.name}' is defined but never used in this file`,
-      });
-    }
-  }
-
-  return issues;
 }
 
 // ============================================================================
@@ -915,6 +842,24 @@ export async function detectDeadCode(
             }
           }
         }
+      }
+
+      // Python-specific: Check if any file imports this module by name from the parent package.
+      // e.g., `from app.services import planning_service` resolves to __init__.py in the
+      // dependency graph, but actually means planning_service.py is being used.
+      if (context.language === "python") {
+        const moduleName = path.basename(filePath, ".py");
+        let isModuleImported = false;
+        for (const [, otherFileInfo] of context.files) {
+          for (const imp of otherFileInfo.imports) {
+            if (imp.namedImports.includes(moduleName)) {
+              isModuleImported = true;
+              break;
+            }
+          }
+          if (isModuleImported) break;
+        }
+        if (isModuleImported) continue;
       }
 
       // Double-check: are ANY of this file's exports used in OTHER files?

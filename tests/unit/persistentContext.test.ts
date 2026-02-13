@@ -9,6 +9,7 @@
 
 import * as fs from "fs/promises";
 import * as path from "path";
+import * as os from "os";
 import { serialize, deserialize } from "../../src/utils/serialization.js";
 import { 
   getProjectContext, 
@@ -16,11 +17,39 @@ import {
   ProjectContext
 } from "../../src/context/projectContext.js";
 import { logger } from "../../src/utils/logger.js";
+import { execFileSync } from "child_process";
 
 describe("Persistent Context Caching", () => {
-  const projectPath = process.cwd();
-  const cacheDir = path.join(projectPath, ".codeguardian");
-  const cacheFile = path.join(cacheDir, "context_cache.json");
+  let projectPath: string;
+  let cacheDir: string;
+  let cacheFile: string;
+
+  beforeAll(async () => {
+    projectPath = await fs.mkdtemp(
+      path.join(os.tmpdir(), "codeguardian-persistent-context-"),
+    );
+    await fs.mkdir(path.join(projectPath, "src"), { recursive: true });
+    await fs.writeFile(
+      path.join(projectPath, "package.json"),
+      JSON.stringify({ name: "test-project", version: "1.0.0" }),
+    );
+    await fs.writeFile(
+      path.join(projectPath, "src", "index.ts"),
+      "export const answer = 42;\n",
+    );
+    await fs.writeFile(path.join(projectPath, ".gitignore"), "node_modules/\n");
+
+    execFileSync("git", ["init", "-b", "main"], { cwd: projectPath });
+    execFileSync("git", ["config", "user.email", "test@example.com"], {
+      cwd: projectPath,
+    });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: projectPath });
+    execFileSync("git", ["add", "."], { cwd: projectPath });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: projectPath });
+
+    cacheDir = path.join(projectPath, ".codeguardian");
+    cacheFile = path.join(cacheDir, "context_cache.json");
+  });
 
   beforeEach(async () => {
     clearContextCache();
@@ -35,7 +64,7 @@ describe("Persistent Context Caching", () => {
   afterAll(async () => {
     // Final cleanup
     try {
-      await fs.rm(cacheDir, { recursive: true, force: true });
+      await fs.rm(projectPath, { recursive: true, force: true });
     } catch (err) {
       // Ignore
     }

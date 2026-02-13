@@ -1,5 +1,5 @@
 
-import { describe, it, expect, beforeAll } from '@jest/globals';
+import { describe, it, expect, beforeAll } from "vitest";
 import { extractSymbolsAST, extractUsagesAST, extractImportsAST } from '../../src/tools/validation/extractors/index.js';
 
 describe('False Positives Reproduction', () => {

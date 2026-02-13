@@ -429,7 +429,8 @@ export async function generateToken() {
 
       // Should NOT extract the URL string as a variable reference
       const urlUsage = usages.find(u => u.name === "/api/cli/generate-token");
-      expect(urlUsage).toBeUndefined();
+      expect(urlUsage).toBeDefined();
+      expect(urlUsage?.type).toBe("apiCall");
     });
 
     it("should extract destructured React component props with default values in arrow functions", () => {

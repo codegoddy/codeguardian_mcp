@@ -40,6 +40,11 @@ export async function orchestrateContext(options: {
   language: string;
   newCode?: string;
   imports?: string[];
+  useSmartContext?: boolean;
+  includeLineage?: boolean;
+  forceRebuild?: boolean;
+  includeTests?: boolean;
+  maxFiles?: number;
   sessionId?: string;
   currentFile?: string;
   recentlyEditedFiles?: string[];
@@ -50,6 +55,11 @@ export async function orchestrateContext(options: {
     language,
     newCode,
     imports = [],
+    useSmartContext = true,
+    includeLineage = false,
+    forceRebuild = false,
+    includeTests = true,
+    maxFiles,
     sessionId,
     currentFile,
     recentlyEditedFiles = [],
@@ -62,26 +72,13 @@ export async function orchestrateContext(options: {
   const contextStart = Date.now();
   const projectContext = await getProjectContext(projectPath, {
     language, // Use the requested language without overriding
-    forceRebuild: false,
+    forceRebuild,
+    includeTests,
+    ...(typeof maxFiles === "number" ? { maxFiles } : {}),
   });
   logger.debug(`Project context loaded in ${Date.now() - contextStart}ms`);
 
-  // 2. Get git lineage context (if available)
-  let lineageContext: LineageContext | null = null;
-  try {
-    lineageContext = await contextLineage.getLineageContext(projectPath, {
-      commitDepth: 20,
-    });
-    if (lineageContext) {
-      logger.debug(
-        `Git lineage: ${lineageContext.recentlyModifiedFiles.length} recent files, ${lineageContext.hotspotFiles.length} hotspots`,
-      );
-    }
-  } catch (error) {
-    logger.debug("Git lineage not available");
-  }
-
-  // 3. Get developer intent
+  // 2. Get developer intent
   const intent = intentTracker.getCurrentIntent();
   if (intent.recentFiles.length > 0) {
     logger.debug(
@@ -89,11 +86,31 @@ export async function orchestrateContext(options: {
     );
   }
 
-  // 4. Determine if we should use smart context
+  // 3. Determine if we should use smart context (cheap checks only)
   const shouldUseSmartContext =
+    useSmartContext &&
     projectContext.symbolGraph &&
     projectContext.symbolIndex.size > 100 &&
     (imports.length > 0 || intent.recentSymbols.size > 0);
+
+  // 4. Get git lineage context
+  let lineageContext: LineageContext | null = null;
+  // - for validate_code: only when smart context is enabled (performance)
+  // - for build_context: always when includeLineage is explicitly requested
+  if (includeLineage || shouldUseSmartContext) {
+    try {
+      lineageContext = await contextLineage.getLineageContext(projectPath, {
+        commitDepth: 20,
+      });
+      if (lineageContext) {
+        logger.debug(
+          `Git lineage: ${lineageContext.recentlyModifiedFiles.length} recent files, ${lineageContext.hotspotFiles.length} hotspots`,
+        );
+      }
+    } catch {
+      logger.debug("Git lineage not available");
+    }
+  }
 
   // 5. Get relevant symbols using all available context
   let relevantSymbols: string[] = [];
@@ -128,7 +145,9 @@ export async function orchestrateContext(options: {
     contextQuality = "fair";
     if (projectContext.symbolIndex.size > 100) {
       recommendations.push(
-        "Consider providing imports or using sessionId for better context",
+        useSmartContext
+          ? "Consider providing imports or using sessionId for better context"
+          : "Smart context disabled; running full-context validation",
       );
     }
   }

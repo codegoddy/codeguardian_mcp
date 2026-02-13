@@ -11,6 +11,13 @@ import * as path from "path";
 import { glob } from "glob";
 import { logger } from "../../utils/logger.js";
 import { getParser } from "../../tools/validation/parser.js";
+import {
+  extractEndpointFromArguments as extractEndpointFromArgumentsTS,
+  extractHttpMethodFromArguments as extractHttpMethodFromArgumentsTS,
+  findEnclosingFunctionName,
+  getNodeText,
+  mapToHttpMethod,
+} from "./tsAstUtils.js";
 import type {
   ServiceDefinition,
   TypeDefinition,
@@ -169,16 +176,27 @@ function extractServiceFromCall(
     const argumentsNode = node.childForFieldName("arguments");
     if (!argumentsNode) return null;
 
-    const endpoint = extractEndpointFromArguments(argumentsNode, content);
-    if (!endpoint) return null;
+    const extracted = extractEndpointFromArgumentsTS(argumentsNode, content);
+    if (!extracted) return null;
+    const endpoint = extracted.endpoint;
 
     // Try to find the enclosing function/method name
-    const enclosingFunction = findEnclosingFunction(node, content);
+    const enclosingFunction = findEnclosingFunctionName(node, content);
+
+    // Extract request/response types from the enclosing function/method
+    const { requestType, responseType } = extractTypesFromEnclosingFunction(
+      node,
+      content,
+      httpMethod,
+    );
 
     return {
       name: enclosingFunction || `${methodName}_${endpoint.replace(/[^a-zA-Z0-9]/g, "_")}`,
       method: httpMethod,
       endpoint,
+      requestType,
+      responseType,
+      queryParams: extracted.queryParams.length > 0 ? extracted.queryParams : undefined,
       file: filePath,
       line: node.startPosition.row + 1,
     };
@@ -197,19 +215,29 @@ function extractServiceFromCall(
     const argumentsNode = node.childForFieldName("arguments");
     if (!argumentsNode) return null;
 
-    const endpoint = extractEndpointFromArguments(argumentsNode, content);
-    if (!endpoint) return null;
+    const extracted = extractEndpointFromArgumentsTS(argumentsNode, content);
+    if (!extracted) return null;
+    const endpoint = extracted.endpoint;
 
     // Try to detect HTTP method from the options argument (e.g., { method: 'POST' })
-    const httpMethod = extractHttpMethodFromArguments(argumentsNode, content) || "GET";
+    const httpMethod = extractHttpMethodFromArgumentsTS(argumentsNode, content) || "GET";
 
     // Try to find the enclosing function/method name
-    const enclosingFunction = findEnclosingFunction(node, content);
+    const enclosingFunction = findEnclosingFunctionName(node, content);
+
+    const { requestType, responseType } = extractTypesFromEnclosingFunction(
+      node,
+      content,
+      httpMethod,
+    );
 
     return {
       name: enclosingFunction || `${funcName}_${endpoint.replace(/[^a-zA-Z0-9]/g, "_")}`,
       method: httpMethod,
       endpoint,
+      requestType,
+      responseType,
+      queryParams: extracted.queryParams.length > 0 ? extracted.queryParams : undefined,
       file: filePath,
       line: node.startPosition.row + 1,
     };
@@ -219,149 +247,202 @@ function extractServiceFromCall(
 }
 
 /**
- * Map method name to HTTP method
+ * Best-effort request/response type extraction.
+ *
+ * This is intentionally heuristic: callers use it to enrich API contract mappings,
+ * not as a compiler-grade typechecker.
  */
-function mapToHttpMethod(methodName: string): ServiceDefinition["method"] | null {
-  const methodMap: Record<string, ServiceDefinition["method"]> = {
-    get: "GET",
-    post: "POST",
-    put: "PUT",
-    patch: "PATCH",
-    delete: "DELETE",
-  };
-
-  return methodMap[methodName.toLowerCase()] || null;
-}
-
-/**
- * Extract endpoint URL from call arguments
- */
-function extractEndpointFromArguments(argumentsNode: any, content: string): string | null {
-  // First argument should be the endpoint
-  for (const child of argumentsNode.children || []) {
-    if (child.type === "string" || child.type === "template_string") {
-      return extractStringValue(child, content);
-    }
-  }
-  return null;
-}
-
-/**
- * Extract HTTP method from call arguments (for direct function calls).
- * Looks for patterns like: fetchApi(url, { method: 'POST', ... })
- */
-function extractHttpMethodFromArguments(
-  argumentsNode: any,
+function extractTypesFromEnclosingFunction(
+  node: any,
   content: string,
-): ServiceDefinition["method"] | null {
-  // Walk through arguments looking for an object with a "method" property
-  for (const child of argumentsNode.children || []) {
-    if (child.type === "object") {
-      return extractMethodFromObject(child, content);
-    }
-  }
-  return null;
-}
-
-/**
- * Extract the HTTP method from an object literal node (e.g., { method: 'POST' })
- */
-function extractMethodFromObject(node: any, content: string): ServiceDefinition["method"] | null {
-  for (const child of node.children || []) {
-    if (child.type === "pair") {
-      const keyNode = child.childForFieldName("key");
-      const valueNode = child.childForFieldName("value");
-      if (keyNode && valueNode) {
-        const key = getNodeText(keyNode, content);
-        if (key === "method") {
-          const value = getNodeText(valueNode, content).replace(/^["']|["']$/g, "");
-          return mapToHttpMethod(value.toLowerCase()) || null;
-        }
-      }
-    }
-  }
-  return null;
-}
-
-/**
- * Extract string value from string/template node.
- * For template strings, extracts the static base path before dynamic interpolation.
- * Handles patterns like:
- *   `/pantry${category ? '?cat=...' : ''}` → `/pantry`
- *   `/pantry/${id}` → `/pantry`
- *   `/recipes/${id}/match` → `/recipes` (first static segment)
- */
-function extractStringValue(node: any, content: string): string | null {
-  if (node.type === "string") {
-    const text = getNodeText(node, content);
-    // Remove quotes
-    return text.replace(/^["']|["']$/g, "");
-  }
-
-  if (node.type === "template_string") {
-    // For template strings like `/api/clients/${id}`, extract the base path
-    const text = getNodeText(node, content);
-
-    // Check if there's any interpolation
-    const match = text.match(/`([^$]*)\$\{/);
-    if (match) {
-      let basePath = match[1];
-      // Remove trailing slash (the slash before ${id})
-      basePath = basePath.replace(/\/$/, "");
-      // If basePath is empty (e.g., `${API_BASE}${endpoint}`), skip
-      if (!basePath || basePath === "/") return null;
-      return basePath;
-    }
-    // If no interpolation, just return the string content
-    return text.replace(/^`/, "").replace(/`$/, "");
-  }
-
-  return null;
-}
-
-/**
- * Find the enclosing function name for an API call
- */
-function findEnclosingFunction(node: any, content: string): string | null {
+  method: ServiceDefinition["method"],
+): { requestType?: string; responseType?: string } {
   let current = node;
+  const result: { requestType?: string; responseType?: string } = {};
 
   while (current) {
-    // Check for function declaration
-    if (current.type === "function_declaration") {
-      const nameNode = current.childForFieldName("name");
-      if (nameNode) {
-        return getNodeText(nameNode, content);
+    // Arrow function (common in React hooks/services)
+    if (current.type === "arrow_function") {
+      // Response type
+      const returnTypeNode = current.childForFieldName?.("return_type");
+      if (returnTypeNode) {
+        const returnTypeText = normalizeTypeText(getNodeText(returnTypeNode, content));
+        result.responseType = unwrapCommonGenerics(returnTypeText);
       }
+
+      // Request type (first non-primitive typed param on write methods)
+      if (method === "POST" || method === "PUT" || method === "PATCH") {
+        const parametersNode = current.childForFieldName?.("parameters");
+        if (parametersNode) {
+          const params = collectTypedParameters(parametersNode, content);
+          for (const p of params) {
+            if (p.type && !isPrimitiveType(p.type)) {
+              result.requestType = unwrapCommonGenerics(p.type);
+              break;
+            }
+          }
+        }
+      }
+
+      return result;
     }
 
-    // Check for arrow function in variable declaration
-    if (current.type === "variable_declarator") {
-      const nameNode = current.childForFieldName("name");
-      if (nameNode) {
-        return getNodeText(nameNode, content);
-      }
-    }
-
-    // Check for method definition
+    // Method definition (class services)
     if (current.type === "method_definition") {
-      const nameNode = current.childForFieldName("name");
-      if (nameNode) {
-        return getNodeText(nameNode, content);
+      const returnTypeNode = current.childForFieldName?.("return_type");
+      if (returnTypeNode) {
+        const returnTypeText = normalizeTypeText(getNodeText(returnTypeNode, content));
+        result.responseType = unwrapCommonGenerics(returnTypeText);
       }
+
+      if (method === "POST" || method === "PUT" || method === "PATCH") {
+        const parametersNode = current.childForFieldName?.("parameters");
+        if (parametersNode) {
+          const params = collectTypedParameters(parametersNode, content);
+          for (const p of params) {
+            if (p.type && !isPrimitiveType(p.type)) {
+              result.requestType = unwrapCommonGenerics(p.type);
+              break;
+            }
+          }
+        }
+      }
+
+      return result;
+    }
+
+    // Function declaration
+    if (current.type === "function_declaration") {
+      const returnTypeNode = current.childForFieldName?.("return_type");
+      if (returnTypeNode) {
+        const returnTypeText = normalizeTypeText(getNodeText(returnTypeNode, content));
+        result.responseType = unwrapCommonGenerics(returnTypeText);
+      }
+
+      if (method === "POST" || method === "PUT" || method === "PATCH") {
+        const parametersNode = current.childForFieldName?.("parameters");
+        if (parametersNode) {
+          const params = collectTypedParameters(parametersNode, content);
+          for (const p of params) {
+            if (p.type && !isPrimitiveType(p.type)) {
+              result.requestType = unwrapCommonGenerics(p.type);
+              break;
+            }
+          }
+        }
+      }
+
+      return result;
     }
 
     current = current.parent;
   }
 
-  return null;
+  return result;
 }
 
-/**
- * Get text content of a node
- */
-function getNodeText(node: any, content: string): string {
-  if (!node) return "";
-  return content.slice(node.startIndex, node.endIndex);
+function collectTypedParameters(
+  parametersNode: any,
+  content: string,
+): Array<{ name: string; type?: string }> {
+  const out: Array<{ name: string; type?: string }> = [];
+  for (const child of parametersNode.children || []) {
+    if (!child) continue;
+
+    // tree-sitter-typescript: required_parameter / optional_parameter / identifier
+    if (
+      child.type === "required_parameter" ||
+      child.type === "optional_parameter" ||
+      child.type === "identifier"
+    ) {
+      const nameNode = child.childForFieldName?.("name") || child;
+      const typeNode = child.childForFieldName?.("type");
+      const name = nameNode ? getNodeText(nameNode, content) : "";
+      const typeText = typeNode
+        ? normalizeTypeText(getNodeText(typeNode, content))
+        : undefined;
+      if (name) out.push({ name, type: typeText });
+    }
+  }
+  return out;
+}
+
+function normalizeTypeText(typeText: string): string {
+  return typeText.replace(/^\s*:\s*/, "").trim();
+}
+
+function unwrapCommonGenerics(typeText: string): string {
+  let t = typeText.trim();
+
+  // Strip trailing array syntax
+  while (t.endsWith("[]")) {
+    t = t.slice(0, -2).trim();
+  }
+
+  // Common wrappers
+  const wrappers = [
+    "Promise",
+    "AxiosResponse",
+    "ApiResponse",
+    "Response",
+    "Array",
+    "ReadonlyArray",
+  ];
+
+  for (let i = 0; i < 5; i++) {
+    const m = t.match(/^([A-Za-z0-9_$.]+)\s*<\s*(.+)\s*>$/);
+    if (!m) break;
+
+    const name = m[1];
+    const inner = m[2];
+    if (!wrappers.includes(name.split(".").pop() || name)) break;
+
+    t = inner.trim();
+  }
+
+  return t;
+}
+
+function isPrimitiveType(typeName: string): boolean {
+  const raw = typeName.trim();
+  if (!raw) return true;
+
+  // Literal types
+  if (/^['"`].*['"`]$/.test(raw)) return true;
+  if (/^[0-9]+(?:\.[0-9]+)?$/.test(raw)) return true;
+
+  // Union: only primitive if all parts are primitive
+  const unionParts = raw.split("|").map((p) => p.trim()).filter(Boolean);
+  if (unionParts.length > 1) {
+    return unionParts.every((p) => isPrimitiveType(p));
+  }
+
+  // Arrays / generics
+  const unwrapped = unwrapCommonGenerics(raw);
+  const base = unwrapped.replace(/\[\]$/g, "").trim();
+
+  const primitives = new Set([
+    "string",
+    "number",
+    "boolean",
+    "null",
+    "undefined",
+    "any",
+    "unknown",
+    "void",
+    "never",
+    "object",
+    "Record",
+  ]);
+
+  const lower = base.toLowerCase();
+  if (primitives.has(lower)) return true;
+
+  // Sometimes TS nodes preserve casing (Record/Promise)
+  const head = base.split(/[<\s]/)[0];
+  if (primitives.has(head) || primitives.has(head.toLowerCase())) return true;
+
+  return false;
 }
 
 // ============================================================================

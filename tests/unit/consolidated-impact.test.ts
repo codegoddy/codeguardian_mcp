@@ -12,14 +12,15 @@
 import { getDependencyGraphTool } from "../../src/tools/getDependencyGraph.js";
 import { getProjectContext } from "../../src/context/projectContext.js";
 import { impactAnalyzer } from "../../src/analyzers/impactAnalyzer.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the context and impact analyzer
-jest.mock("../../src/context/projectContext.js");
-jest.mock("../../src/analyzers/impactAnalyzer.js");
+vi.mock("../../src/context/projectContext.js");
+vi.mock("../../src/analyzers/impactAnalyzer.js");
 
 describe("Consolidated Impact Analysis (Secret #7)", () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   it("should return symbol impact when 'symbol' parameter is provided", async () => {
@@ -29,9 +30,9 @@ describe("Consolidated Impact Analysis (Secret #7)", () => {
       importGraph: new Map(),
       reverseImportGraph: new Map(),
     };
-    (getProjectContext as jest.Mock).mockResolvedValue(mockContext);
+    vi.mocked(getProjectContext).mockResolvedValue(mockContext as any);
     
-    (impactAnalyzer.traceBlastRadius as jest.Mock).mockReturnValue({
+    vi.mocked(impactAnalyzer.traceBlastRadius).mockReturnValue({
       target: "myFunc",
       severity: "low",
       impactedSymbols: [],
@@ -61,7 +62,7 @@ describe("Consolidated Impact Analysis (Secret #7)", () => {
       importGraph: new Map(),
       reverseImportGraph: new Map(),
     };
-    (getProjectContext as jest.Mock).mockResolvedValue(mockContext);
+    vi.mocked(getProjectContext).mockResolvedValue(mockContext as any);
     
     const mockImpact = {
       target: "myFunc",
@@ -69,8 +70,8 @@ describe("Consolidated Impact Analysis (Secret #7)", () => {
       impactedSymbols: [],
       affectedFiles: ["src/utils.ts"]
     };
-    (impactAnalyzer.traceBlastRadius as jest.Mock).mockReturnValue(mockImpact);
-    (impactAnalyzer.bundleAffectedSource as jest.Mock).mockResolvedValue("# AI Bundle Content");
+    vi.mocked(impactAnalyzer.traceBlastRadius).mockReturnValue(mockImpact);
+    vi.mocked(impactAnalyzer.bundleAffectedSource).mockResolvedValue("# AI Bundle Content");
 
     const result: any = await getDependencyGraphTool.handler({
       target: "src",
@@ -91,7 +92,7 @@ describe("Consolidated Impact Analysis (Secret #7)", () => {
       importGraph: new Map(),
       reverseImportGraph: new Map(),
     };
-    (getProjectContext as jest.Mock).mockResolvedValue(mockContext);
+    vi.mocked(getProjectContext).mockResolvedValue(mockContext as any);
     
     const mockHubs = [{
       symbol: "GlobalState",
@@ -100,7 +101,7 @@ describe("Consolidated Impact Analysis (Secret #7)", () => {
       dependentsCount: 50,
       description: "The Grand Central Terminal: 'GlobalState' is the project's brain."
     }];
-    (impactAnalyzer.getProjectHubs as jest.Mock).mockReturnValue(mockHubs);
+    vi.mocked(impactAnalyzer.getProjectHubs).mockReturnValue(mockHubs);
 
     const result: any = await getDependencyGraphTool.handler({
       target: "src",

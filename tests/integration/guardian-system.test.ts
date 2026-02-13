@@ -20,20 +20,29 @@ import {
   getGuardianAlertsTool,
 } from "../../src/agent/agentTools.js";
 import { setMCPServer } from "../../src/agent/mcpNotifications.js";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 // Mock MCP Server
 const mockMCPServer = {
-  notification: jest.fn(),
-  request: jest.fn(),
+  notification: vi.fn(),
+  request: vi.fn(),
 } as any;
 
 // Mock chokidar to avoid ESM issues and control events
-const mockWatcher = {
-  on: jest.fn().mockReturnThis(),
-  close: jest.fn(),
-  add: jest.fn(),
-  unwatch: jest.fn(),
-};
+const mockWatcher = vi.hoisted(() => ({
+  on: vi.fn().mockReturnThis(),
+  close: vi.fn(),
+  add: vi.fn(),
+  unwatch: vi.fn(),
+}));
 
 // Map to store event handlers registered by FileWatcher
 const watcherHandlers = new Map<string, Function>();
@@ -43,9 +52,10 @@ mockWatcher.on.mockImplementation((event: string, handler: Function) => {
   return mockWatcher;
 });
 
-jest.mock("chokidar", () => ({
-  watch: jest.fn(() => mockWatcher),
-}));
+vi.mock("chokidar", () => {
+  const watch = vi.fn(() => mockWatcher);
+  return { watch, default: { watch } } as any;
+});
 
 describe("Guardian System Integration", () => {
   let tempDir: string;

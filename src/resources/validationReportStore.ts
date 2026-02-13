@@ -71,10 +71,14 @@ class ValidationReportStore {
     this.initializePersistence().then(() => {
         // Start cleanup interval after initialization
         this.cleanupInterval = setInterval(() => this.cleanup(), 60 * 1000);
+        // Don't keep the process alive just for periodic cleanup
+        this.cleanupInterval.unref?.();
     }).catch((err) => {
         logger.error("Failed to initialize report store persistence:", err);
         // Still start cleanup even if persistence failed
         this.cleanupInterval = setInterval(() => this.cleanup(), 60 * 1000);
+        // Don't keep the process alive just for periodic cleanup
+        this.cleanupInterval.unref?.();
     });
   }
 

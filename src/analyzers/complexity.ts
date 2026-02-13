@@ -9,8 +9,7 @@
 
 import { Issue } from "../types/tools.js";
 import { logger } from "../utils/logger.js";
-import * as acorn from "acorn";
-import * as walk from "acorn-walk";
+import { getParser } from "../tools/validation/parser.js";
 
 /**
  * Analyze code complexity using AST
@@ -23,7 +22,10 @@ export async function analyzeComplexity(
 
   try {
     if (language === "javascript" || language === "typescript") {
-      return await analyzeJavaScriptComplexity(code);
+      return await analyzeJavaScriptComplexityAST(
+        code,
+        language as "javascript" | "typescript",
+      );
     } else if (language === "python") {
       return await analyzePythonComplexity(code);
     } else {
@@ -40,18 +42,18 @@ export async function analyzeComplexity(
 }
 
 /**
- * Analyze JavaScript/TypeScript complexity using Acorn AST
+ * Analyze JavaScript/TypeScript complexity using Tree-sitter AST.
  */
-async function analyzeJavaScriptComplexity(code: string): Promise<Issue[]> {
+async function analyzeJavaScriptComplexityAST(
+  code: string,
+  language: "javascript" | "typescript",
+): Promise<Issue[]> {
   const issues: Issue[] = [];
 
   try {
-    // Parse code into AST
-    const ast = acorn.parse(code, {
-      ecmaVersion: 2022,
-      sourceType: "module",
-      locations: true,
-    });
+    const parser = getParser(language);
+    const tree = parser.parse(code);
+    const root = tree.rootNode;
 
     // Track functions and their complexity
     const functions: Array<{
@@ -62,25 +64,141 @@ async function analyzeJavaScriptComplexity(code: string): Promise<Issue[]> {
       lineCount: number;
     }> = [];
 
-    // Walk the AST
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    walk.ancestor(ast as any, {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      FunctionDeclaration(node: any, ancestors: any[]) {
-        const funcInfo = analyzeFunctionNode(node, ancestors);
-        functions.push(funcInfo);
-      },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      FunctionExpression(node: any, ancestors: any[]) {
-        const funcInfo = analyzeFunctionNode(node, ancestors);
-        functions.push(funcInfo);
-      },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ArrowFunctionExpression(node: any, ancestors: any[]) {
-        const funcInfo = analyzeFunctionNode(node, ancestors);
-        functions.push(funcInfo);
-      },
-    });
+    const getText = (node: { startIndex: number; endIndex: number }) =>
+      code.substring(node.startIndex, node.endIndex);
+
+    const isFunctionLikeNode = (type: string) =>
+      type === "function_declaration" ||
+      type === "function" ||
+      type === "function_expression" ||
+      type === "arrow_function" ||
+      type === "method_definition";
+
+    const isNestedDefNode = (type: string) =>
+      isFunctionLikeNode(type) ||
+      type === "class_declaration" ||
+      type === "class";
+
+    const isBlockNestingNode = (type: string) =>
+      type === "if_statement" ||
+      type === "for_statement" ||
+      type === "for_in_statement" ||
+      type === "for_of_statement" ||
+      type === "while_statement" ||
+      type === "do_statement" ||
+      type === "switch_statement" ||
+      type === "try_statement" ||
+      type === "catch_clause";
+
+    const resolveFunctionName = (node: any): string => {
+      const nameNode = node.childForFieldName?.("name");
+      if (nameNode) return getText(nameNode);
+
+      if (node.type === "arrow_function") {
+        const parent = node.parent;
+
+        if (parent?.type === "variable_declarator") {
+          const n = parent.childForFieldName?.("name");
+          if (n) return getText(n);
+        }
+
+        if (parent?.type === "pair") {
+          const key = parent.childForFieldName?.("key");
+          if (key) return getText(key);
+        }
+
+        if (parent?.type === "assignment_expression") {
+          const left = parent.childForFieldName?.("left");
+          if (left?.type === "identifier") return getText(left);
+        }
+      }
+
+      return "anonymous";
+    };
+
+    const computeFunctionComplexity = (
+      bodyNode: any,
+      functionNodeId: number,
+    ): { complexity: number; nestingLevel: number } => {
+      let complexity = 1;
+      let maxNesting = 0;
+
+      const traverse = (node: any, nesting: number) => {
+        if (!node) return;
+
+        // Do not include nested defs in the parent function's complexity.
+        if (node.id !== functionNodeId && isNestedDefNode(node.type)) {
+          return;
+        }
+
+        switch (node.type) {
+          case "if_statement":
+            complexity++;
+            break;
+          case "for_statement":
+          case "for_in_statement":
+          case "for_of_statement":
+          case "while_statement":
+          case "do_statement":
+            complexity++;
+            break;
+          case "catch_clause":
+            complexity++;
+            break;
+          case "conditional_expression":
+          case "ternary_expression":
+            complexity++;
+            break;
+          case "switch_case":
+            complexity++;
+            break;
+          case "binary_expression":
+          case "logical_expression": {
+            for (const child of node.children || []) {
+              const t = child?.type;
+              if (t === "&&" || t === "||") complexity++;
+            }
+            break;
+          }
+        }
+
+        const nextNesting = isBlockNestingNode(node.type) ? nesting + 1 : nesting;
+        maxNesting = Math.max(maxNesting, nextNesting);
+
+        for (const child of node.children || []) {
+          traverse(child, nextNesting);
+        }
+      };
+
+      traverse(bodyNode, 0);
+      return { complexity, nestingLevel: maxNesting };
+    };
+
+    const collectFunctions = (node: any) => {
+      if (!node) return;
+
+      if (isFunctionLikeNode(node.type)) {
+        const bodyNode = node.childForFieldName?.("body");
+        const name = resolveFunctionName(node);
+        const line = node.startPosition?.row + 1 || 0;
+        const lineCount =
+          node.endPosition && node.startPosition
+            ? node.endPosition.row - node.startPosition.row + 1
+            : 0;
+
+        const { complexity, nestingLevel } = bodyNode
+          ? computeFunctionComplexity(bodyNode, node.id)
+          : { complexity: 1, nestingLevel: 0 };
+
+        functions.push({ name, line, complexity, nestingLevel, lineCount });
+      }
+
+      for (const child of node.children || []) {
+        collectFunctions(child);
+      }
+    };
+
+    collectFunctions(root);
 
     // Generate issues from function analysis
     for (const func of functions) {
@@ -131,203 +249,251 @@ async function analyzeJavaScriptComplexity(code: string): Promise<Issue[]> {
       }
     }
 
-    logger.debug(`Found ${issues.length} complexity issues (AST-based)`);
+    logger.debug(`Found ${issues.length} complexity issues (JS/TS AST-based)`);
   } catch (error) {
-    logger.error("Error parsing JavaScript AST:", error);
+    logger.error("Error parsing JavaScript/TypeScript Tree-sitter AST:", error);
   }
 
   return issues;
 }
 
 /**
- * Analyze a function node from AST
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function analyzeFunctionNode(
-  node: any,
-  _ancestors: any[],
-): {
-  name: string;
-  line: number;
-  complexity: number;
-  nestingLevel: number;
-  lineCount: number;
-} {
-  const name = node.id?.name || node.key?.name || "anonymous";
-  const line = node.loc?.start.line || 0;
-
-  // Calculate cyclomatic complexity
-  let complexity = 1; // Base complexity
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  walk.simple(node as acorn.Node, {
-    IfStatement() {
-      complexity++;
-    },
-    ConditionalExpression() {
-      complexity++;
-    },
-    ForStatement() {
-      complexity++;
-    },
-    ForInStatement() {
-      complexity++;
-    },
-    ForOfStatement() {
-      complexity++;
-    },
-    WhileStatement() {
-      complexity++;
-    },
-    DoWhileStatement() {
-      complexity++;
-    },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    SwitchCase(caseNode: any) {
-      if (caseNode.test) complexity++; // Don't count default case
-    },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    LogicalExpression(logicalNode: any) {
-      if (logicalNode.operator === "&&" || logicalNode.operator === "||") {
-        complexity++;
-      }
-    },
-    CatchClause() {
-      complexity++;
-    },
-  });
-
-  // Calculate maximum nesting level
-  const nestingLevel = calculateMaxNesting(node);
-
-  // Calculate line count
-  const lineCount = node.loc ? node.loc.end.line - node.loc.start.line + 1 : 0;
-
-  return { name, line, complexity, nestingLevel, lineCount };
-}
-
-/**
- * Calculate maximum nesting level in a node
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function calculateMaxNesting(node: any): number {
-  let maxNesting = 0;
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function traverse(n: any, currentLevel: number) {
-    maxNesting = Math.max(maxNesting, currentLevel);
-
-    // Increment level for nesting constructs
-    const nestingNodes = [
-      "IfStatement",
-      "ForStatement",
-      "ForInStatement",
-      "ForOfStatement",
-      "WhileStatement",
-      "DoWhileStatement",
-      "SwitchStatement",
-      "TryStatement",
-      "FunctionDeclaration",
-      "FunctionExpression",
-      "ArrowFunctionExpression",
-    ];
-
-    if (nestingNodes.includes(n.type)) {
-      currentLevel++;
-    }
-
-    // Traverse children
-    for (const key in n) {
-      if (key === "loc" || key === "range" || key === "start" || key === "end")
-        continue;
-
-      const child = n[key];
-      if (child && typeof child === "object") {
-        if (Array.isArray(child)) {
-          child.forEach((c) => {
-            if (c && typeof c === "object") traverse(c, currentLevel);
-          });
-        } else {
-          traverse(child, currentLevel);
-        }
-      }
-    }
-  }
-
-  traverse(node, 0);
-  return maxNesting;
-}
-
-/**
- * Analyze Python complexity (using external Python script)
+ * Analyze Python complexity using Tree-sitter AST.
  */
 async function analyzePythonComplexity(code: string): Promise<Issue[]> {
-  const issues: Issue[] = [];
-
   try {
-    // For Python, we'll use a simple heuristic-based approach
-    // since we can't easily parse Python AST in Node.js
-    // In production, you'd want to use a Python subprocess or service
+    return analyzePythonComplexityAST(code);
+  } catch (error) {
+    logger.error(
+      "Error analyzing Python complexity with Tree-sitter AST; falling back to heuristics:",
+      error,
+    );
+    return analyzePythonComplexityHeuristic(code);
+  }
+}
 
-    const functions = extractPythonFunctions(code);
+function analyzePythonComplexityAST(code: string): Issue[] {
+  const issues: Issue[] = [];
+  const parser = getParser("python");
+  const tree = parser.parse(code);
 
-    for (const func of functions) {
-      // Calculate complexity heuristically
-      const complexity = calculatePythonComplexity(func.body);
+  const functions: Array<{
+    name: string;
+    line: number;
+    complexity: number;
+    nestingLevel: number;
+    lineCount: number;
+  }> = [];
 
-      if (complexity > 10) {
-        issues.push({
-          type: "highComplexity",
-          severity: complexity > 20 ? "high" : "medium",
-          message: `Function '${func.name}' has high cyclomatic complexity (${complexity})`,
-          line: func.line,
-          column: 0,
-          code: func.signature,
-          suggestion: "Consider breaking this function into smaller functions",
-          autoFixable: false,
-          confidence: 85,
-        });
+  const root = tree.rootNode;
+
+  const getText = (node: { startIndex: number; endIndex: number }) =>
+    code.substring(node.startIndex, node.endIndex);
+
+  const isBlockNestingNode = (type: string) =>
+    type === "if_statement" ||
+    type === "for_statement" ||
+    type === "while_statement" ||
+    type === "try_statement" ||
+    type === "with_statement" ||
+    type === "match_statement";
+
+  const computeFunctionComplexity = (bodyNode: any, functionNodeId: number) => {
+    let complexity = 1;
+    let maxNesting = 0;
+
+    const traverse = (node: any, nesting: number) => {
+      if (!node) return;
+
+      // Do not include nested defs in the parent function's complexity.
+      if (
+        node.id !== functionNodeId &&
+        (node.type === "function_definition" || node.type === "class_definition")
+      ) {
+        return;
       }
 
-      // Check function length
-      const lineCount = func.body.split("\n").length;
-      if (lineCount > 50) {
-        issues.push({
-          type: "longFunction",
-          severity: "medium",
-          message: `Function '${func.name}' is too long (${lineCount} lines)`,
-          line: func.line,
-          column: 0,
-          code: func.signature,
-          suggestion: "Functions should typically be under 50 lines",
-          autoFixable: false,
-          confidence: 90,
-        });
+      // Decision points
+      switch (node.type) {
+        case "if_statement":
+          complexity++;
+          break;
+        case "elif_clause":
+          complexity++;
+          break;
+        case "for_statement":
+        case "while_statement":
+          complexity++;
+          break;
+        case "except_clause":
+          complexity++;
+          break;
+        case "conditional_expression":
+          complexity++;
+          break;
+        case "case_clause":
+          // Count each case as a decision point (similar to switch cases)
+          complexity++;
+          break;
+        case "boolean_operator": {
+          // Count boolean operator occurrences (and/or). Tree-sitter represents these as nodes.
+          // The operator itself is usually a child token.
+          for (const child of node.children || []) {
+            const t = child.type;
+            if (t === "and" || t === "or") complexity++;
+          }
+          break;
+        }
       }
 
-      // Check nesting level (count indentation in function body)
-      const maxNesting = calculatePythonNesting(func.body);
-      if (maxNesting > 4) {
-        issues.push({
-          type: "deepNesting",
-          severity: "medium",
-          message: `Function '${func.name}' has deep nesting (level ${maxNesting})`,
-          line: func.line,
-          column: 0,
-          code: func.signature,
-          suggestion:
-            "Consider extracting nested logic into separate functions or using early returns",
-          autoFixable: false,
-          confidence: 85,
-        });
+      const nextNesting = isBlockNestingNode(node.type) ? nesting + 1 : nesting;
+      maxNesting = Math.max(maxNesting, nextNesting);
+
+      for (const child of node.children || []) {
+        traverse(child, nextNesting);
       }
+    };
+
+    traverse(bodyNode, 0);
+    return { complexity, nestingLevel: maxNesting };
+  };
+
+  const collectFunctions = (node: any) => {
+    if (!node) return;
+
+    if (node.type === "function_definition") {
+      const nameNode = node.childForFieldName?.("name");
+      const bodyNode = node.childForFieldName?.("body");
+      const name = nameNode ? getText(nameNode) : "anonymous";
+      const line = node.startPosition?.row + 1 || 0;
+      const lineCount =
+        node.endPosition && node.startPosition
+          ? node.endPosition.row - node.startPosition.row + 1
+          : 0;
+
+      const { complexity, nestingLevel } = bodyNode
+        ? computeFunctionComplexity(bodyNode, node.id)
+        : { complexity: 1, nestingLevel: 0 };
+
+      functions.push({ name, line, complexity, nestingLevel, lineCount });
+
+      // Still recurse to find nested functions (each will be analyzed independently)
+      for (const child of node.children || []) {
+        collectFunctions(child);
+      }
+      return;
     }
 
-    logger.debug(`Found ${issues.length} complexity issues (Python heuristic)`);
-  } catch (error) {
-    logger.error("Error analyzing Python complexity:", error);
+    for (const child of node.children || []) {
+      collectFunctions(child);
+    }
+  };
+
+  collectFunctions(root);
+
+  for (const func of functions) {
+    if (func.complexity > 10) {
+      issues.push({
+        type: "highComplexity",
+        severity: func.complexity > 20 ? "high" : "medium",
+        message: `Function '${func.name}' has high cyclomatic complexity (${func.complexity})`,
+        line: func.line,
+        column: 0,
+        code: `def ${func.name}(...)`,
+        suggestion: "Consider breaking this function into smaller functions",
+        autoFixable: false,
+        confidence: 90,
+      });
+    }
+
+    if (func.lineCount > 50) {
+      issues.push({
+        type: "longFunction",
+        severity: "medium",
+        message: `Function '${func.name}' is too long (${func.lineCount} lines)`,
+        line: func.line,
+        column: 0,
+        code: `def ${func.name}(...)`,
+        suggestion: "Functions should typically be under 50 lines",
+        autoFixable: false,
+        confidence: 90,
+      });
+    }
+
+    if (func.nestingLevel > 4) {
+      issues.push({
+        type: "deepNesting",
+        severity: "medium",
+        message: `Function '${func.name}' has deep nesting (level ${func.nestingLevel})`,
+        line: func.line,
+        column: 0,
+        code: `def ${func.name}(...)`,
+        suggestion:
+          "Consider extracting nested logic into separate functions or using early returns",
+        autoFixable: false,
+        confidence: 85,
+      });
+    }
   }
 
+  logger.debug(`Found ${issues.length} complexity issues (Python AST-based)`);
+  return issues;
+}
+
+function analyzePythonComplexityHeuristic(code: string): Issue[] {
+  const issues: Issue[] = [];
+  const functions = extractPythonFunctions(code);
+
+  for (const func of functions) {
+    const complexity = calculatePythonComplexity(func.body);
+
+    if (complexity > 10) {
+      issues.push({
+        type: "highComplexity",
+        severity: complexity > 20 ? "high" : "medium",
+        message: `Function '${func.name}' has high cyclomatic complexity (${complexity})`,
+        line: func.line,
+        column: 0,
+        code: func.signature,
+        suggestion: "Consider breaking this function into smaller functions",
+        autoFixable: false,
+        confidence: 75,
+      });
+    }
+
+    const lineCount = func.body.split("\n").length;
+    if (lineCount > 50) {
+      issues.push({
+        type: "longFunction",
+        severity: "medium",
+        message: `Function '${func.name}' is too long (${lineCount} lines)`,
+        line: func.line,
+        column: 0,
+        code: func.signature,
+        suggestion: "Functions should typically be under 50 lines",
+        autoFixable: false,
+        confidence: 80,
+      });
+    }
+
+    const maxNesting = calculatePythonNesting(func.body);
+    if (maxNesting > 4) {
+      issues.push({
+        type: "deepNesting",
+        severity: "medium",
+        message: `Function '${func.name}' has deep nesting (level ${maxNesting})`,
+        line: func.line,
+        column: 0,
+        code: func.signature,
+        suggestion:
+          "Consider extracting nested logic into separate functions or using early returns",
+        autoFixable: false,
+        confidence: 75,
+      });
+    }
+  }
+
+  logger.debug(`Found ${issues.length} complexity issues (Python heuristic)`);
   return issues;
 }
 

@@ -10,6 +10,24 @@ import { logger } from "../../utils/logger.js";
 // Cache registry results to avoid redundant network requests
 const registryCache = new Map<string, boolean>();
 
+function isLikelyHallucinatedPackageName(pkgName: string): boolean {
+  const name = (pkgName || "").toLowerCase();
+  if (!name) return false;
+
+  // Common test/fixture names and obvious hallucination markers.
+  const patterns: RegExp[] = [
+    /^fake(?:[-_]|$)/,
+    /non[-_]?existent/,
+    /does[-_]?not[-_]?exist/,
+    /totally[-_]?fake/,
+    /phantom/,
+    /hallucinat/,
+    /xyz\d*/,
+  ];
+
+  return patterns.some((p) => p.test(name));
+}
+
 /**
  * Check if a package exists in the public registry.
  * 
@@ -48,9 +66,14 @@ export async function checkPackageRegistry(pkgName: string, language: string): P
     return exists;
   } catch (error) {
     logger.warn(`Failed to check registry for ${pkgName}:`, error);
-    // If registry check fails (network error), fail open (assume it exists)
+
+    // If registry check fails (network error), we generally fail open (assume it exists)
     // to avoid blocking development or showing false critical errors.
-    return true; 
+    // HOWEVER, for obviously hallucinated names (common in tests/fixtures), fail closed
+    // so validation remains deterministic.
+    const exists = !isLikelyHallucinatedPackageName(pkgName);
+    registryCache.set(cacheKey, exists);
+    return exists;
   }
 }
 

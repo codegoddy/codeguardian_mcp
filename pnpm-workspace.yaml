@@ -1,5 +1,6 @@
 onlyBuiltDependencies:
   - '@swc/core'
+  - esbuild
   - tree-sitter
   - tree-sitter-javascript
   - tree-sitter-python

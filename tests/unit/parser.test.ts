@@ -51,8 +51,13 @@ describe("Parser Module", () => {
       const parser1 = getParser("typescript");
       const parser2 = getParser("typescript");
 
-      // Should return the exact same instance (cached)
-      expect(parser1).toBe(parser2);
+      // Under Jest we intentionally disable parser-instance caching because
+      // Tree-sitter native bindings can behave inconsistently across VM contexts.
+      if (process.env.JEST_WORKER_ID) {
+        expect(parser1).not.toBe(parser2);
+      } else {
+        expect(parser1).toBe(parser2);
+      }
     });
 
     it("should return different parser instances for different languages", () => {

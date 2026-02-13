@@ -97,15 +97,17 @@ describe("Async Validation", () => {
     expect(complete).toBe(true);
 
     // Get results
-    const resultsResult = await getValidationResultsTool.handler({ jobId });
+    const resultsResult = await getValidationResultsTool.handler({
+      jobId,
+      summaryOnly: true,
+    });
     const resultsResponse = JSON.parse(resultsResult.content[0].text);
 
     expect(resultsResponse.success).toBe(true);
     expect(resultsResponse.exists).toBe(true);
     expect(resultsResponse.status).toBe("complete");
-    expect(resultsResponse.result).toBeDefined();
-    expect(resultsResponse.result.validated).toBe(true);
-    expect(resultsResponse.result.stats).toBeDefined();
+    expect(resultsResponse.summary).toBeDefined();
+    expect(resultsResponse.stats).toBeDefined();
   }, 60000); // 60 second timeout
 
   it("should handle non-existent job ID", async () => {

@@ -45,17 +45,32 @@ function scheduleAlertPersist(): void {
  */
 function handleAlert(alert: ValidationAlert): void {
   // Update state for this file
-  if (alert.issues.length === 0) {
+  if (alert.issues.length === 0 && !alert.isInitialScan) {
     // Clear issues for this file
     const hadIssues = fileAlerts.has(alert.file);
     fileAlerts.delete(alert.file);
     
+    // Also scrub initial scan alerts that referenced this file.
+    // Initial scans (INITIAL_FILE_SCAN, INITIAL_SCAN, API_CONTRACT_SCAN) store
+    // issues from startup. When a file is re-validated and passes clean,
+    // those stale initial issues should be removed.
+    const scrubbed = scrubInitialScanIssuesForFile(alert.file);
+    
     // Only log if we actually cleared something
-    if (hadIssues) {
-      logger.info(`Issues cleared for: ${alert.file}`);
+    if (hadIssues || scrubbed) {
+      logger.info(`Issues cleared for: ${alert.file}${scrubbed ? " (including initial scan issues)" : ""}`);
       scheduleAlertPersist();
     }
   } else {
+    // If this is an API_CONTRACT_SCAN update, replace the old one entirely.
+    // This handles re-validation of service/route files updating the contract scan.
+    if (alert.file === "API_CONTRACT_SCAN") {
+      fileAlerts.set(alert.file, alert);
+      logger.info(`API Contract scan updated: ${alert.issues.length} issues`);
+      scheduleAlertPersist();
+      return;
+    }
+
     // Store new issues for LLM to retrieve via get_guardian_alerts
     fileAlerts.set(alert.file, alert);
     logger.info(`Alert stored for: ${alert.file} (${alert.issues.length} issues) - use get_guardian_alerts to retrieve`);
@@ -67,6 +82,61 @@ function handleAlert(alert: ValidationAlert): void {
       logger.warn("Failed to send UI notification:", err);
     });
   }
+}
+
+/**
+ * When a file passes clean re-validation, scrub any matching issues from
+ * the initial scan alerts (INITIAL_FILE_SCAN, INITIAL_SCAN, API_CONTRACT_SCAN).
+ * These are snapshot alerts from startup that may reference files which have
+ * since been fixed.
+ *
+ * @returns true if any initial scan issues were removed
+ */
+function scrubInitialScanIssuesForFile(cleanFile: string): boolean {
+  let scrubbed = false;
+  const INITIAL_SCAN_KEYS = ["INITIAL_FILE_SCAN", "INITIAL_SCAN", "API_CONTRACT_SCAN"];
+
+  for (const key of INITIAL_SCAN_KEYS) {
+    const scanAlert = fileAlerts.get(key);
+    if (!scanAlert) continue;
+
+    const originalCount = scanAlert.issues.length;
+
+    // Remove issues that reference the now-clean file.
+    // Issues may have a `file` field (from the per-file scan) or the message
+    // may contain the file path. Check both.
+    // Normalize paths for comparison (strip leading ../ segments and path separators)
+    const normalizedClean = cleanFile.replace(/^(\.\.\/)+/, "").replace(/\\/g, "/");
+    scanAlert.issues = scanAlert.issues.filter((issue: any) => {
+      if (issue.file) {
+        const normalizedIssueFile = issue.file.replace(/^(\.\.\/)+/, "").replace(/\\/g, "/");
+        // Match by normalized paths (handles ../../ frontend/src/... vs frontend/src/...)
+        if (normalizedIssueFile === normalizedClean ||
+            normalizedIssueFile.endsWith(normalizedClean) ||
+            normalizedClean.endsWith(normalizedIssueFile)) {
+          return false;
+        }
+      }
+      // Check if the message references this file
+      if (issue.message && issue.message.includes(normalizedClean)) {
+        return false;
+      }
+      return true;
+    });
+
+    if (scanAlert.issues.length < originalCount) {
+      scrubbed = true;
+      logger.debug(`Scrubbed ${originalCount - scanAlert.issues.length} stale issues from ${key} for file: ${cleanFile}`);
+
+      // If no issues remain, remove the entire alert
+      if (scanAlert.issues.length === 0) {
+        fileAlerts.delete(key);
+        logger.debug(`Removed empty ${key} alert`);
+      }
+    }
+  }
+
+  return scrubbed;
 }
 
 export const startGuardianTool: ToolDefinition = {

@@ -141,10 +141,10 @@ describe("JavaScript Extractor", () => {
 
       extractJSUsages(tree.rootNode, code, usages, externalSymbols);
 
-      expect(usages).toHaveLength(1);
-      expect(usages[0].name).toBe("method");
-      expect(usages[0].type).toBe("methodCall");
-      expect(usages[0].object).toBe("obj");
+      const methodCall = usages.find((u) => u.type === "methodCall");
+      expect(methodCall).toBeDefined();
+      expect(methodCall?.name).toBe("method");
+      expect(methodCall?.object).toBe("obj");
     });
 
     it("should extract instantiations", () => {

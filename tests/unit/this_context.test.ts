@@ -3,11 +3,7 @@
 import { validateSymbols } from '../../src/tools/validation/validation';
 import { extractSymbolsAST } from '../../src/tools/validation/extractors/index';
 import { extractJSUsages } from '../../src/tools/validation/extractors/javascript';
-import Parser from 'tree-sitter';
-import JavaScript from 'tree-sitter-javascript';
-
-const parser = new Parser();
-parser.setLanguage(JavaScript as any);
+import { getParser } from '../../src/tools/validation/parser.js';
 
 describe('Lexical "this" Scope Resolution', () => {
   it('should not flag "this" as undefined in class methods', async () => {
@@ -31,7 +27,7 @@ describe('Lexical "this" Scope Resolution', () => {
     `;
 
     // Manually run the pipeline parts we need to test
-    const tree = parser.parse(code);
+    const tree = getParser('typescript').parse(code);
     const symbols = [];
     extractSymbolsAST(code, 'test.ts', 'typescript'); // We use this purely to mock project context if needed
     

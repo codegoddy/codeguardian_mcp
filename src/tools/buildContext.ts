@@ -84,6 +84,9 @@ export const buildContextTool: ToolDefinition = {
     const {
       projectPath,
       language = "all",
+      includeTests = true,
+      forceRebuild = false,
+      maxFiles = 1000,
     } = args;
 
     logger.info(`Building orchestrated context for: ${projectPath}`);
@@ -93,6 +96,12 @@ export const buildContextTool: ToolDefinition = {
       const orchestration: OrchestrationContext = await orchestrateContext({
         projectPath,
         language: language === "all" ? "typescript" : language, // Default to TS if all
+        // build_context is expected to include "Augment Secrets" like Git lineage
+        includeLineage: true,
+        // Respect tool args
+        forceRebuild,
+        includeTests,
+        maxFiles,
       });
       
       const context = orchestration.projectContext as ExtendedProjectContext;

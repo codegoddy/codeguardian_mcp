@@ -3,7 +3,7 @@
  * Tests the core validation logic directly
  */
 
-import { describe, it, expect } from "@jest/globals";
+import { describe, it, expect } from "vitest";
 import { extractImportsAST, extractUsagesAST, extractTypeReferencesAST } from "../src/tools/validation/extractors/index.js";
 import { validateSymbols } from "../src/tools/validation/validation.js";
 

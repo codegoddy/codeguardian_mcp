@@ -8,9 +8,32 @@ import {
   orchestrateContext,
   explainContextQuality,
 } from "../../src/context/contextOrchestrator.js";
+import * as fs from "fs/promises";
+import * as path from "path";
+import * as os from "os";
 
 describe("ContextOrchestrator", () => {
-  const projectPath = process.cwd();
+  let projectPath: string;
+
+  beforeAll(async () => {
+    projectPath = await fs.mkdtemp(
+      path.join(os.tmpdir(), "codeguardian-context-orchestrator-"),
+    );
+    await fs.mkdir(path.join(projectPath, "src"), { recursive: true });
+    await fs.writeFile(
+      path.join(projectPath, "package.json"),
+      JSON.stringify({ name: "test-project", version: "1.0.0" }),
+    );
+    await fs.writeFile(
+      path.join(projectPath, "src", "index.ts"),
+      "export const x = 1;\n",
+    );
+  });
+
+  afterAll(async () => {
+    if (!projectPath) return;
+    await fs.rm(projectPath, { recursive: true, force: true });
+  });
 
   it("should orchestrate context for validation", async () => {
     const result = await orchestrateContext({

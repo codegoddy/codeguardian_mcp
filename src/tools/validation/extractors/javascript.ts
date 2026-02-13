@@ -106,10 +106,14 @@ export function extractJSSymbols(
             else {
               const name = getText(nameNode, code);
 
-              // Check if it's an arrow function
+              // Check if it's a function-valued initializer
+              // Tree-sitter uses different node types across grammars:
+              // - JavaScript: `function` / `arrow_function`
+              // - Some contexts/grammars may surface `function_expression`
               if (
                 valueNode?.type === "arrow_function" ||
-                valueNode?.type === "function"
+                valueNode?.type === "function" ||
+                valueNode?.type === "function_expression"
               ) {
                 const paramsNode = valueNode.childForFieldName("parameters") || valueNode.childForFieldName("parameter");
                 const params = extractJSParams(
@@ -1005,21 +1009,17 @@ export function extractJSUsages(
                   (u) =>
                     u.name === url && u.line === node.startPosition.row + 1,
                 );
-                // NOTE: We intentionally do NOT add URLs as usages to validate.
-                // URLs are string literals, not variables. Adding them as "reference"
-                // type causes false positives (e.g., '/api/cli/generate-token' flagged
-                // as undefined variable). This code block is kept for potential future
-                // API endpoint validation but currently does nothing.
-                //
-                // if (!exists) {
-                //   usages.push({
-                //     name: url,
-                //     type: "apiCall", // Custom type - not validated as variable
-                //     line: node.startPosition.row + 1,
-                //     column: node.startPosition.column,
-                //     code: `API_CALL: ${url}`,
-                //   });
-                // }
+                // Record API endpoint usage for the Semantic Bridge / symbol graph.
+                // IMPORTANT: This is NOT validated as a variable (validateSymbols ignores apiCall).
+                if (!exists) {
+                  usages.push({
+                    name: url,
+                    type: "apiCall",
+                    line: node.startPosition.row + 1,
+                    column: node.startPosition.column,
+                    code: getLineText(code, node.startPosition.row),
+                  });
+                }
               }
             }
           }
@@ -1136,12 +1136,30 @@ export function extractJSUsages(
           break;
         }
         
-        // Detect store property access: state.hallucination
+        // Check if this member_expression is the function of a call_expression.
+        // If so, it's already handled by the call_expression case above (line ~892).
+        // If NOT, it's just property access (e.g., dashboard.projects, arr[0].name)
+        // which should NOT be flagged as a method call.
+        const memberParent = parent.parent;
+        const isCallTarget = memberParent?.type === "call_expression" &&
+          memberParent.childForFieldName("function")?.id === parent.id;
+        
+        if (isCallTarget) {
+          // Already handled by call_expression case — skip to avoid double-reporting
+          break;
+        }
+        
+        // This is pure property access (not a call), e.g.:
+        // - dashboard.projects (API response property)
+        // - updated[idx].deliverables (array element property)
+        // - integrations[0].provider (indexed property)
+        // Only track as methodCall if the object is a known project symbol
+        // (e.g., { queryFn: paymentsApi.getPaymentMethods } where paymentsApi is imported).
+        // Skip property access on local/dynamic variables to avoid FPs on API responses.
         if (objName === "state") {
           // We ALLOW this to be processed as a usage to catch hallucinations in stores
-        } else if (!isJSBuiltin(objName)) {
-          // Track method/property access on non-built-in objects
-          // This handles cases like: { queryFn: paymentsApi.getPaymentMethods }
+        } else if (!isJSBuiltin(objName) && externalSymbols.has(objName)) {
+          // Only track property access on imported/external symbols where we can validate
           usages.push({
             name: name,
             type: "methodCall",
@@ -1554,9 +1572,12 @@ export function extractJSImports(
 
   // Handle dynamic imports: await import('...')
   // These appear as call_expression with "import" as the function
+  // Also handle CommonJS requires: require('...')
   if (node.type === "call_expression") {
     const funcNode = node.childForFieldName("function");
-    if (funcNode && getText(funcNode, code) === "import") {
+    const funcName = funcNode ? getText(funcNode, code) : "";
+
+    if (funcName === "import") {
       const argsNode = node.childForFieldName("arguments");
       if (argsNode) {
         // Find the string argument
@@ -1617,6 +1638,78 @@ export function extractJSImports(
                 isExternal,
                 line: node.startPosition.row + 1,
               });
+            }
+          }
+        }
+      }
+    }
+
+    // CommonJS require('...')
+    if (funcNode?.type === "identifier" && funcName === "require") {
+      const argsNode = node.childForFieldName("arguments");
+      if (argsNode) {
+        const firstArg = argsNode.children.find(
+          (c) => c && (c.type === "string" || c.type === "template_string"),
+        );
+
+        if (firstArg) {
+          // Skip non-static template strings (require(`./${x}`))
+          if (
+            firstArg.type === "template_string" &&
+            firstArg.children.some((c) => c?.type === "template_substitution")
+          ) {
+            // ignore
+          } else {
+            const module = getText(firstArg, code).replace(/['"`]/g, "");
+            if (module) {
+              const line = node.startPosition.row + 1;
+              const exists = imports.some((i) => i.module === module && i.line === line);
+              if (!exists) {
+                const names: Array<{ imported: string; local: string }> = [];
+
+                // Infer imported names from the assignment pattern:
+                // const x = require('mod')
+                // const { a, b: c } = require('mod')
+                const parent = node.parent;
+                if (parent?.type === "variable_declarator") {
+                  const nameNode = parent.childForFieldName("name");
+                  if (nameNode?.type === "identifier") {
+                    names.push({ imported: "default", local: getText(nameNode, code) });
+                  } else if (nameNode?.type === "object_pattern") {
+                    for (const prop of nameNode.children) {
+                      if (prop?.type === "shorthand_property_identifier_pattern") {
+                        const name = getText(prop, code);
+                        names.push({ imported: name, local: name });
+                      } else if (prop?.type === "pair_pattern") {
+                        const keyNode = prop.childForFieldName("key");
+                        const valueNode = prop.childForFieldName("value");
+                        if (keyNode && valueNode) {
+                          names.push({
+                            imported: getText(keyNode, code),
+                            local: getText(valueNode, code),
+                          });
+                        }
+                      }
+                    }
+                  }
+                }
+
+                if (names.length === 0) {
+                  names.push({ imported: "*", local: "*" });
+                }
+
+                const isExternal =
+                  !module.startsWith(".") &&
+                  !module.startsWith("@/") &&
+                  !module.startsWith("~/");
+
+                imports.push({
+                  module,
+                  names,
+                  isExternal,
+                  line,
+                });
+              }
             }
           }
         }

@@ -16,6 +16,10 @@ import type {
   ModelField,
   BackendFramework,
 } from "../types.js";
+import {
+  extractPydanticModelsFromPythonAST,
+  extractRoutesFromPythonAST,
+} from "./pythonAstUtils.js";
 
 // ============================================================================
 // Route Extraction
@@ -111,6 +115,24 @@ export function extractRoutesFromFile(
   filePath: string,
   framework: BackendFramework,
 ): RouteDefinition[] {
+  // Prefer AST-based extraction for supported frameworks
+  try {
+    const astRoutes = extractRoutesFromPythonAST(content, filePath, framework);
+    if (astRoutes.length > 0) {
+      return astRoutes.map((r) => ({
+        method: r.method,
+        path: r.path,
+        handler: r.handler,
+        requestModel: r.requestModel,
+        responseModel: r.responseModel,
+        file: filePath,
+        line: r.line,
+      }));
+    }
+  } catch {
+    // Fall through to regex
+  }
+
   const routes: RouteDefinition[] = [];
   const lines = content.split("\n");
 
@@ -407,6 +429,27 @@ export function extractModelsFromFile(
   content: string,
   filePath: string,
 ): ModelDefinition[] {
+  // Prefer AST-based extraction
+  try {
+    const astModels = extractPydanticModelsFromPythonAST(content, filePath);
+    if (astModels.length > 0) {
+      return astModels.map((m) => ({
+        name: m.name,
+        fields: m.fields.map((f) => ({
+          name: f.name,
+          type: f.type,
+          required: f.required,
+          default: f.default,
+        })),
+        file: filePath,
+        line: m.line,
+        baseClasses: m.baseClasses,
+      }));
+    }
+  } catch {
+    // Fall through to regex
+  }
+
   const models: ModelDefinition[] = [];
   const lines = content.split("\n");
 

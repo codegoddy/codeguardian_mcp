@@ -21,34 +21,36 @@ import {
 import { buildContextTool } from "../../src/tools/buildContext.js";
 import { intentTracker } from "../../src/context/intentTracker.js";
 import { contextLineage } from "../../src/context/contextLineage.js";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock MCP Server
 const mockMCPServer = {
-  notification: jest.fn(),
-  request: jest.fn(),
+  notification: vi.fn(),
+  request: vi.fn(),
 } as any;
 
 // Mock chokidar
-const mockWatcher = {
-  on: jest.fn().mockReturnThis(),
-  close: jest.fn(),
-  add: jest.fn(),
-  unwatch: jest.fn(),
-};
-jest.mock("chokidar", () => ({
-  watch: jest.fn(() => mockWatcher),
+const mockWatcher = vi.hoisted(() => ({
+  on: vi.fn().mockReturnThis(),
+  close: vi.fn(),
+  add: vi.fn(),
+  unwatch: vi.fn(),
 }));
+vi.mock("chokidar", () => {
+  const watch = vi.fn(() => mockWatcher);
+  return { watch, default: { watch } } as any;
+});
 
 // Mock simple-git
-const mockGit = {
-  checkIsRepo: jest.fn().mockResolvedValue(true),
-  log: jest.fn(),
-  show: jest.fn(),
-  raw: jest.fn(),
-};
-jest.mock("simple-git", () => {
-  return jest.fn(() => mockGit);
-});
+const mockGit = vi.hoisted(() => ({
+  checkIsRepo: vi.fn().mockResolvedValue(true),
+  log: vi.fn(),
+  show: vi.fn(),
+  raw: vi.fn(),
+}));
+vi.mock("simple-git", () => ({
+  simpleGit: vi.fn(() => mockGit),
+}));
 
 describe("End-to-End Augmented Flow", () => {
   let tempDir: string;
@@ -71,7 +73,7 @@ describe("End-to-End Augmented Flow", () => {
   });
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     intentTracker.clear(); // Reset intent for each test
     contextLineage.clear();
   });

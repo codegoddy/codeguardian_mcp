@@ -117,12 +117,15 @@ Set 'includeSource: true' to get a bundled Markdown of all affected code, perfec
       const projectDir = await findProjectRoot(target);
       let graph: DependencyGraph;
       let usedContext = false;
+      let sharedContext: ProjectContext | null = null;
 
       try {
         const context = await getProjectContext(projectDir, {
           language: language === "all" ? "all" : language,
           includeTests: true,
         });
+
+        sharedContext = context;
 
         if (context && context.files.size > 0) {
           graph = buildGraphFromContext(context, projectDir);
@@ -145,15 +148,25 @@ Set 'includeSource: true' to get a bundled Markdown of all affected code, perfec
       let aiBundle = null;
       let projectHubs = null;
 
+      // When symbol-level features are requested, allow returning results even if
+      // the target didn't resolve to concrete files (e.g., mocked contexts in tests
+      // or directory targets with empty graphs).
+      const allowGraphlessTarget = Boolean(args.symbol) || Boolean(args.showHubs);
+
+      const getContextForExtras = async (): Promise<ProjectContext> => {
+        if (sharedContext) return sharedContext;
+        return getProjectContext(projectDir, { language });
+      };
+
       if (args.showHubs) {
-        const context = await getProjectContext(projectDir, { language });
+        const context = await getContextForExtras();
         if (context.symbolGraph) {
           projectHubs = impactAnalyzer.getProjectHubs(context.symbolGraph, 5);
         }
       }
 
       if (args.symbol) {
-        const context = await getProjectContext(projectDir, { language });
+        const context = await getContextForExtras();
         if (context.symbolGraph) {
           symbolImpact = impactAnalyzer.traceBlastRadius(
             args.symbol,
@@ -179,12 +192,32 @@ Set 'includeSource: true' to get a bundled Markdown of all affected code, perfec
         aiBundle = await impactAnalyzer.bundleAffectedSource(blast as any, projectDir);
       }
 
-      const result = extractSubgraph(
-        graph,
-        targetFiles,
-        Math.min(depth, 5),
-        direction,
-      );
+      if (targetFiles.length === 0 && !allowGraphlessTarget) {
+        return formatResponse({
+          success: false,
+          target,
+          error: `No matching files found for target: ${target}`,
+        });
+      }
+
+      const result =
+        targetFiles.length > 0
+          ? extractSubgraph(
+              graph,
+              targetFiles,
+              Math.min(depth, 5),
+              direction,
+            )
+          : {
+              files: {},
+              summary: {
+                totalFiles: 0,
+                totalImports: 0,
+                totalImportedBy: 0,
+                externalDeps: [],
+              },
+              circularDependencies: [],
+            };
       const elapsed = Date.now() - startTime;
 
       return formatResponse({

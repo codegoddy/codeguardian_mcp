@@ -5,85 +5,77 @@ import { ImpactAnalyzer } from "../../src/analyzers/impactAnalyzer.js";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
+import { describe, expect, test } from "vitest";
 
-async function testSemanticBridge() {
-  const tempDir = path.join(os.tmpdir(), "codeguardian-bridge-test");
-  await fs.mkdir(tempDir, { recursive: true });
-  
-  const srcDir = path.join(tempDir, "src");
-  await fs.mkdir(srcDir, { recursive: true });
+describe("Semantic Bridge", () => {
+  // This test builds a tiny mixed-language project and verifies that:
+  // 1) Python route symbols are indexed
+  // 2) The TS client calling that route is linked via the symbol graph
+  // 3) Blast radius includes the TS client file
+  test("should link backend route to frontend caller", async () => {
 
-  // 1. Create Python backend with a route
-  const pythonFile = path.join(srcDir, "api.py");
-  await fs.writeFile(pythonFile, `
+    const tempDir = path.join(os.tmpdir(), `codeguardian-bridge-test-${Date.now()}`);
+    const srcDir = path.join(tempDir, "src");
+
+    await fs.mkdir(srcDir, { recursive: true });
+
+    // 1) Create Python backend with a route
+    const pythonFile = path.join(srcDir, "api.py");
+    await fs.writeFile(
+      pythonFile,
+      `
 from flask import Flask
 app = Flask(__name__)
 
 @app.route("/api/user")
 def get_user():
     return {"id": 1, "name": "Vibe Hacker"}
-`);
+`,
+    );
 
-  // 2. Create TypeScript frontend that calls the route
-  const tsFile = path.join(srcDir, "Client.ts");
-  await fs.writeFile(tsFile, `
+    // 2) Create TypeScript frontend that calls the route
+    const tsFile = path.join(srcDir, "Client.ts");
+    await fs.writeFile(
+      tsFile,
+      `
 async function fetchData() {
     const res = await fetch("/api/user");
     const data = await res.json();
     return data;
 }
-`);
+`,
+    );
 
-  console.log("Fixtures created. Building context...");
+    try {
+      // 3) Build context
+      const context = await getProjectContext(tempDir, {
+        language: "all",
+        includeTests: false,
+        maxFiles: 100,
+      });
 
-  // 3. Build context
-  const context = await getProjectContext(tempDir, {
-    language: "all",
-    includeTests: false,
-    maxFiles: 100
-  });
+      // 4) Verify route symbol extraction
+      const hasRouteSymbol = context.symbolIndex.has("/api/user");
+      expect(hasRouteSymbol).toBe(true);
 
-  console.log(`Context built. Files: ${context.files.size}`);
-  
-  // 4. Verify route symbol extraction
-  const routeSymbols = Array.from(context.symbolIndex.keys()).filter(s => s === "/api/user");
-  console.log("Route symbols found:", routeSymbols);
+      // 5) Build symbol graph
+      context.symbolGraph = await buildSymbolGraph(context as any, {
+        includeCallRelationships: true,
+        includeCoOccurrence: false,
+      });
 
-  if (routeSymbols.length === 0) {
-    throw new Error("Route symbol '/api/user' not found in symbol index");
-  }
+      const relationships = context.symbolGraph.relationships.filter(
+        (r) => r.to === "/api/user",
+      );
+      expect(relationships.length).toBeGreaterThan(0);
 
-  // 5. Build symbol graph
-  context.symbolGraph = await buildSymbolGraph(context as any, {
-    includeCallRelationships: true,
-    includeCoOccurrence: false
-  });
-
-  const relationships = context.symbolGraph.relationships.filter(r => r.to === "/api/user");
-  console.log("Relationships to route:", relationships.map(r => `${r.from} -> ${r.to} (${r.reason})`));
-
-  if (relationships.length === 0) {
-    throw new Error("Semantic Bridge relationship not found in graph");
-  }
-
-  // 6. Trace blast radius
-  const analyzer = new ImpactAnalyzer();
-  const blast = analyzer.traceBlastRadius("/api/user", context.symbolGraph);
-  
-  console.log("Blast Radius for '/api/user':");
-  console.log(`Affected Files: ${blast.affectedFiles.join(", ")}`);
-  
-  if (!blast.affectedFiles.some(f => f.includes("Client.ts"))) {
-    throw new Error("Blast radius failed to trace from Python route to TS client");
-  }
-
-  console.log("SUCCESS: Semantic Bridge verified!");
-  
-  // Cleanup
-  await fs.rm(tempDir, { recursive: true });
-}
-
-testSemanticBridge().catch(err => {
-  console.error("FAILED:", err);
-  process.exit(1);
+      // 6) Trace blast radius
+      const analyzer = new ImpactAnalyzer();
+      const blast = analyzer.traceBlastRadius("/api/user", context.symbolGraph);
+      expect(blast.affectedFiles.some((f) => f.includes("Client.ts"))).toBe(true);
+    } finally {
+      // Cleanup
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 60000);
 });

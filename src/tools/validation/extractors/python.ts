@@ -197,35 +197,6 @@ export function collectPythonLocalDefinitions(
   if (!node) return;
 
   switch (node.type) {
-    // Local imports: `import concurrent.futures` inside a function defines `concurrent`
-    case "import_statement": {
-      const nameNode = node.childForFieldName("name");
-      if (nameNode) {
-        const module = getText(nameNode, code);
-        // `import concurrent.futures` makes `concurrent` available
-        const baseName = module.split(".")[0];
-        definitions.add(baseName);
-      }
-      break;
-    }
-    // Local from-imports: `from X import Y` inside a function defines `Y`
-    case "import_from_statement": {
-      for (const child of node.children) {
-        if (!child) continue;
-        if (child.type === "dotted_name" && child !== node.childForFieldName("module_name")) {
-          definitions.add(getText(child, code));
-        } else if (child.type === "aliased_import") {
-          const aliasNode = child.childForFieldName("alias");
-          const nameNode = child.childForFieldName("name");
-          if (aliasNode) {
-            definitions.add(getText(aliasNode, code));
-          } else if (nameNode) {
-            definitions.add(getText(nameNode, code));
-          }
-        }
-      }
-      break;
-    }
     case "identifier": {
       const name = getText(node, code);
       const parent = node.parent;
@@ -310,8 +281,17 @@ export function extractPythonUsages(
   usages: ASTUsage[],
   externalSymbols: Set<string>,
   localDefinitions?: Set<string>,
+  isRoot: boolean = true,
 ): void {
   if (!node) return;
+
+  // If localDefinitions weren't provided (direct extractor usage), collect them once.
+  // This mirrors the behavior of the unified extractor wrapper and prevents false
+  // positives for local variables (with-as targets, except-as targets, params, etc.).
+  if (isRoot && !localDefinitions) {
+    localDefinitions = new Set<string>();
+    collectPythonLocalDefinitions(node, code, localDefinitions);
+  }
 
   switch (node.type) {
     case "call": {
@@ -323,6 +303,10 @@ export function extractPythonUsages(
         if (funcNode.type === "identifier") {
           // Simple function call: func()
           const name = getText(funcNode, code);
+
+          if (isPythonBuiltin(name)) break;
+          if (localDefinitions?.has(name)) break;
+
           usages.push({
             name,
             type: "call",
@@ -352,6 +336,8 @@ export function extractPythonUsages(
                  objNode.namedChildren[0]?.type === "identifier");
 
               if (isSimpleObj) {
+                if (isPythonBuiltin(method)) break;
+
                 usages.push({
                   name: method,
                   type: "methodCall",
@@ -371,8 +357,24 @@ export function extractPythonUsages(
     case "identifier": {
       const name = getText(node, code);
 
+      // Builtins are skipped to reduce false positives, BUT imported names should still
+      // be allowed through so we can correctly track import usage (prevents unusedImport
+      // false positives for patterns like: `from x import settings; settings.env`).
+      if (isPythonBuiltin(name) && !externalSymbols.has(name)) break;
+
       const parent = node.parent;
       if (!parent) break;
+
+      // Skip decorator identifiers: @staticmethod, @app.route(...), etc.
+      // These frequently cause false positives when treated as normal references.
+      // Decorator metadata is captured separately via symbol extraction (see getDecorators).
+      let decoratorAncestor: Parser.SyntaxNode | null = parent;
+      while (decoratorAncestor) {
+        if (decoratorAncestor.type === "decorator") {
+          return;
+        }
+        decoratorAncestor = decoratorAncestor.parent;
+      }
 
       // Skip if it's an attribute name (obj.NAME) — handled by methodCall extraction
       if (parent.type === "attribute" && parent.childForFieldName("attribute")?.id === node.id) break;
@@ -412,10 +414,7 @@ export function extractPythonUsages(
       // Skip comprehension variables (x for x in items)
       if (parent.type === "for_in_clause" && parent.childForFieldName("left")?.id === node.id) break;
 
-      // Decorators: @contextmanager, @app.route("/"), etc.
-      // These ARE usages of the imported symbol, so we don't skip them.
-      // For simple decorators like @contextmanager, the identifier is direct child of decorator
-      // For complex ones like @app.route, the identifier is inside an attribute/call
+      // Decorators are intentionally skipped above.
 
       // Skip if it's the left side of an annotated assignment (x: int = 5)
       if (parent.type === "type" && parent.parent?.type === "assignment") break;
@@ -450,7 +449,7 @@ export function extractPythonUsages(
 
   for (const child of node.children) {
     if (child) {
-      extractPythonUsages(child, code, usages, externalSymbols, localDefinitions);
+      extractPythonUsages(child, code, usages, externalSymbols, localDefinitions, false);
     }
   }
 }

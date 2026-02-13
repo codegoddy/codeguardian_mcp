@@ -223,6 +223,7 @@ async function handleValidationJob(
 
   // Phase 4: Process files in batches
   const allIssues: ValidationIssue[] = [];
+  const perFileDeadCode: DeadCodeIssue[] = [];
   const batchCount = Math.ceil(sourceFiles.length / validBatchSize);
   let filesProcessed = 0;
 
@@ -257,11 +258,12 @@ async function handleValidationJob(
       projectContext,
     );
 
-    allIssues.push(...batchIssues);
+    allIssues.push(...batchIssues.issues);
+    perFileDeadCode.push(...batchIssues.deadCode);
     filesProcessed += batch.length;
 
     logger.info(
-      `Batch ${i + 1}/${batchCount} complete: ${batchIssues.length} issues found (${filesProcessed}/${sourceFiles.length} files)`,
+      `Batch ${i + 1}/${batchCount} complete: ${batchIssues.issues.length} issues, ${batchIssues.deadCode.length} dead code found (${filesProcessed}/${sourceFiles.length} files)`,
     );
 
     // Yield to event loop after each batch to allow MCP requests to be processed
@@ -287,13 +289,15 @@ async function handleValidationJob(
     }, DEAD_CODE_TIMEOUT);
   });
 
-  const deadCodeIssues = await Promise.race([deadCodePromise, timeoutPromise]);
+  const projectWideDeadCode = await Promise.race([deadCodePromise, timeoutPromise]);
+  // Merge project-wide dead code with per-file dead code (unused locals)
+  const deadCodeIssues = [...projectWideDeadCode, ...perFileDeadCode];
   const deadCodeTime = Date.now() - deadCodeStartTime;
 
   updateProgress({
     phase: "dead_code_detection",
     percent: 85,
-    message: `Dead code detection complete: ${deadCodeIssues.length} issues found`,
+    message: `Dead code detection complete: ${deadCodeIssues.length} issues found (${projectWideDeadCode.length} project-wide, ${perFileDeadCode.length} per-file)`,
     details: { deadCodeCount: deadCodeIssues.length },
   });
 
@@ -471,8 +475,9 @@ export async function processBatch(
   language: string,
   strictMode: boolean,
   context: any, // Added context
-): Promise<ValidationIssue[]> {
+): Promise<{ issues: ValidationIssue[]; deadCode: DeadCodeIssue[] }> {
   const batchIssues: ValidationIssue[] = [];
+  const batchDeadCode: DeadCodeIssue[] = [];
 
   for (let i = 0; i < files.length; i++) {
     const filePath = files[i];
@@ -521,19 +526,7 @@ export async function processBatch(
       // (e.g., `const GHOST_REGISTRY_ID = ...` or `function deprecatedAuditLog()`)
       // The project-wide detectDeadCode only checks exported symbols and orphaned files.
       const localDeadCode = detectUnusedLocals(content, filePath);
-      for (const issue of localDeadCode) {
-        batchIssues.push({
-          type: issue.type === "unusedFunction" ? "unusedImport" : "unusedImport",
-          severity: "warning",
-          message: issue.message,
-          line: issue.line || 0,
-          file: filePath,
-          code: issue.line ? (content.split("\n")[issue.line - 1] || "").trim() : "",
-          suggestion: `Remove the unused ${issue.type === "unusedFunction" ? "function" : "constant"}: ${issue.name}`,
-          confidence: 90,
-          reasoning: `${issue.name} is defined but never referenced anywhere else in the file.`,
-        });
-      }
+      batchDeadCode.push(...localDeadCode);
     } catch (error) {
       logger.warn(`Error processing file ${filePath}:`, error);
     }
@@ -544,7 +537,7 @@ export async function processBatch(
     }
   }
 
-  return batchIssues;
+  return { issues: batchIssues, deadCode: batchDeadCode };
 }
 
 async function getSourceFiles(

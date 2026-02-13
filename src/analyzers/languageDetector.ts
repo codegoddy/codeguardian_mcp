@@ -6,6 +6,7 @@
  */
 
 import { logger } from '../utils/logger.js';
+import { getParser } from "../tools/validation/parser.js";
 
 export interface LanguageDetectionResult {
   language: string;
@@ -190,6 +191,11 @@ export function detectFramework(code: string): { framework: string; language: st
  * Detect language from code content
  */
 export function detectFromContent(code: string): LanguageDetectionResult | null {
+  // Prefer AST-based detection for languages we can parse accurately.
+  // This reduces false positives from regex keyword matches in comments/strings.
+  const astDetected = detectFromContentAST(code);
+  if (astDetected) return astDetected;
+
   const scores: Record<string, number> = {};
   
   // Count keyword matches for each language
@@ -230,6 +236,169 @@ export function detectFromContent(code: string): LanguageDetectionResult | null 
   }
   
   return null;
+}
+
+// ==========================================================================
+// AST-based detection (Tree-sitter)
+// ==========================================================================
+
+type ASTDetectLang = "typescript" | "javascript" | "python";
+
+/**
+ * Detect language from code content using Tree-sitter.
+ *
+ * Only runs for languages supported by the validation parser cache.
+ */
+function detectFromContentAST(code: string): LanguageDetectionResult | null {
+  const candidates: ASTDetectLang[] = ["typescript", "javascript", "python"];
+  const results = candidates.map((language) => {
+    const r = scoreTreeSitterParse(code, language);
+    return { language, ...r };
+  });
+
+  // Choose the best by totalScore; break ties with fewer errors.
+  results.sort((a, b) => {
+    if (b.totalScore !== a.totalScore) return b.totalScore - a.totalScore;
+    return a.errorCount - b.errorCount;
+  });
+
+  const best = results[0];
+  const second = results[1];
+
+  // If parsing was too error-heavy, don't trust the AST signal.
+  if (!best || best.totalScore <= 0) return null;
+
+  // If JS and TS are close, prefer TS only when TS-specific nodes exist.
+  let detectedLanguage: string = best.language;
+  if (
+    (best.language === "typescript" || best.language === "javascript") &&
+    second &&
+    (second.language === "typescript" || second.language === "javascript")
+  ) {
+    const ts = results.find((r) => r.language === "typescript");
+    const js = results.find((r) => r.language === "javascript");
+    if (ts && js) {
+      const close = Math.abs(ts.totalScore - js.totalScore) <= 5;
+      if (close) {
+        detectedLanguage = ts.tsSpecificCount > 0 ? "typescript" : "javascript";
+      }
+    }
+  }
+
+  const margin = second ? best.totalScore - second.totalScore : best.totalScore;
+  const confidence = Math.max(60, Math.min(90, 60 + margin * 3));
+
+  logger.debug(
+    `Detected ${detectedLanguage} from AST content scoring (score=${best.totalScore}, errors=${best.errorCount})`,
+  );
+
+  return {
+    language: detectedLanguage,
+    confidence,
+    method: "content",
+  };
+}
+
+function scoreTreeSitterParse(
+  code: string,
+  language: ASTDetectLang,
+): {
+  totalScore: number;
+  errorCount: number;
+  featureScore: number;
+  tsSpecificCount: number;
+} {
+  const parser = getParser(language);
+  const tree = parser.parse(code);
+
+  // Node-type weights: boost syntax constructs that are strong signals.
+  const WEIGHTS: Record<ASTDetectLang, Record<string, number>> = {
+    javascript: {
+      import_statement: 3,
+      export_statement: 3,
+      require: 2,
+      function_declaration: 4,
+      arrow_function: 4,
+      class_declaration: 4,
+      method_definition: 2,
+      jsx_element: 2,
+      jsx_self_closing_element: 2,
+    },
+    typescript: {
+      // Shared JS signals
+      import_statement: 3,
+      export_statement: 3,
+      function_declaration: 4,
+      arrow_function: 4,
+      class_declaration: 4,
+      method_definition: 2,
+      jsx_element: 2,
+      jsx_self_closing_element: 2,
+
+      // TS-strong signals
+      interface_declaration: 8,
+      type_alias_declaration: 7,
+      enum_declaration: 7,
+      type_annotation: 5,
+      return_type: 4,
+      implements_clause: 4,
+      extends_clause: 2,
+      generic_type: 2,
+      type_arguments: 2,
+      type_parameter: 2,
+    },
+    python: {
+      import_statement: 4,
+      import_from_statement: 4,
+      function_definition: 6,
+      class_definition: 6,
+      decorated_definition: 3,
+      decorator: 3,
+      with_statement: 2,
+      try_statement: 2,
+      except_clause: 2,
+      await: 2,
+    },
+  };
+
+  let errorCount = 0;
+  let featureScore = 0;
+  let tsSpecificCount = 0;
+
+  const weightMap = WEIGHTS[language];
+  const TS_SPECIFIC = new Set([
+    "interface_declaration",
+    "type_alias_declaration",
+    "enum_declaration",
+    "type_annotation",
+    "return_type",
+    "implements_clause",
+    "type_arguments",
+    "type_parameter",
+  ]);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const visit = (node: any) => {
+    if (!node) return;
+    if (node.type === "ERROR") errorCount++;
+    const w = weightMap[node.type];
+    if (w) {
+      featureScore += w;
+      if (language === "typescript" && TS_SPECIFIC.has(node.type)) {
+        tsSpecificCount++;
+      }
+    }
+    for (const child of node.children || []) {
+      visit(child);
+    }
+  };
+
+  visit(tree.rootNode);
+
+  // Penalize parse errors heavily; favor high-signal nodes.
+  const totalScore = featureScore - errorCount * 5;
+
+  return { totalScore, errorCount, featureScore, tsSpecificCount };
 }
 
 /**

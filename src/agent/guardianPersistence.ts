@@ -49,6 +49,7 @@ export interface PersistedAlert {
     message: string;
     suggestion?: string;
     line?: number;
+    file?: string; // Source file path (for initial scan issues, used to scrub stale alerts)
   }>;
   timestamp: number;
   llmMessage: string;

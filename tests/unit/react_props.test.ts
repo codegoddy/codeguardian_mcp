@@ -1,11 +1,7 @@
 
 import { validateSymbols } from '../../src/tools/validation/validation';
 import { extractJSUsages, extractJSSymbols, extractJSParams } from '../../src/tools/validation/extractors/javascript';
-import Parser from 'tree-sitter';
-import JavaScript from 'tree-sitter-javascript';
-
-const parser = new Parser();
-parser.setLanguage(JavaScript as any);
+import { getParser } from '../../src/tools/validation/parser.js';
 
 describe('React Component Prop Resolution', () => {
     
@@ -16,7 +12,7 @@ describe('React Component Prop Resolution', () => {
       }
     `;
 
-    const tree = parser.parse(code);
+    const tree = getParser('typescript').parse(code);
     const symbols: any[] = [];
     
     // We need to verify that extractJSSymbols (which calls extractJSParams) correctly finds 'isLoading' and 'onRetry'
@@ -42,7 +38,7 @@ describe('React Component Prop Resolution', () => {
             console.log(name, email, theme);
         };
     `;
-    const tree = parser.parse(code);
+    const tree = getParser('typescript').parse(code);
     const symbols: any[] = [];
     extractJSSymbols(tree.rootNode, code, 'test.tsx', symbols, null);
 

@@ -386,131 +386,187 @@ export async function loadManifestDependencies(
 
 /**
  * Load dependencies from package.json
- * Searches up the directory tree if not found in projectPath
+ * First checks at projectPath, then searches common subdirectories
+ * (frontend/, backend/, client/, server/, packages/&ast;/) for monorepo-style projects.
+ * Does NOT traverse UP from projectPath to avoid loading an unrelated parent package.json.
  */
 export async function loadPackageJson(
   projectPath: string,
   result: ManifestDependencies,
 ): Promise<void> {
   try {
-    // Try to find package.json starting at projectPath and going up
-    let currentPath = projectPath;
-    let pkgPath = path.join(currentPath, "package.json");
-    let found = false;
-    let depth = 0;
-    const MAX_DEPTH = 5; // Don't traverse too far
+    // Step 1: Check for package.json directly at projectPath
+    const rootPkgPath = path.join(projectPath, "package.json");
+    let foundPaths: string[] = [];
 
-    while (depth < MAX_DEPTH) {
-      try {
-        await fs.access(pkgPath);
-        found = true;
-        break;
-      } catch {
-        // Not found, go up
-        const parent = path.dirname(currentPath);
-        if (parent === currentPath) break; // Reached root
-        currentPath = parent;
-        pkgPath = path.join(currentPath, "package.json");
-        depth++;
-      }
+    try {
+      await fs.access(rootPkgPath);
+      foundPaths.push(rootPkgPath);
+    } catch {
+      // Not found at root
     }
 
-    // Also try to find pnpm-workspace.yaml or lerna.json to identify monorepo root
-    // This helps in finding dependencies that might be hoisted or in the root
-    if (depth < MAX_DEPTH) {
-      try {
-        const pnpmWorkspace = path.join(currentPath, "pnpm-workspace.yaml");
-        await fs.access(pnpmWorkspace);
-        logger.debug(`Found pnpm-workspace.yaml at ${currentPath}`);
-        // If we found a workspace, we should probably also look at the root package.json
-        // if we haven't already (though the loop above likely found it)
-      } catch {
+    // Step 2: If no root package.json, search common subdirectories
+    // This handles monorepo-style projects (e.g., frontend/package.json + backend/package.json)
+    if (foundPaths.length === 0) {
+      const COMMON_SUBDIRS = ["frontend", "backend", "client", "server", "app", "web", "api"];
+
+      for (const subdir of COMMON_SUBDIRS) {
+        const subPkgPath = path.join(projectPath, subdir, "package.json");
         try {
-          const lernaJson = path.join(currentPath, "lerna.json");
-          await fs.access(lernaJson);
-          logger.debug(`Found lerna.json at ${currentPath}`);
+          await fs.access(subPkgPath);
+          foundPaths.push(subPkgPath);
         } catch {
-          // No workspace config found
+          // Not found
         }
       }
+
+      // Also check packages/* for monorepo workspaces
+      try {
+        const packagesDir = path.join(projectPath, "packages");
+        const entries = await fs.readdir(packagesDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isDirectory()) {
+            const subPkgPath = path.join(packagesDir, entry.name, "package.json");
+            try {
+              await fs.access(subPkgPath);
+              foundPaths.push(subPkgPath);
+            } catch {
+              // Not found
+            }
+          }
+        }
+      } catch {
+        // packages/ directory doesn't exist
+      }
     }
 
-    if (!found) {
-      logger.debug(`No package.json found at or above ${projectPath}`);
+    if (foundPaths.length === 0) {
+      logger.debug(`No package.json found at ${projectPath} or in common subdirectories`);
       return;
     }
 
-    const content = await fs.readFile(pkgPath, "utf-8");
-    const pkg = JSON.parse(content);
-
-    // Add dependencies
-    if (pkg.dependencies) {
-      for (const dep of Object.keys(pkg.dependencies)) {
-        result.dependencies.add(dep);
-        result.all.add(dep);
-        // Also add scoped package base (e.g., @tanstack/react-query -> @tanstack)
-        if (dep.startsWith("@")) {
-          const scope = dep.split("/")[0];
-          result.all.add(scope);
-        }
+    // Step 3: Load and merge dependencies from all found package.json files
+    for (const pkgPath of foundPaths) {
+      try {
+        await loadSinglePackageJson(pkgPath, result);
+      } catch (err) {
+        logger.debug(`Error loading package.json at ${pkgPath}: ${err}`);
       }
     }
 
-    // Add devDependencies
-    if (pkg.devDependencies) {
-      for (const dep of Object.keys(pkg.devDependencies)) {
-        result.devDependencies.add(dep);
-        result.all.add(dep);
-        
-        // SUPPORT @types PACKAGES:
-        // If "import foo" is used, but only "@types/foo" is installed, we should count it as valid.
-        // This happens often in TS projects where the runtime might be global or implied.
-        if (dep.startsWith("@types/")) {
-          const realPackage = dep.replace("@types/", "");
-          result.all.add(realPackage);
-          
-          // Handle scoped types: @types/babel__core -> @babel/core
-          if (realPackage.includes("__")) {
-             const [scope, name] = realPackage.split("__");
-             if (scope && name) {
-               result.all.add(`@${scope}/${name}`);
-             }
-          }
-        }
-
-        if (dep.startsWith("@")) {
-          const scope = dep.split("/")[0];
-          result.all.add(scope);
-        }
-      }
-    }
-
-    // Add peerDependencies
-    if (pkg.peerDependencies) {
-      for (const dep of Object.keys(pkg.peerDependencies)) {
-        result.all.add(dep);
-      }
-    }
-
-    logger.debug(`Loaded ${result.all.size} packages from package.json at ${pkgPath}`);
+    logger.debug(`Loaded ${result.all.size} total packages from ${foundPaths.length} package.json file(s)`);
   } catch (err) {
     logger.debug(`Error loading package.json: ${err}`);
   }
 }
 
 /**
+ * Load dependencies from a single package.json file into the result
+ */
+async function loadSinglePackageJson(
+  pkgPath: string,
+  result: ManifestDependencies,
+): Promise<void> {
+  const content = await fs.readFile(pkgPath, "utf-8");
+  const pkg = JSON.parse(content);
+
+  // Add dependencies
+  if (pkg.dependencies) {
+    for (const dep of Object.keys(pkg.dependencies)) {
+      result.dependencies.add(dep);
+      result.all.add(dep);
+      // Also add scoped package base (e.g., @tanstack/react-query -> @tanstack)
+      if (dep.startsWith("@")) {
+        const scope = dep.split("/")[0];
+        result.all.add(scope);
+      }
+    }
+  }
+
+  // Add devDependencies
+  if (pkg.devDependencies) {
+    for (const dep of Object.keys(pkg.devDependencies)) {
+      result.devDependencies.add(dep);
+      result.all.add(dep);
+      
+      // SUPPORT @types PACKAGES:
+      // If "import foo" is used, but only "@types/foo" is installed, we should count it as valid.
+      // This happens often in TS projects where the runtime might be global or implied.
+      if (dep.startsWith("@types/")) {
+        const realPackage = dep.replace("@types/", "");
+        result.all.add(realPackage);
+        
+        // Handle scoped types: @types/babel__core -> @babel/core
+        if (realPackage.includes("__")) {
+           const [scope, name] = realPackage.split("__");
+           if (scope && name) {
+             result.all.add(`@${scope}/${name}`);
+           }
+        }
+      }
+
+      if (dep.startsWith("@")) {
+        const scope = dep.split("/")[0];
+        result.all.add(scope);
+      }
+    }
+  }
+
+  // Add peerDependencies
+  if (pkg.peerDependencies) {
+    for (const dep of Object.keys(pkg.peerDependencies)) {
+      result.all.add(dep);
+    }
+  }
+
+  logger.debug(`Loaded packages from ${pkgPath}`);
+}
+
+/**
  * Load Python dependencies from requirements.txt and pyproject.toml
- * Uses proper TOML parsing for pyproject.toml
+ * Uses proper TOML parsing for pyproject.toml.
+ * Searches common subdirectories if not found at root (like loadPackageJson).
  */
 export async function loadPythonDependencies(
   projectPath: string,
   result: ManifestDependencies,
 ): Promise<void> {
-  // Load requirements.txt
-  await loadRequirementsTxt(projectPath, result);
+  // Collect paths to search: root first, then common subdirectories
+  const searchPaths = [projectPath];
+  const COMMON_SUBDIRS = ["backend", "server", "api", "app", "src"];
 
-  // Load pyproject.toml with proper TOML parsing
-  await loadPyprojectToml(projectPath, result);
+  // Check if root has any Python manifest; if not, search subdirectories
+  let hasRootManifest = false;
+  for (const manifest of ["requirements.txt", "pyproject.toml", "Pipfile"]) {
+    try {
+      await fs.access(path.join(projectPath, manifest));
+      hasRootManifest = true;
+      break;
+    } catch {
+      // Not found
+    }
+  }
+
+  if (!hasRootManifest) {
+    for (const subdir of COMMON_SUBDIRS) {
+      const subPath = path.join(projectPath, subdir);
+      try {
+        const stat = await fs.stat(subPath);
+        if (stat.isDirectory()) {
+          searchPaths.push(subPath);
+        }
+      } catch {
+        // Not found
+      }
+    }
+  }
+
+  // Load from all discovered paths
+  for (const searchPath of searchPaths) {
+    await loadRequirementsTxt(searchPath, result);
+    await loadPyprojectToml(searchPath, result);
+  }
 
   // Add Python standard library modules
   const stdLib = getPythonStdLibCached();
@@ -522,35 +578,19 @@ export async function loadPythonDependencies(
 }
 
 /**
- * Parse requirements.txt file
+ * Parse requirements.txt file at the given path (no upward traversal).
+ * The caller (loadPythonDependencies) is responsible for searching subdirectories.
  */
 async function loadRequirementsTxt(
   projectPath: string,
   result: ManifestDependencies,
 ): Promise<void> {
-  // Search upward for requirements.txt (like loadPackageJson does for package.json)
-  let currentPath = projectPath;
-  let reqPath = path.join(currentPath, "requirements.txt");
-  let found = false;
-  let depth = 0;
-  const MAX_DEPTH = 5;
+  const reqPath = path.join(projectPath, "requirements.txt");
 
-  while (depth < MAX_DEPTH) {
-    try {
-      await fs.access(reqPath);
-      found = true;
-      break;
-    } catch {
-      const parent = path.dirname(currentPath);
-      if (parent === currentPath) break; // Reached filesystem root
-      currentPath = parent;
-      reqPath = path.join(currentPath, "requirements.txt");
-      depth++;
-    }
-  }
-
-  if (!found) {
-    logger.info(`No requirements.txt found at or above ${projectPath} (searched ${depth + 1} levels)`);
+  try {
+    await fs.access(reqPath);
+  } catch {
+    // requirements.txt not found at this path
     return;
   }
 
@@ -701,13 +741,11 @@ function extractPackageNameFromPep508(dep: string): string | null {
 }
 
 /**
- * Add known Python package name -> import name aliases
+ * Known Python pip-package-name -> import-name aliases.
+ * Shared between addPythonPackageAliases (forward) and
+ * getPythonImportToPackageMap (reverse).
  */
-function addPythonPackageAliases(
-  pkgName: string,
-  result: ManifestDependencies,
-): void {
-  const aliases: Record<string, string[]> = {
+const PYTHON_PACKAGE_ALIASES: Record<string, string[]> = {
     "scikit-learn": ["sklearn"],
     pillow: ["PIL"],
     "opencv-python": ["cv2"],
@@ -744,10 +782,32 @@ function addPythonPackageAliases(
     "opentelemetry-sdk": ["opentelemetry"],
   };
 
-  const pkgAliases = aliases[pkgName];
+/**
+ * Add known Python package name -> import name aliases to the manifest.
+ * Called when processing each package found in requirements.txt / pyproject.toml.
+ */
+function addPythonPackageAliases(
+  pkgName: string,
+  result: ManifestDependencies,
+): void {
+  const pkgAliases = PYTHON_PACKAGE_ALIASES[pkgName];
   if (pkgAliases) {
     for (const alias of pkgAliases) {
       result.all.add(alias);
     }
   }
+}
+
+/**
+ * Reverse lookup: given a Python import name (e.g. "dateutil"),
+ * return the pip package name (e.g. "python-dateutil") if it's a known alias.
+ * Returns null if no mapping is found.
+ */
+export function getPythonPipNameForImport(importName: string): string | null {
+  for (const [pipName, importNames] of Object.entries(PYTHON_PACKAGE_ALIASES)) {
+    if (importNames.includes(importName)) {
+      return pipName;
+    }
+  }
+  return null;
 }

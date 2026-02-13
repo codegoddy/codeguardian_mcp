@@ -24,6 +24,7 @@ import {
 import {
   extractSymbolsAST,
   extractImportsAST,
+  extractImportsASTWithOptions,
 } from "../tools/validation/extractors/index.js";
 import {
   getGitInfo,
@@ -1253,7 +1254,21 @@ async function updateFileInContext(
  * This makes the tool smarter about where to look for code.
  */
 function detectRootSourceDirs(projectPath: string, language: string): string[] {
-  const commonDirs = language === "python" ? ["app", "src", "server", "core", "api"] : ["src", "app", "pages", "lib", "components", "actions", "services"];
+  // Include additional common top-level folders used in smaller repos and fixtures.
+  // Notably, many projects (and our tests) place shared helpers in ./utils.
+  const commonDirs =
+    language === "python"
+      ? ["app", "src", "server", "core", "api"]
+      : [
+          "src",
+          "app",
+          "pages",
+          "lib",
+          "components",
+          "actions",
+          "services",
+          "utils",
+        ];
   const found: string[] = [];
 
   for (const dir of commonDirs) {
@@ -1660,7 +1675,9 @@ function extractJSImportsAST(
   fileInfo: FileInfo,
 ): void {
   try {
-    const astImports = extractImportsAST(content, language);
+    const astImports = extractImportsASTWithOptions(content, language, {
+      filePath: fileInfo.path,
+    });
 
     for (const imp of astImports) {
       fileInfo.imports.push({

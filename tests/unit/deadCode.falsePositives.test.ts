@@ -14,6 +14,7 @@ import { validateCodeTool } from "../../src/tools/validateCode.js";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 describe("Dead Code Detection - False Positive Prevention", () => {
   let tempDir: string;
@@ -27,9 +28,6 @@ describe("Dead Code Detection - False Positive Prevention", () => {
     // Clean up temp directory
     await fs.rm(tempDir, { recursive: true, force: true });
   });
-
-  // Increase timeout for dead code detection tests (they scan entire projects)
-  jest.setTimeout(60000);
 
   describe("Same-file type usage", () => {
     it("should NOT flag types used as function return types in the same file", async () => {

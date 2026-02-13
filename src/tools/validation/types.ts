@@ -44,7 +44,7 @@ export interface ASTSymbol {
  */
 export interface ASTUsage {
   name: string;
-  type: "call" | "methodCall" | "instantiation" | "attribute" | "reference";
+  type: "call" | "methodCall" | "instantiation" | "attribute" | "reference" | "apiCall";
   object?: string;
   line: number;
   column: number;

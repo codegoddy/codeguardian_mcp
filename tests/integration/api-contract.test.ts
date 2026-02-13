@@ -20,7 +20,7 @@ describe("API Contract Guardian Integration", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("should detect project structure", async () => {
+  it("should return issues + summary for a mixed project", async () => {
     // Create frontend
     const frontendDir = path.join(tempDir, "frontend");
     await fs.mkdir(frontendDir, { recursive: true });
@@ -43,14 +43,13 @@ describe("API Contract Guardian Integration", () => {
     // Run validation
     const result = await validateApiContracts(tempDir);
 
-    expect(result.success).toBe(true);
-    expect(result.projectStructure.frontend).toBeDefined();
-    expect(result.projectStructure.backend).toBeDefined();
-    expect(result.projectStructure.relationship).toBe("separate");
+    expect(Array.isArray(result.issues)).toBe(true);
+    expect(result.summary).toBeDefined();
+    expect(typeof result.summary.totalIssues).toBe("number");
   });
 
   it("should detect missing endpoints", async () => {
-    // Create frontend only
+    // Create frontend
     const frontendDir = path.join(tempDir, "frontend");
     await fs.mkdir(path.join(frontendDir, "src", "services"), { recursive: true });
     await fs.writeFile(
@@ -69,12 +68,30 @@ export const api = {
 `,
     );
 
-    // No backend
+    // Create backend with a different route
+    const backendDir = path.join(tempDir, "backend");
+    await fs.mkdir(backendDir, { recursive: true });
+    await fs.writeFile(
+      path.join(backendDir, "requirements.txt"),
+      "fastapi==0.104.0\npydantic==2.0.0",
+    );
+    await fs.writeFile(
+      path.join(backendDir, "main.py"),
+      `
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get("/api/other")
+def other():
+    return {"ok": True}
+`,
+    );
 
     const result = await validateApiContracts(tempDir);
 
-    expect(result.success).toBe(true);
-    expect(result.projectStructure.backend).toBeUndefined();
+    expect(result.summary.totalIssues).toBeGreaterThanOrEqual(0);
+    expect(result.issues.length).toBeGreaterThan(0);
   });
 
   it("should format validation results", async () => {
@@ -82,7 +99,6 @@ export const api = {
     const formatted = formatValidationResults(result);
 
     expect(formatted).toContain("API CONTRACT VALIDATION RESULTS");
-    expect(formatted).toContain("Project Structure:");
     expect(formatted).toContain("Summary:");
   });
 });

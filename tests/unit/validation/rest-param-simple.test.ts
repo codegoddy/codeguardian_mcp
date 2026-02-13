@@ -1,6 +1,6 @@
 /** @format */
 
-import { describe, it, expect } from "@jest/globals";
+import { describe, it, expect } from "vitest";
 import { extractSymbolsAST } from "../../../src/tools/validation/extractors/index.js";
 
 describe("Rest Parameter Extraction", () => {

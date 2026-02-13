@@ -1,0 +1,51 @@
+{
+  "_meta": {
+    "generatedBy": "CodeGuardian MCP",
+    "generatedAt": "2026-02-13T14:18:55.778Z",
+    "purpose": "LLM-readable validation report. This file is placed outside .codeguardian/ so AI assistants can read it.",
+    "jobId": "validation_mlkz3yqs_vbcxtw9",
+    "expiresAt": "2026-02-14T14:18:55.778Z"
+  },
+  "summary": {
+    "totalIssues": 1,
+    "criticalIssues": 1,
+    "highIssues": 0,
+    "mediumIssues": 0,
+    "deadCodeIssues": 0
+  },
+  "stats": {
+    "filesScanned": 2,
+    "filesProcessed": 2,
+    "batchCount": 1,
+    "batchSize": 50,
+    "symbolsInProject": 1,
+    "symbolsValidatedAgainst": 1,
+    "manifestPackages": 0,
+    "contextBuildTime": "113ms",
+    "validationTime": "1172ms",
+    "deadCodeTime": "1ms",
+    "verificationTime": "37ms",
+    "totalTime": "1394ms"
+  },
+  "score": 97,
+  "recommendation": {
+    "verdict": "CAUTION",
+    "riskLevel": "medium",
+    "message": "⚡ 1 potential hallucination(s) detected",
+    "action": "Verify flagged symbols exist in your codebase"
+  },
+  "hallucinations": [
+    {
+      "type": "missingDependency",
+      "severity": "low",
+      "message": "Package 'react' is not installed (but exists on registry)",
+      "line": 3,
+      "file": "/home/codegoddy/Desktop/codeguardian_mcp/tests/fixtures/react-test/src/components/Button.tsx",
+      "code": "import React, { forwardRef, memo } from \"react\";",
+      "suggestion": "Run: npm install react",
+      "confidence": 100,
+      "reasoning": "Package not found in manifest, but verified to exist on typescript registry. Safe to install."
+    }
+  ],
+  "deadCode": []
+}

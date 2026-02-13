@@ -7,10 +7,8 @@
  * @format
  */
 
-import Parser from "tree-sitter";
-import TypeScript from "tree-sitter-typescript";
-import JavaScript from "tree-sitter-javascript";
-import Python from "tree-sitter-python";
+import type ParserT from "tree-sitter";
+import { createRequire } from "module";
 import {
   CodeGraph,
   SymbolNode,
@@ -26,7 +24,7 @@ import { logger } from "../../utils/logger.js";
 import * as crypto from "crypto";
 
 export class TreeSitterParser {
-  private parsers = new Map<string, Parser>();
+  private parsers = new Map<string, ParserT>();
   private config: ParserConfig;
 
   constructor(config?: Partial<ParserConfig>) {
@@ -46,19 +44,27 @@ export class TreeSitterParser {
 
   private initializeParsers(): void {
     try {
+      const require = createRequire(import.meta.url);
+      const ParserRuntime = require("tree-sitter") as any;
+      const TypeScriptLangs = require("tree-sitter-typescript") as any;
+      const JavaScriptLang = require("tree-sitter-javascript") as any;
+      const PythonLang = require("tree-sitter-python") as any;
+
       // TypeScript parser
-      const tsParser = new Parser();
-      tsParser.setLanguage(TypeScript as unknown as Parser.Language);
+      const tsParser = new ParserRuntime() as ParserT;
+      tsParser.setLanguage(
+        (TypeScriptLangs.tsx ?? TypeScriptLangs.typescript ?? TypeScriptLangs) as unknown as ParserT.Language,
+      );
       this.parsers.set("typescript", tsParser);
 
       // JavaScript parser
-      const jsParser = new Parser();
-      jsParser.setLanguage(JavaScript as unknown as Parser.Language);
+      const jsParser = new ParserRuntime() as ParserT;
+      jsParser.setLanguage(JavaScriptLang as unknown as ParserT.Language);
       this.parsers.set("javascript", jsParser);
 
       // Python parser
-      const pyParser = new Parser();
-      pyParser.setLanguage(Python as unknown as Parser.Language);
+      const pyParser = new ParserRuntime() as ParserT;
+      pyParser.setLanguage(PythonLang as unknown as ParserT.Language);
       this.parsers.set("python", pyParser);
 
       logger.debug("Tree-sitter parsers initialized");
@@ -123,7 +129,7 @@ export class TreeSitterParser {
    * Build CodeGraph from Tree-sitter AST
    */
   private async buildCodeGraph(
-    tree: Parser.Tree,
+    tree: ParserT.Tree,
     code: string,
     filePath: string,
     language: string,
@@ -189,7 +195,7 @@ export class TreeSitterParser {
    * Extract symbols from JavaScript/TypeScript AST
    */
   private async extractJavaScriptSymbols(
-    cursor: Parser.TreeCursor,
+    cursor: ParserT.TreeCursor,
     code: string,
     filePath: string,
     graph: CodeGraph,
@@ -197,7 +203,7 @@ export class TreeSitterParser {
   ): Promise<void> {
     const visited = new Set<number>();
 
-    const traverse = (node: Parser.SyntaxNode, scope: Scope) => {
+    const traverse = (node: ParserT.SyntaxNode, scope: Scope) => {
       if (visited.has(node.id)) return;
       visited.add(node.id);
 
@@ -414,7 +420,7 @@ export class TreeSitterParser {
    * Extract symbols from Python AST
    */
   private async extractPythonSymbols(
-    cursor: Parser.TreeCursor,
+    cursor: ParserT.TreeCursor,
     code: string,
     filePath: string,
     graph: CodeGraph,
@@ -422,7 +428,7 @@ export class TreeSitterParser {
   ): Promise<void> {
     const visited = new Set<number>();
 
-    const traverse = (node: Parser.SyntaxNode, scope: Scope) => {
+    const traverse = (node: ParserT.SyntaxNode, scope: Scope) => {
       if (visited.has(node.id)) return;
       visited.add(node.id);
 
@@ -577,7 +583,7 @@ export class TreeSitterParser {
   private createFunctionSymbol(
     name: string,
     location: Location,
-    node: Parser.SyntaxNode,
+    node: ParserT.SyntaxNode,
     code: string,
     scope: Scope,
   ): SymbolNode {
@@ -617,7 +623,7 @@ export class TreeSitterParser {
   private createPythonFunctionSymbol(
     name: string,
     location: Location,
-    node: Parser.SyntaxNode,
+    node: ParserT.SyntaxNode,
     code: string,
     scope: Scope,
   ): SymbolNode {
@@ -666,7 +672,7 @@ export class TreeSitterParser {
    */
   private buildSignature(
     parameters: string[],
-    node: Parser.SyntaxNode,
+    node: ParserT.SyntaxNode,
     code: string,
   ): string {
     const params = parameters.join(", ");
@@ -686,7 +692,7 @@ export class TreeSitterParser {
    * Extract import statement
    */
   private extractImport(
-    node: Parser.SyntaxNode,
+    node: ParserT.SyntaxNode,
     code: string,
     filePath: string,
     graph: CodeGraph,
@@ -758,7 +764,7 @@ export class TreeSitterParser {
    * Extract Python import statement
    */
   private extractPythonImport(
-    node: Parser.SyntaxNode,
+    node: ParserT.SyntaxNode,
     code: string,
     filePath: string,
     graph: CodeGraph,
@@ -820,7 +826,7 @@ export class TreeSitterParser {
    * Extract export statement
    */
   private extractExport(
-    node: Parser.SyntaxNode,
+    node: ParserT.SyntaxNode,
     code: string,
     filePath: string,
     graph: CodeGraph,
@@ -859,7 +865,7 @@ export class TreeSitterParser {
    * Extract call expression for call graph
    */
   private extractCallExpression(
-    node: Parser.SyntaxNode,
+    node: ParserT.SyntaxNode,
     code: string,
     graph: CodeGraph,
     scope: Scope,
@@ -885,7 +891,7 @@ export class TreeSitterParser {
    * Extract Python call expression
    */
   private extractPythonCallExpression(
-    node: Parser.SyntaxNode,
+    node: ParserT.SyntaxNode,
     code: string,
     graph: CodeGraph,
     scope: Scope,

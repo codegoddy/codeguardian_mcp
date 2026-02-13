@@ -19,24 +19,34 @@ import {
 import { guardianPersistence } from "../../src/agent/guardianPersistence.js";
 import { validationReportStore } from "../../src/resources/validationReportStore.js";
 import { setMCPServer } from "../../src/agent/mcpNotifications.js";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 // Mock MCP Server
 const mockMCPServer = {
-  notification: jest.fn(),
-  request: jest.fn(),
+  notification: vi.fn(),
+  request: vi.fn(),
 } as any;
 
 // Mock chokidar
-const mockWatcher = {
-  on: jest.fn().mockReturnThis(),
-  close: jest.fn(),
-  add: jest.fn(),
-  unwatch: jest.fn(),
-};
-
-jest.mock("chokidar", () => ({
-  watch: jest.fn(() => mockWatcher),
+const mockWatcher = vi.hoisted(() => ({
+  on: vi.fn().mockReturnThis(),
+  close: vi.fn(),
+  add: vi.fn(),
+  unwatch: vi.fn(),
 }));
+
+vi.mock("chokidar", () => {
+  const watch = vi.fn(() => mockWatcher);
+  return { watch, default: { watch } } as any;
+});
 
 const LLM_REPORT_FILENAME = "codeguardian-report.json";
 const LLM_ALERTS_FILENAME = "codeguardian-alerts.json";

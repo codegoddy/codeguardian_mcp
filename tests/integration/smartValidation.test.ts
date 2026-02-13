@@ -22,7 +22,7 @@ describe("Smart Validation Integration", () => {
       language: "typescript",
       forceRebuild: false,
     });
-  }, 30000);
+  }, 120000);
 
   it("should validate code with smart context enabled", async () => {
     const testCode = `

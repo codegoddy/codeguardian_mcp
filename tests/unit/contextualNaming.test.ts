@@ -7,7 +7,7 @@
  * @format
  */
 
-import { describe, it, expect } from "@jest/globals";
+import { describe, it, expect } from "vitest";
 import {
   isContextuallyValid,
   getContextualReason,
@@ -667,6 +667,17 @@ describe("Contextual Naming Heuristics", () => {
       expect(BUILTIN_PATTERNS.HTTP_PATTERNS).toBeDefined();
       expect(BUILTIN_PATTERNS.ERROR_PATTERNS).toBeDefined();
       expect(BUILTIN_PATTERNS.CONTEXT_PATTERNS).toBeDefined();
+      expect(BUILTIN_PATTERNS.DATE_PATTERNS).toBeDefined();
+      expect(BUILTIN_PATTERNS.ARRAY_PATTERNS).toBeDefined();
+      expect(BUILTIN_PATTERNS.PROMISE_PATTERNS).toBeDefined();
+      expect(BUILTIN_PATTERNS.MAP_PATTERNS).toBeDefined();
+      expect(BUILTIN_PATTERNS.SET_PATTERNS).toBeDefined();
+      expect(BUILTIN_PATTERNS.STRING_PATTERNS).toBeDefined();
+      expect(BUILTIN_PATTERNS.NUMBER_PATTERNS).toBeDefined();
+      expect(BUILTIN_PATTERNS.REF_PATTERNS).toBeDefined();
+      expect(BUILTIN_PATTERNS.ROUTER_PATTERNS).toBeDefined();
+      expect(BUILTIN_PATTERNS.ENV_PATTERNS).toBeDefined();
+      expect(BUILTIN_PATTERNS.FORM_PATTERNS).toBeDefined();
       expect(BUILTIN_PATTERNS.ALL_PATTERNS).toBeDefined();
     });
 
@@ -678,13 +689,11 @@ describe("Contextual Naming Heuristics", () => {
     });
 
     it("should have ALL_PATTERNS as combination of all categories", () => {
-      const totalPatterns =
-        BUILTIN_PATTERNS.EVENT_PATTERNS.length +
-        BUILTIN_PATTERNS.HTTP_PATTERNS.length +
-        BUILTIN_PATTERNS.ERROR_PATTERNS.length +
-        BUILTIN_PATTERNS.CONTEXT_PATTERNS.length;
+      const totalPatterns = Object.entries(BUILTIN_PATTERNS)
+        .filter(([key]) => key !== "ALL_PATTERNS")
+        .reduce((sum, [, patterns]) => sum + (patterns as any[]).length, 0);
 
-      expect(BUILTIN_PATTERNS.ALL_PATTERNS.length).toBe(totalPatterns);
+      expect(BUILTIN_PATTERNS.ALL_PATTERNS).toHaveLength(totalPatterns);
     });
   });
 });

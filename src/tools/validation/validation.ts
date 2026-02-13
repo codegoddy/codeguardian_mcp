@@ -28,8 +28,9 @@ import type {
 } from "./types.js";
 import { resolveImport } from "../../context/projectContext.js";
 import { extractSymbolsAST, collectLocalDefinitionsAST } from "./extractors/index.js";
+import { parseCodeCached } from "./parser.js";
 import { suggestSimilar, extractSimilarSymbols } from "./scoring.js";
-import { isPythonSymbolExported } from "./manifest.js";
+import { isPythonSymbolExported, getPythonPipNameForImport } from "./manifest.js";
 import {
   isJSBuiltin,
   isPythonBuiltin,
@@ -89,6 +90,12 @@ export async function validateManifest(
         : pkgName;
 
       if (!manifest.all.has(scopedName)) {
+        // For Python, check if this import name is a known alias of a pip package
+        // (e.g. "dateutil" -> "python-dateutil", "pythonjsonlogger" -> "python-json-logger")
+        // These are commonly installed as transitive deps and shouldn't be flagged
+        if (language === "python" && getPythonPipNameForImport(pkgName)) {
+          continue;
+        }
         unknownPackages.push({ imp, pkgName, scopedName });
       }
     }
@@ -400,6 +407,39 @@ export function validateSymbols(
       projectVariables.set(sym.name, sym);
     }
   }
+
+  // When smart context filtering is enabled, symbolTable may not include all symbols.
+  // For certain checks (especially internal-import method validation), we consult the
+  // full ProjectContext symbol index as a fallback.
+  const hasContextClass = (name: string): boolean => {
+    if (!context) return false;
+    const defs = context.symbolIndex.get(name);
+    if (!defs) return false;
+    for (const def of defs) {
+      const kind = (def as any)?.symbol?.kind;
+      if (kind === "class" || kind === "component") return true;
+    }
+    return false;
+  };
+
+  const getContextSymbolsByName = (name: string): ProjectSymbol[] => {
+    if (!context) return [];
+    const defs = context.symbolIndex.get(name);
+    if (!defs) return [];
+    const out: ProjectSymbol[] = [];
+    for (const def of defs) {
+      out.push({
+        name,
+        type: mapSymbolKind((def as any).symbol.kind),
+        file: (def as any).file,
+        line: (def as any).symbol.line,
+        params: (def as any).symbol.params?.map((p: any) => p.name),
+        paramCount: (def as any).symbol.params?.length,
+        scope: (def as any).symbol.scope,
+      });
+    }
+    return out;
+  };
 
   // Build lookup maps for VALID symbols
   const validFunctions = new Map<string, ProjectSymbol>();
@@ -900,6 +940,39 @@ export function validateSymbols(
   // but are valid identifiers — prevents false undefinedVariable on method calls like db.execute()
   const localDefinitions = collectLocalDefinitionsAST(newCode, language);
 
+  // Lightweight literal-type inference for locally-defined variables in the new code.
+  // Used to validate method calls on obvious built-in types (e.g., array literals) without
+  // over-flagging methods on unknown values (e.g., results of createRoot()).
+  const localLiteralKinds = new Map<string, "array" | "object" | "string">();
+  if (language === "javascript" || language === "typescript") {
+    try {
+      const tree = parseCodeCached(newCode, language, {
+        filePath: filePath || "(new code)",
+        useCache: false,
+      });
+
+      const walk = (node: any) => {
+        if (node.type === "variable_declarator") {
+          const nameNode = node.childForFieldName("name");
+          const valueNode = node.childForFieldName("value");
+          if (nameNode?.type === "identifier" && valueNode) {
+            const name = newCode.slice(nameNode.startIndex, nameNode.endIndex);
+            if (valueNode.type === "array" || valueNode.type === "object" || valueNode.type === "string") {
+              localLiteralKinds.set(name, valueNode.type);
+            }
+          }
+        }
+        for (const child of node.children || []) {
+          if (child) walk(child);
+        }
+      };
+
+      walk(tree.rootNode as any);
+    } catch {
+      // Best-effort inference only.
+    }
+  }
+
   // Validate each used symbol
   for (const used of usedSymbols) {
     if (used.type === "call") {
@@ -1041,21 +1114,54 @@ export function validateSymbols(
             if (satisfiesMatch) {
               return extractRootObject(satisfiesMatch[1].trim());
             }
-            // Not a type assertion, extract from the inner expression
+            // Not a type assertion — check if it's an arithmetic/logical/nullish expression
+            // e.g., (i + 1), (value / 1000), (milestones || []), (budgetUsedPercentage || 0)
+            // These are NOT object references — skip method validation entirely.
+            if (/[+\-*/%|&<>=!~^]/.test(innerExpr) || /\s\|\|\s/.test(innerExpr) || /\s\?\?\s/.test(innerExpr)) {
+              return ""; // Not a valid object reference
+            }
+            // Otherwise extract from the inner expression (e.g., (myObj).method())
             return extractRootObject(innerExpr);
           }
         }
         
         // Split on delimiters and take the first part
-        return obj
+        const root = obj
           .split("?.")[0]
           .split(".")[0]
           .split("[")[0]
           .split("(")[0]
           .trim();
+        
+        // If the extracted root contains spaces or operators, it's an expression, not an identifier
+        // e.g., "i + 1" from a failed parenthesized expression extraction
+        if (/\s/.test(root) || /[+\-*/%|&<>=!~^]/.test(root)) {
+          return ""; // Not a valid identifier
+        }
+        
+        return root;
       }
       
       const rootObject = extractRootObject(used.object || "");
+
+      // If we can't reliably identify a root identifier (e.g. `[1,2,3].map()`),
+      // skip method validation to avoid false positives.
+      if (!rootObject) {
+        continue;
+      }
+
+      // Heuristic: if an internal import is used as a lowerCamelCase instance name,
+      // allow matching against a PascalCase class name (logger -> Logger).
+      const inferredClassName = (() => {
+        const first = rootObject[0];
+        if (!first || first.toUpperCase() === first) return "";
+        const candidate = first.toUpperCase() + rootObject.slice(1);
+        return projectClasses.has(candidate) || hasContextClass(candidate) ? candidate : "";
+      })();
+
+      const scopesToMatch = new Set<string>(
+        [used.object, rootObject, inferredClassName].filter(Boolean) as string[],
+      );
 
       // CRITICAL FIX: Skip ALL 'this'/'self'/'cls' method calls - we can't validate class scope
       // The 'this' keyword (JS/TS) and 'self'/'cls' (Python) are always in scope within a class context
@@ -1237,19 +1343,6 @@ export function validateSymbols(
         continue; // Trust the vibe - this is a standard pattern
       }
 
-      // 2. Skip standard built-in methods (toString, map, etc.) to avoid false positives
-      if (
-        (language === "javascript" || language === "typescript") &&
-        isJSBuiltin(used.name)
-      ) {
-        continue;
-      }
-
-      // 2b. Skip Python common methods on any object to avoid false positives
-      if (language === "python" && isPythonBuiltin(used.name)) {
-        continue;
-      }
-
       // SMART TEST RELAXATION:
       // Skip method checks in test files (mocks/spies often have magic methods)
       if (isTestFile(filePath) && !strictMode) {
@@ -1360,25 +1453,38 @@ export function validateSymbols(
         continue; // Skip method validation if object doesn't exist
       }
 
+      // Skip standard built-in methods (map, toString, read, etc.) only AFTER we've
+      // confirmed the object exists. This preserves hallucination detection for
+      // unknown objects calling common method names (e.g., AITaskPredictor.connect()).
+      if (
+        ((language === "javascript" || language === "typescript") &&
+          isJSBuiltin(used.name)) ||
+        (language === "python" && isPythonBuiltin(used.name))
+      ) {
+        continue;
+      }
+
       // 3. Determine if we should check the method call itself
       // In strict mode, we check everything.
       // In auto mode, we check:
       //   - Imports from missing/hallucinated packages (we know the package is gone)
       //   - Internal imports where we have class/method information
-      //   - Locally defined variables where the method is NOT a known builtin
       let shouldCheck = strictMode;
 
       if (!shouldCheck) {
+        const objectName = rootObject || used.object;
         const imp = imports.find((i) =>
-          i.names.some((n) => n.local === used.object),
+          i.names.some((n) => n.local === objectName || n.local === used.object),
         );
         if (imp) {
           if (missingPackages.has(imp.module)) {
             shouldCheck = true; // Hallucinated import - definitely flag usages!
           } else if (!imp.isExternal) {
             // For internal imports, check if we have CLASS info
-            const objClass = projectClasses.get(used.object!);
-            if (objClass) {
+            const objClass =
+              projectClasses.get(objectName!) ||
+              (inferredClassName ? projectClasses.get(inferredClassName) : undefined);
+            if (objClass || inferredClassName) {
               shouldCheck = true; // We have class info, so we can validate methods
             }
             // Also check if we have scoped method info for this object
@@ -1390,7 +1496,7 @@ export function validateSymbols(
             // have no methods in the symbol table.
             if (!shouldCheck) {
               for (const [, sym] of validMethods) {
-                if (sym.scope === used.object) {
+                if (sym.scope === objectName) {
                   shouldCheck = true;
                   break;
                 }
@@ -1400,7 +1506,7 @@ export function validateSymbols(
             // as kind=function (not method), landing in validFunctions instead
             if (!shouldCheck) {
               for (const [, sym] of validFunctions) {
-                if (sym.scope === used.object) {
+                if (sym.scope === objectName) {
                   shouldCheck = true;
                   break;
                 }
@@ -1411,10 +1517,21 @@ export function validateSymbols(
           // Objects not from imports (locally defined)
           // ONLY check if we have class info, otherwise we don't know the type enough to flag it
           // Use projectClasses (actual class definitions), not validClasses (which includes all imports)
-          const objClass = projectClasses.get(used.object!) || projectClasses.get(rootObject!);
+          const objClass =
+            projectClasses.get(objectName!) ||
+            (inferredClassName ? projectClasses.get(inferredClassName) : undefined);
 
-          if (objClass && objClass.file !== "(new code)") {
+          if ((objClass || inferredClassName) && objClass?.file !== "(new code)") {
             shouldCheck = true;
+          }
+
+          // Local literal inference: method calls on obvious built-in types (e.g., array literals)
+          // can be validated without introducing false positives on unknown call results.
+          if (!shouldCheck && objectName) {
+            const kind = localLiteralKinds.get(objectName);
+            if (kind === "array" || kind === "string") {
+              shouldCheck = true;
+            }
           }
         }
       }
@@ -1425,19 +1542,35 @@ export function validateSymbols(
       // Look up method by name, checking ALL symbols with that name (not just the first)
       // This handles multiple services with same-named methods (e.g., getProject on both
       // clientPortalService and projectsApi)
-      const methodSyms = projectMethods.get(used.name) || [];
-      const funcSyms = projectFunctions.get(used.name) || [];
+      const contextSyms = getContextSymbolsByName(used.name);
+      const contextMethodSyms = contextSyms.filter((s) => s.type === "method");
+      const contextFuncSyms = contextSyms.filter((s) => s.type === "function");
+
+      const methodSyms = [
+        ...(projectMethods.get(used.name) || []),
+        ...contextMethodSyms,
+      ];
+      const funcSyms = [
+        ...(projectFunctions.get(used.name) || []),
+        ...contextFuncSyms,
+      ];
       const methodSym = validMethods.get(used.name);
       const funcSym = validFunctions.get(used.name);
       
       // Check ALL method symbols for a scope match, not just the single representative
-      const methodMatches = methodSyms.some(s => !s.scope || s.scope === used.object) ||
-        (methodSym && (!methodSym.scope || methodSym.scope === used.object));
+      const methodMatches =
+        methodSyms.some((s) => !s.scope || scopesToMatch.has(s.scope)) ||
+        (methodSym && (!methodSym.scope || scopesToMatch.has(methodSym.scope)));
       // Check ALL function symbols for a scope match
       // Local variables (from "(new code)") like `const stream = ...` should NOT
       // validate `ApiService.stream()` — that's a name collision, not a real method.
-      const funcMatches = funcSyms.some(s => (!s.scope || s.scope === used.object) && s.file !== "(new code)") ||
-        (funcSym && (!funcSym.scope || funcSym.scope === used.object) && funcSym.file !== "(new code)");
+      const funcMatches =
+        funcSyms.some(
+          (s) => (!s.scope || scopesToMatch.has(s.scope)) && s.file !== "(new code)",
+        ) ||
+        (funcSym &&
+          (!funcSym.scope || scopesToMatch.has(funcSym.scope)) &&
+          funcSym.file !== "(new code)");
 
       // Skip well-known inherited methods from common frameworks
       // These methods exist on base classes (Pydantic BaseModel, SQLAlchemy Model, etc.)
@@ -1456,6 +1589,12 @@ export function validateSymbols(
         "join", "outerjoin", "group_by", "having", "distinct", "subquery",
         "scalar", "scalars", "execute", "add", "flush", "commit", "rollback",
         "refresh", "expire", "expunge", "merge", "close",
+        // SQLAlchemy Column expression methods (called on Model.column attributes)
+        "desc", "asc", "in_", "notin_", "not_in", "isnot", "is_", "is_not",
+        "like", "ilike", "not_like", "not_ilike", "contains", "startswith", "endswith",
+        "between", "any_", "has", "label", "cast", "op", "collate",
+        "nullsfirst", "nullslast", "regexp_match", "regexp_replace",
+        "concat", "distinct", "nulls_first", "nulls_last",
         // Django ORM methods
         "objects", "create", "get_or_create", "update_or_create",
         "bulk_create", "bulk_update", "values", "values_list",
@@ -1466,41 +1605,68 @@ export function validateSymbols(
 
       if (FRAMEWORK_METHODS.has(used.name)) continue;
 
-      if (!methodMatches && !funcMatches) {
-        const objClass =
-          validClasses.get(used.object!) || validVariables.get(used.object!);
-        if (objClass) {
-          // Build list of valid methods for this object type
-          const objectMethods: string[] = [];
-          for (const [name, sym] of validMethods) {
-            // Include methods that either have no scope (general) or match the object
-            if (!sym.scope || sym.scope === used.object) {
-              objectMethods.push(name);
-            }
-          }
-          
-          const suggestion = suggestSimilar(used.name, objectMethods);
-          const similarSymbols = extractSimilarSymbols(suggestion);
-          const { confidence, reasoning } = calculateConfidence({
-            issueType: "nonExistentMethod",
-            symbolName: used.name,
-            similarSymbols,
-            existsInProject: false,
-            strictMode,
-          });
+      // Python-specific: Skip common dynamic method patterns that can't be resolved
+      // by static analysis due to Python's dynamic typing.
+      // In Python, `client` could be httpx.AsyncClient, requests.Session, supabase.Client, etc.
+      // We can't determine the runtime type, so we whitelist common method names that
+      // appear on well-known library objects.
+      if (language === "python") {
+        const PYTHON_DYNAMIC_METHODS = new Set([
+          // HTTP client methods (httpx, requests, aiohttp, etc.)
+          "post", "put", "patch", "request", "head", "options",
+          // Python string methods called on model attribute chains (e.g., user.email.split())
+          "split", "strip", "lstrip", "rstrip", "lower", "upper",
+          "replace", "encode", "decode", "format", "capitalize",
+          // Storage/external client methods (Supabase, S3, GCS, etc.)
+          "from_", "upload", "download", "create_signed_url", "get_public_url",
+          "get_bucket", "create_bucket", "remove", "list",
+          // Redis client methods
+          "setex", "setnx", "getex", "hset", "hget", "hdel", "hgetall",
+          "lpush", "rpush", "lpop", "rpop", "lrange", "sadd", "srem", "smembers",
+          "zadd", "zrem", "zrange", "zrangebyscore", "expire", "ttl", "pttl",
+          "publish", "subscribe", "unsubscribe", "pipeline",
+          // Webhook/integration client methods
+          "create_webhook", "delete_webhook", "grant_access", "revoke_access",
+          "get_commit_details", "get_commits", "get_branches",
+          // Task/job object attribute access
+          "func", "args", "kwargs", "result", "status",
+          // Celery task methods
+          "delay", "apply_async", "retry", "revoke",
+        ]);
+        if (PYTHON_DYNAMIC_METHODS.has(used.name)) continue;
+      }
 
-          issues.push({
-            type: "nonExistentMethod",
-            severity: "medium",
-            message: `Method '${used.name}' not found on '${used.object}' (verify manually)`,
-            line: used.line,
-            file: filePath,
-            code: used.code,
-            suggestion,
-            confidence,
-            reasoning,
-          });
+      if (!methodMatches && !funcMatches) {
+        // Build list of valid methods for this object type
+        const objectMethods: string[] = [];
+        for (const [name, sym] of validMethods) {
+          // Include methods that either have no scope (general) or match the object
+          if (!sym.scope || scopesToMatch.has(sym.scope)) {
+            objectMethods.push(name);
+          }
         }
+
+        const suggestion = suggestSimilar(used.name, objectMethods);
+        const similarSymbols = extractSimilarSymbols(suggestion);
+        const { confidence, reasoning } = calculateConfidence({
+          issueType: "nonExistentMethod",
+          symbolName: used.name,
+          similarSymbols,
+          existsInProject: false,
+          strictMode,
+        });
+
+        issues.push({
+          type: "nonExistentMethod",
+          severity: "medium",
+          message: `Method '${used.name}' not found on '${used.object}' (verify manually)`,
+          line: used.line,
+          file: filePath,
+          code: used.code,
+          suggestion,
+          confidence,
+          reasoning,
+        });
       }
     } else if (used.type === "instantiation") {
       if (!validClasses.has(used.name)) {
