@@ -437,7 +437,7 @@ function extractApolloOperations(content: string, filePath: string): GraphQLFron
 
   try {
     const parser = getParser("typescript");
-    const tree = parser.parse(content);
+    const tree = parser.parse(content)!;
 
     // Traverse AST to find gql`...` (Tree-sitter TSX parses this as a call_expression
     // with a template_string argument) and, in some grammars, tagged_template_expression.

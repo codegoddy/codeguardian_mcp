@@ -309,7 +309,7 @@ function scoreTreeSitterParse(
   tsSpecificCount: number;
 } {
   const parser = getParser(language);
-  const tree = parser.parse(code);
+  const tree = parser.parse(code)!;
 
   // Node-type weights: boost syntax constructs that are strong signals.
   const WEIGHTS: Record<ASTDetectLang, Record<string, number>> = {

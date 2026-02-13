@@ -19,6 +19,7 @@ import { registerPrompts } from "./prompts/index.js";
 import { registerValidationJob } from "./queue/validationJob.js";
 import { setMCPServer } from "./agent/mcpNotifications.js";
 import { restoreGuardians } from "./agent/agentTools.js";
+import { initParsers } from "./tools/validation/parser.js";
 
 // Server configuration
 const SERVER_NAME = "codeguardian-mcp";
@@ -29,6 +30,10 @@ const SERVER_VERSION = "1.0.0";
  */
 async function main() {
   logger.info("Starting CodeGuardian MCP Server...");
+
+  // Initialize web-tree-sitter WASM parsers (must complete before any parsing)
+  await initParsers();
+  logger.info("Tree-sitter WASM parsers initialized");
 
   // Initialize job queue and register handlers
   registerValidationJob();

@@ -359,7 +359,7 @@ function extractSocketIOClientConfig(content: string, filePath: string): WebSock
 
   try {
     const parser = getParser("typescript");
-    const tree = parser.parse(content);
+    const tree = parser.parse(content)!;
 
     function traverse(node: any) {
       if (!node) return;

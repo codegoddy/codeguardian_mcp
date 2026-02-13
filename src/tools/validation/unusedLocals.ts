@@ -83,7 +83,7 @@ export function detectUnusedLocalsAST(code: string, filePath: string): DeadCodeI
     if (language === "typescript" || language === "javascript") {
       try {
         const parser = getParser(language);
-        const tree = parser.parse(code);
+        const tree = parser.parse(code)!;
         const collectRefs = (node: any) => {
           if (!node) return;
           if (node.type === "identifier" || node.type === "property_identifier" || node.type === "type_identifier") {
@@ -245,7 +245,7 @@ function findUnusedLocalDefinitions(
 
   try {
     const parser = getParser(language);
-    const tree = parser.parse(code);
+    const tree = parser.parse(code)!;
 
     // Build a comprehensive set of ALL identifier references in the file.
     // extractUsagesAST only tracks cross-file symbol usages (for hallucination detection),

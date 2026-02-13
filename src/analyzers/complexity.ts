@@ -52,7 +52,7 @@ async function analyzeJavaScriptComplexityAST(
 
   try {
     const parser = getParser(language);
-    const tree = parser.parse(code);
+    const tree = parser.parse(code)!;
     const root = tree.rootNode;
 
     // Track functions and their complexity
@@ -275,7 +275,7 @@ async function analyzePythonComplexity(code: string): Promise<Issue[]> {
 function analyzePythonComplexityAST(code: string): Issue[] {
   const issues: Issue[] = [];
   const parser = getParser("python");
-  const tree = parser.parse(code);
+  const tree = parser.parse(code)!;
 
   const functions: Array<{
     name: string;

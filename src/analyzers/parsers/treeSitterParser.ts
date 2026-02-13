@@ -7,8 +7,8 @@
  * @format
  */
 
-import type ParserT from "tree-sitter";
-import { createRequire } from "module";
+import type { Node as SyntaxNode, Tree as TreeType, TreeCursor as TreeCursorType } from "web-tree-sitter";
+import { getParser, initParsers } from "../../tools/validation/parser.js";
 import {
   CodeGraph,
   SymbolNode,
@@ -22,9 +22,15 @@ import {
 } from "../../types/codeGraph.js";
 import { logger } from "../../utils/logger.js";
 import * as crypto from "crypto";
+// Compatibility alias so existing ParserT.SyntaxNode references keep working
+namespace ParserT {
+  export type SyntaxNode = import("web-tree-sitter").Node;
+  export type Tree = import("web-tree-sitter").Tree;
+  export type TreeCursor = import("web-tree-sitter").TreeCursor;
+  export type Language = import("web-tree-sitter").Language;
+}
 
 export class TreeSitterParser {
-  private parsers = new Map<string, ParserT>();
   private config: ParserConfig;
 
   constructor(config?: Partial<ParserConfig>) {
@@ -38,39 +44,6 @@ export class TreeSitterParser {
       cacheResults: true,
       ...config,
     };
-
-    this.initializeParsers();
-  }
-
-  private initializeParsers(): void {
-    try {
-      const require = createRequire(import.meta.url);
-      const ParserRuntime = require("tree-sitter") as any;
-      const TypeScriptLangs = require("tree-sitter-typescript") as any;
-      const JavaScriptLang = require("tree-sitter-javascript") as any;
-      const PythonLang = require("tree-sitter-python") as any;
-
-      // TypeScript parser
-      const tsParser = new ParserRuntime() as ParserT;
-      tsParser.setLanguage(
-        (TypeScriptLangs.tsx ?? TypeScriptLangs.typescript ?? TypeScriptLangs) as unknown as ParserT.Language,
-      );
-      this.parsers.set("typescript", tsParser);
-
-      // JavaScript parser
-      const jsParser = new ParserRuntime() as ParserT;
-      jsParser.setLanguage(JavaScriptLang as unknown as ParserT.Language);
-      this.parsers.set("javascript", jsParser);
-
-      // Python parser
-      const pyParser = new ParserRuntime() as ParserT;
-      pyParser.setLanguage(PythonLang as unknown as ParserT.Language);
-      this.parsers.set("python", pyParser);
-
-      logger.debug("Tree-sitter parsers initialized");
-    } catch (e) {
-      logger.error("Failed to initialize tree-sitter parsers", e);
-    }
   }
 
   /**
@@ -85,15 +58,14 @@ export class TreeSitterParser {
     const errors: ParseResult["errors"] = [];
 
     try {
-      const parser = this.parsers.get(language);
-      if (!parser) {
-        throw new Error(`No parser available for language: ${language}`);
-      }
+      // Ensure parsers are initialized (no-op if already done)
+      await initParsers();
+      const parser = getParser(language);
 
       // Parse to AST
       const tree = parser.parse(code);
 
-      if (!tree.rootNode) {
+      if (!tree || !tree.rootNode) {
         throw new Error("Failed to parse code - no root node");
       }
 

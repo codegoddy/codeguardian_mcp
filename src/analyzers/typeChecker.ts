@@ -98,7 +98,7 @@ function getLineTextByLineNumber(code: string, line: number): string {
 function detectAnyTypeUsageAST(code: string): Issue[] {
   const issues: Issue[] = [];
   const parser = getParser("typescript");
-  const tree = parser.parse(code);
+  const tree = parser.parse(code)!;
   const root: any = tree.rootNode;
 
   const getText = (node: { startIndex: number; endIndex: number }) =>
@@ -160,7 +160,7 @@ function detectAnyTypeUsageAST(code: string): Issue[] {
 function detectMissingReturnTypesAST(code: string): Issue[] {
   const issues: Issue[] = [];
   const parser = getParser("typescript");
-  const tree = parser.parse(code);
+  const tree = parser.parse(code)!;
   const root: any = tree.rootNode;
 
   const getText = (node: { startIndex: number; endIndex: number }) =>
@@ -235,7 +235,7 @@ function detectMissingReturnTypesAST(code: string): Issue[] {
 function detectImplicitAnyParamsAST(code: string): Issue[] {
   const issues: Issue[] = [];
   const parser = getParser("typescript");
-  const tree = parser.parse(code);
+  const tree = parser.parse(code)!;
   const root: any = tree.rootNode;
 
   const getText = (node: { startIndex: number; endIndex: number }) =>
@@ -377,7 +377,7 @@ function extractPropertyAccessesAST(
 }> {
   const accesses: Array<{ object: string; property: string; line: number; column: number; code: string }> = [];
   const parser = getParser("typescript");
-  const tree = parser.parse(code);
+  const tree = parser.parse(code)!;
   const root = tree.rootNode;
   const lines = code.split("\n");
 

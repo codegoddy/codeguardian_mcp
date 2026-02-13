@@ -55,7 +55,7 @@ export function extractRoutesFromPythonAST(
   if (framework !== "fastapi" && framework !== "flask") return [];
 
   const parser = getParser("python");
-  const tree = parser.parse(content);
+  const tree = parser.parse(content)!;
   const root: any = tree.rootNode;
 
   const routerPrefixByVar = framework === "fastapi" ? extractRouterPrefixesAST(root, content) : new Map<string, string>();
@@ -102,7 +102,7 @@ export function extractPydanticModelsFromPythonAST(
   filePath: string,
 ): ExtractedModel[] {
   const parser = getParser("python");
-  const tree = parser.parse(content);
+  const tree = parser.parse(content)!;
   const root: any = tree.rootNode;
 
   const models: ExtractedModel[] = [];

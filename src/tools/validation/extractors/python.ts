@@ -14,7 +14,9 @@
  * @format
  */
 
-import type Parser from "tree-sitter";
+import type { Node as SyntaxNode } from "web-tree-sitter";
+// Compatibility alias so existing `Parser.SyntaxNode` references keep working
+namespace Parser { export type SyntaxNode = import("web-tree-sitter").Node; }
 import type {
   ASTSymbol,
   ASTUsage,

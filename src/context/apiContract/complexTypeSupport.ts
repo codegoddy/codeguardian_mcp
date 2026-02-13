@@ -667,7 +667,7 @@ export async function extractAllTypeDefinitions(
   try {
     const content = await fs.readFile(filePath, "utf-8");
     const parser = getParser("typescript");
-    const tree = parser.parse(content);
+    const tree = parser.parse(content)!;
 
     // Extract local type definitions
     extractTypeDefinitionsFromAST(tree.rootNode, content, filePath, typeMap);

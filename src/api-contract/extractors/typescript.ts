@@ -87,7 +87,7 @@ export function extractServicesFromFile(
 
   try {
     const parser = getParser("typescript");
-    const tree = parser.parse(content);
+    const tree = parser.parse(content)!;
 
     // Traverse AST to find API calls
     traverseNode(tree.rootNode, content, filePath, services);
@@ -553,7 +553,7 @@ export function extractTypesFromFile(content: string, filePath: string): TypeDef
 
   try {
     const parser = getParser("typescript");
-    const tree = parser.parse(content);
+    const tree = parser.parse(content)!;
 
     traverseTypes(tree.rootNode, content, filePath, types);
   } catch (err) {
