@@ -119,7 +119,20 @@ export function detectUnusedLocalsAST(code: string, filePath: string): DeadCodeI
       // Also skip ALL method-type symbols regardless of scope — they are always properties
       // of an object literal (e.g., { queryFn: async () => {...} } inside useQuery()),
       // consumed by the parent object, not standalone locals.
-      if (sym.scope || sym.type === "method") continue;
+      if (sym.type === "method") continue;
+      // For scoped symbols: skip class methods/properties (scope = class name),
+      // but DO check function-scoped variables/functions in JS/TS (e.g., arrow functions
+      // inside React components like `const refreshInventoryLegacy = () => {...}` inside Inventory).
+      // These are local to the component and should be flagged if unused.
+      if (sym.scope && language === "python") continue; // Python scoped symbols are class methods
+      if (sym.scope && (language === "typescript" || language === "javascript")) {
+        // In JS/TS, only skip if the symbol is a class method (not a function-scoped local)
+        // Class methods have scope = class name and are extracted from class_declaration/class bodies
+        // Function-scoped locals (inside React components) should still be checked
+        const scopeDefs = symbols.filter(s => s.name === sym.scope);
+        const scopeIsClass = scopeDefs.some(s => s.type === "class");
+        if (scopeIsClass) continue;
+      }
 
       // Python: Skip ALL module-level functions and classes.
       // In Python, there is no `export` keyword — all module-level functions and classes

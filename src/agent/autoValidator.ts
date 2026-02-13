@@ -562,19 +562,30 @@ export class AutoValidator {
       // Phase 3: Per-file hallucination and local dead code scan
       // This catches issues that project-wide scans miss:
       // - Hallucinated imports (packages not in package.json / requirements.txt)
+      // - Hallucinated function calls (bare calls to non-existent functions)
       // - Unused local functions/constants (non-exported dead code)
       // The project-wide scan only finds unused EXPORTS and orphaned files.
-      // This per-file scan finds hallucinated dependencies and local dead code.
+      // This per-file scan finds hallucinated dependencies, hallucinated calls, and local dead code.
       logger.info("Running per-file hallucination and local dead code scan...");
       const perFileHallucinations: any[] = [];
       const perFileDeadCode: any[] = [];
+
+      // Build symbol table once for the whole project (used by validateSymbols)
+      const contextLanguage = this.isFullStack ? "all" : this.language;
+      const orchestrationForSymbols = await orchestrateContext({
+        projectPath: this.projectPath,
+        language: contextLanguage,
+      });
+      const symbolTable = buildSymbolTable(orchestrationForSymbols.projectContext, orchestrationForSymbols.relevantSymbols);
 
       const MAX_INITIAL_FILES_TO_SCAN = 100;
       let filesScanned = 0;
 
       for (const [filePath, fileInfo] of context.files) {
         if (filesScanned >= MAX_INITIAL_FILES_TO_SCAN) break;
-        if (fileInfo.isTest || fileInfo.isConfig || fileInfo.isEntryPoint) continue;
+        // Don't skip entry points — they can contain hallucinations and dead code too
+        // (e.g., server.ts calling dispatchSystemDiagnostics() or defining legacyHelperOptimization())
+        if (fileInfo.isTest || fileInfo.isConfig) continue;
 
         const fileLang = AutoValidator.detectFileLanguage(filePath);
         if (fileLang === "unknown") continue;
@@ -593,6 +604,32 @@ export class AutoValidator {
               issue.file = filePath;
               perFileHallucinations.push(issue);
             }
+          }
+
+          // Tier 1: Symbol validation — catches hallucinated bare function calls
+          // (e.g., reportInventoryMetricsToCloud(), dispatchSystemDiagnostics())
+          // These are NOT imports, so validateManifest can't catch them.
+          const usages = extractUsagesAST(content, fileLang, imports, { filePath });
+          const typeReferences =
+            fileLang === "typescript" || fileLang === "javascript" ?
+              extractTypeReferencesAST(content, fileLang, { filePath })
+            : [];
+          const symbolIssues = validateSymbols(
+            usages,
+            symbolTable,
+            content,
+            fileLang,
+            false, // strictMode
+            imports,
+            this.pythonExports,
+            context,
+            filePath,
+            undefined, // missingPackages
+            typeReferences,
+          );
+          for (const issue of symbolIssues) {
+            issue.file = filePath;
+            perFileHallucinations.push(issue);
           }
 
           // Tier 2: Local dead code — catches unused non-exported functions/constants
@@ -968,7 +1005,8 @@ export class AutoValidator {
       // Debounced to at most once per 30s to avoid full project-wide scans on every keystroke
       let apiContractIssues: any[] = [];
       const isServiceFile = filePath.includes('/services/') || filePath.includes('/api/');
-      const isRouteFile = filePath.includes('/api/') && filePath.endsWith('.py');
+      const isRouteFile = filePath.includes('/routes/') || filePath.includes('/controllers/') ||
+        (filePath.includes('/api/') && filePath.endsWith('.py'));
       const apiContractCooldown = Date.now() - this.lastApiContractValidation >= AutoValidator.API_CONTRACT_DEBOUNCE_MS;
       
       if ((isServiceFile || isRouteFile) && apiContractCooldown) {

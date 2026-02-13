@@ -678,36 +678,36 @@ function findSimilarRoute(
   }
   
   // Then, check for similar paths (same number of segments, similar structure)
+  // Collect ALL candidates and pick the best match (prefer literal matches over param matches)
   const endpointSegments = normalizedEndpoint.split('/');
+  let bestCandidate: { route: ApiRouteDefinition; score: number } | undefined;
   
+  const scoreSegments = (feSegs: string[], beSegs: string[]): number => {
+    if (feSegs.length !== beSegs.length) return 0;
+    let score = 0;
+    for (let i = 0; i < feSegs.length; i++) {
+      const feSeg = feSegs[i];
+      const beSeg = beSegs[i];
+      if (feSeg === beSeg) {
+        score += 1.0; // Exact match
+      } else if (isPathParam(feSeg) || isPathParam(beSeg)) {
+        score += 0.6; // Param match — lower than literal similarity to prefer real matches
+      } else {
+        const similarity = segmentSimilarity(feSeg, beSeg);
+        if (similarity >= 0.5) {
+          score += similarity; // Partial credit for similar segments (e.g., 'statistics' vs 'stats')
+        }
+      }
+    }
+    return score / feSegs.length;
+  };
+
   for (const route of backendRoutes) {
     const normalizedRoute = normalizePathForComparison(route.path);
     const routeSegments = normalizedRoute.split('/');
-    
-    // Must have same number of segments
-    if (routeSegments.length !== endpointSegments.length) {
-      continue;
-    }
-    
-    // Check if most segments match (allowing for one different segment)
-    let matchingSegments = 0;
-    let totalSegments = endpointSegments.length;
-    
-    for (let i = 0; i < endpointSegments.length; i++) {
-      const endpointSeg = endpointSegments[i];
-      const routeSeg = routeSegments[i];
-      
-      // Match if they're identical, or both are parameters, or one is a parameter
-      if (endpointSeg === routeSeg || 
-          isPathParam(endpointSeg) || 
-          isPathParam(routeSeg)) {
-        matchingSegments++;
-      }
-    }
-    
-    // If at least 70% of segments match, consider it similar
-    if (matchingSegments / totalSegments >= 0.7) {
-      return route;
+    const score = scoreSegments(endpointSegments, routeSegments);
+    if (score >= 0.7 && (!bestCandidate || score > bestCandidate.score)) {
+      bestCandidate = { route, score };
     }
   }
 
@@ -716,22 +716,13 @@ function findSimilarRoute(
   for (const route of backendRoutes) {
     const normalizedRoute = removeApiPrefix(normalizePathForComparison(route.path));
     const routeSegments = normalizedRoute.split('/');
-    
-    if (routeSegments.length !== endpointSegmentsNoPrefix.length) continue;
-    
-    let matchingSegments = 0;
-    for (let i = 0; i < endpointSegmentsNoPrefix.length; i++) {
-      if (endpointSegmentsNoPrefix[i] === routeSegments[i] || 
-          isPathParam(endpointSegmentsNoPrefix[i]) || 
-          isPathParam(routeSegments[i])) {
-        matchingSegments++;
-      }
-    }
-    
-    if (matchingSegments / endpointSegmentsNoPrefix.length >= 0.7) {
-      return route;
+    const score = scoreSegments(endpointSegmentsNoPrefix, routeSegments);
+    if (score >= 0.7 && (!bestCandidate || score > bestCandidate.score)) {
+      bestCandidate = { route, score };
     }
   }
+
+  if (bestCandidate) return bestCandidate.route;
   
   return undefined;
 }
@@ -818,6 +809,67 @@ function normalizePathForComparison(path: string): string {
   });
   
   return normalized;
+}
+
+/**
+ * Calculate similarity between two path segments using multiple heuristics.
+ * Catches cases like 'statistics' vs 'stats', 'users' vs 'user', etc.
+ */
+function segmentSimilarity(a: string, b: string): number {
+  if (a === b) return 1.0;
+  if (!a || !b) return 0;
+  
+  const al = a.toLowerCase();
+  const bl = b.toLowerCase();
+  const maxLen = Math.max(al.length, bl.length);
+  const minLen = Math.min(al.length, bl.length);
+  
+  // Check if one contains the other (e.g., 'user' in 'users')
+  if (al.includes(bl) || bl.includes(al)) return 0.8;
+  
+  // Longest common prefix ratio (weighted by shorter string coverage)
+  let commonPrefix = 0;
+  for (let i = 0; i < minLen; i++) {
+    if (al[i] === bl[i]) commonPrefix++;
+    else break;
+  }
+  // Score based on how much of the SHORTER string is covered by the common prefix
+  // 'stat' covers 4/5 of 'stats' and 4/10 of 'statistics' → use shorter = 4/5 = 0.8
+  const prefixByShorter = commonPrefix / minLen;
+  // Also consider coverage of the longer string to penalize very different lengths
+  const prefixByLonger = commonPrefix / maxLen;
+  // Blend: mostly shorter-based, with a penalty for length difference
+  const prefixScore = prefixByShorter * 0.7 + prefixByLonger * 0.3;
+  
+  // Normalized Levenshtein distance
+  const dist = levenshteinDistance(al, bl);
+  const levenshteinScore = 1 - (dist / maxLen);
+  
+  return Math.max(prefixScore, levenshteinScore);
+}
+
+/**
+ * Simple Levenshtein distance implementation for short path segments
+ */
+function levenshteinDistance(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+  
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (a[i - 1] === b[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1];
+      } else {
+        dp[i][j] = 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+      }
+    }
+  }
+  
+  return dp[m][n];
 }
 
 function isPathParam(segment: string): boolean {
