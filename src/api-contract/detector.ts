@@ -149,22 +149,58 @@ async function detectFrontend(projectPath: string): Promise<DetectionResult> {
   let httpClient: HttpClient = "fetch";
   let apiBaseUrl: string | undefined;
 
-  // Check for package.json
+  // Check for package.json (preferred signal)
   const packageJsonPath = path.join(projectPath, "package.json");
   const hasPackageJson = await fileExists(packageJsonPath);
 
-  if (!hasPackageJson) {
-    return { confidence: 0 };
+  if (hasPackageJson) {
+    confidence += 0.3;
+  } else {
+    // Vibecoding/scratch projects often don't start with package.json.
+    // Use lightweight folder/file heuristics so API contract validation still works.
+    const commonDirs = ["src", "app", "components", "pages", "views", "hooks", "services"];
+    for (const d of commonDirs) {
+      if (await isDirectory(path.join(projectPath, d))) {
+        confidence += 0.08;
+        break;
+      }
+    }
+
+    const commonFiles = ["api.ts", "api.tsx", "client.ts", "client.tsx", "services.ts"];
+    for (const f of commonFiles) {
+      if (await fileExists(path.join(projectPath, f))) {
+        confidence += 0.12;
+        break;
+      }
+    }
+
+    // If we see TSX/JSX anywhere in typical locations, assume React-like frontend.
+    // Avoid deep scanning: only check a couple of well-known paths.
+    const tsxCandidates = [
+      path.join(projectPath, "src"),
+      path.join(projectPath, "app"),
+      path.join(projectPath, "components"),
+      path.join(projectPath, "pages"),
+    ];
+    for (const dir of tsxCandidates) {
+      try {
+        const entries = await fs.readdir(dir, { withFileTypes: true });
+        if (entries.some((e) => e.isFile() && (e.name.endsWith(".tsx") || e.name.endsWith(".jsx")))) {
+          framework = framework || "react";
+          confidence += 0.15;
+          break;
+        }
+      } catch {
+        // Ignore
+      }
+    }
   }
 
-  confidence += 0.3; // Has package.json
-
   try {
-    const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf-8"));
-    const deps = {
-      ...packageJson.dependencies,
-      ...packageJson.devDependencies,
-    };
+    const packageJson = hasPackageJson
+      ? JSON.parse(await fs.readFile(packageJsonPath, "utf-8"))
+      : null;
+    const deps = packageJson ? { ...packageJson.dependencies, ...packageJson.devDependencies } : {};
 
     // Detect framework
     if (deps["next"]) {
@@ -236,6 +272,28 @@ async function detectFrontend(projectPath: string): Promise<DetectionResult> {
     }
   } catch (err) {
     logger.debug(`Failed to parse package.json in ${projectPath}`);
+  }
+
+  // If no package.json, still try to infer basic HTTP client usage from common files
+  if (!hasPackageJson) {
+    const candidateFiles = [
+      path.join(projectPath, "api.ts"),
+      path.join(projectPath, "src/api.ts"),
+      path.join(projectPath, "src/lib/api.ts"),
+    ];
+    for (const f of candidateFiles) {
+      try {
+        if (!(await fileExists(f))) continue;
+        const content = await fs.readFile(f, "utf-8");
+        if (content.includes("axios")) httpClient = "axios";
+        if (content.includes("fetch(")) httpClient = "fetch";
+        if (content.includes("/api")) apiBaseUrl = apiBaseUrl || "/api";
+        confidence += 0.05;
+        break;
+      } catch {
+        // Ignore
+      }
+    }
   }
 
   return {
@@ -324,6 +382,41 @@ async function detectBackend(projectPath: string): Promise<DetectionResult> {
       }
     } catch (err) {
       logger.debug(`Failed to parse package.json in ${projectPath}`);
+    }
+  }
+
+  // Vibecoding/scratch backend may not have package.json yet.
+  // Infer Express/NestJS from entrypoint file contents.
+  if (!hasNode) {
+    const entryCandidates = [
+      path.join(projectPath, "server.ts"),
+      path.join(projectPath, "app.ts"),
+      path.join(projectPath, "index.ts"),
+      path.join(projectPath, "server.js"),
+      path.join(projectPath, "app.js"),
+      path.join(projectPath, "index.js"),
+      path.join(projectPath, "src/server.ts"),
+      path.join(projectPath, "src/app.ts"),
+      path.join(projectPath, "src/index.ts"),
+    ];
+
+    for (const entry of entryCandidates) {
+      try {
+        if (!(await fileExists(entry))) continue;
+        const content = await fs.readFile(entry, "utf-8");
+        if (content.includes("from 'express'") || content.includes("require('express')") || content.includes("express()")) {
+          framework = framework || "express";
+          confidence += 0.35;
+          break;
+        }
+        if (content.includes("@nestjs/core") || content.includes("NestFactory")) {
+          framework = framework || "nestjs";
+          confidence += 0.35;
+          break;
+        }
+      } catch {
+        // Ignore
+      }
     }
   }
 

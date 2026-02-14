@@ -8,6 +8,8 @@
  */
 
 import type { ProjectContext, ApiContractContext, ApiRouteDefinition } from "../../context/projectContext.js";
+import * as fsSync from "fs";
+import { getParser } from "../../tools/validation/parser.js";
 
 // ============================================================================
 // Types
@@ -393,7 +395,463 @@ function validateRequestResponseTypes(
   const queryParamIssues = validateQueryParameters(mapping, endpoint);
   issues.push(...queryParamIssues);
 
+  // Validate inline request/response field usage when types/models are missing.
+  // This catches common vibecoding errors like `data.username` when backend returns `name`.
+  issues.push(...validateInlineRequestResponseFields(mapping, endpoint));
+
   return issues;
+}
+
+function validateInlineRequestResponseFields(mapping: any, endpoint: string): ApiContractIssue[] {
+  const issues: ApiContractIssue[] = [];
+
+  const frontendFile = mapping?.frontend?.file;
+  const backendFile = mapping?.backend?.file;
+  const method = mapping?.backend?.method || mapping?.frontend?.method;
+  const backendPath = mapping?.backend?.path;
+
+  if (!frontendFile || !backendFile || !method || !backendPath) return issues;
+  if (!fsSync.existsSync(frontendFile) || !fsSync.existsSync(backendFile)) return issues;
+
+  let feContent = "";
+  let beContent = "";
+  try {
+    feContent = fsSync.readFileSync(frontendFile, "utf-8");
+    beContent = fsSync.readFileSync(backendFile, "utf-8");
+  } catch {
+    return issues;
+  }
+
+  // Best-effort TypeScript parsing. If parsers aren't ready, skip instead of failing the whole run.
+  let feTree: any;
+  let beTree: any;
+  try {
+    feTree = getParser("typescript").parse(feContent);
+    beTree = getParser("typescript").parse(beContent);
+  } catch {
+    return issues;
+  }
+
+  const frontendFnName: string | undefined = mapping?.frontend?.name;
+  const feFnNode = frontendFnName ? findFunctionLikeByName(feTree.rootNode, feContent, frontendFnName) : null;
+
+  const feResponseFields = feFnNode ? extractResponseFieldsUsed(feFnNode, feContent) : new Set<string>();
+  const feRequestFields = feFnNode ? extractRequestBodyFieldsUsed(feFnNode, feContent) : new Set<string>();
+
+  const beRouteNode = findExpressRouteHandler(beTree.rootNode, beContent, method, backendPath);
+  const beResponseFields = beRouteNode ? extractBackendResponseFields(beRouteNode, beContent) : new Set<string>();
+  const beRequestFields = beRouteNode ? extractBackendRequestFields(beRouteNode, beContent) : new Set<string>();
+
+  // Response field mismatches
+  if (feResponseFields.size > 0 && beResponseFields.size > 0) {
+    for (const field of feResponseFields) {
+      if (!beResponseFields.has(field)) {
+        issues.push({
+          type: "apiMissingRequiredField",
+          severity: "high",
+          message: `Response field mismatch: frontend uses '${field}', but backend response for ${method.toUpperCase()} ${backendPath} does not include it`,
+          file: frontendFile,
+          line: mapping.frontend.line,
+          endpoint,
+          suggestion: `Update frontend to use one of: ${Array.from(beResponseFields).sort().join(", ")}`,
+          confidence: 80,
+        });
+      }
+    }
+  }
+
+  // Request body extra fields
+  if (feRequestFields.size > 0 && beRequestFields.size > 0) {
+    for (const field of feRequestFields) {
+      if (!beRequestFields.has(field)) {
+        issues.push({
+          type: "apiExtraField",
+          severity: "medium",
+          message: `Request field mismatch: frontend sends '${field}', but backend handler for ${method.toUpperCase()} ${backendPath} does not read/expect it`,
+          file: frontendFile,
+          line: mapping.frontend.line,
+          endpoint,
+          suggestion: `Remove '${field}' from request payload or update backend to accept it`,
+          confidence: 75,
+        });
+      }
+    }
+  }
+
+  return issues;
+}
+
+function findFunctionLikeByName(root: any, content: string, name: string): any | null {
+  let found: any | null = null;
+  const target = name.trim();
+
+  const visit = (node: any) => {
+    if (!node || found) return;
+
+    if (node.type === "function_declaration") {
+      const nameNode = node.childForFieldName?.("name");
+      if (nameNode && content.slice(nameNode.startIndex, nameNode.endIndex) === target) {
+        found = node;
+        return;
+      }
+    }
+
+    // const foo = async (...) => {}
+    if (node.type === "variable_declarator") {
+      const nameNode = node.childForFieldName?.("name");
+      const valueNode = node.childForFieldName?.("value");
+      const nodeName = nameNode ? content.slice(nameNode.startIndex, nameNode.endIndex) : "";
+      if (nodeName === target && (valueNode?.type === "arrow_function" || valueNode?.type === "function")) {
+        found = valueNode;
+        return;
+      }
+    }
+
+    // { getUser: async (...) => {} }
+    if (node.type === "pair") {
+      const keyNode = node.childForFieldName?.("key");
+      const valueNode = node.childForFieldName?.("value");
+      if (keyNode && valueNode && (valueNode.type === "arrow_function" || valueNode.type === "function")) {
+        const keyText = content
+          .slice(keyNode.startIndex, keyNode.endIndex)
+          .replace(/^['"`]/, "")
+          .replace(/['"`]$/, "");
+        if (keyText === target) {
+          found = valueNode;
+          return;
+        }
+      }
+    }
+
+    // { async getUser(...) { ... } }
+    if (node.type === "method_definition") {
+      const nameNode = node.childForFieldName?.("name");
+      if (nameNode) {
+        const nodeName = content
+          .slice(nameNode.startIndex, nameNode.endIndex)
+          .replace(/^['"`]/, "")
+          .replace(/['"`]$/, "");
+        if (nodeName === target) {
+          found = node;
+          return;
+        }
+      }
+    }
+
+    for (const child of node.children || []) visit(child);
+  };
+
+  visit(root);
+  return found;
+}
+
+function extractResponseFieldsUsed(functionNode: any, content: string): Set<string> {
+  const fields = new Set<string>();
+  const jsonVars = new Set<string>();
+
+  const visit = (node: any) => {
+    if (!node) return;
+
+    // const data = await response.json()
+    if (node.type === "variable_declarator") {
+      const nameNode = node.childForFieldName?.("name");
+      const valueNode = node.childForFieldName?.("value");
+      if (nameNode && valueNode) {
+        const varName = content.slice(nameNode.startIndex, nameNode.endIndex);
+        if (isAwaitedJsonCall(valueNode, content)) {
+          jsonVars.add(varName);
+        }
+      }
+    }
+
+    // data.username
+    if (node.type === "member_expression") {
+      const objectNode = node.childForFieldName?.("object");
+      const propertyNode = node.childForFieldName?.("property");
+      if (objectNode?.type === "identifier" && propertyNode?.type === "property_identifier") {
+        const obj = content.slice(objectNode.startIndex, objectNode.endIndex);
+        const prop = content.slice(propertyNode.startIndex, propertyNode.endIndex);
+        if (jsonVars.has(obj)) fields.add(prop);
+      }
+    }
+
+    for (const child of node.children || []) visit(child);
+  };
+
+  visit(functionNode);
+  return fields;
+}
+
+function isAwaitedJsonCall(node: any, content: string): boolean {
+  const awaited =
+    node.type === "await_expression"
+      ? node.childForFieldName?.("argument") ||
+        node.childForFieldName?.("expression") ||
+        (node.namedChildren ? node.namedChildren[0] : null)
+      : node;
+
+  const n = awaited;
+  if (!n || n.type !== "call_expression") return false;
+  const fn = n.childForFieldName?.("function");
+  if (!fn || fn.type !== "member_expression") return false;
+  const prop = fn.childForFieldName?.("property");
+  if (!prop) return false;
+  const propText = content.slice(prop.startIndex, prop.endIndex);
+  return propText === "json";
+}
+
+function extractRequestBodyFieldsUsed(functionNode: any, content: string): Set<string> {
+  const fields = new Set<string>();
+
+  // Find request body identifier used in `body: JSON.stringify(x)`.
+  const bodyVars = new Set<string>();
+
+  const visit = (node: any) => {
+    if (!node) return;
+    if (node.type === "call_expression") {
+      const fn = node.childForFieldName?.("function");
+      const args = node.childForFieldName?.("arguments");
+      if (fn?.type === "identifier" && content.slice(fn.startIndex, fn.endIndex) === "fetch" && args) {
+        // Find an object arg that contains `body:`
+        for (const child of args.children || []) {
+          if (child.type !== "object") continue;
+          for (const pair of child.children || []) {
+            if (pair.type !== "pair") continue;
+            const keyNode = pair.childForFieldName?.("key");
+            const valNode = pair.childForFieldName?.("value");
+            if (!keyNode || !valNode) continue;
+            const keyText = content.slice(keyNode.startIndex, keyNode.endIndex);
+            if (keyText !== "body") continue;
+
+            const id = extractJsonStringifyIdentifier(valNode, content);
+            if (id) bodyVars.add(id);
+          }
+        }
+      }
+    }
+    for (const child of node.children || []) visit(child);
+  };
+  visit(functionNode);
+
+  if (bodyVars.size === 0) return fields;
+
+  // If body var is a function parameter with an inline object type, extract fields from its type literal.
+  const paramsNode = functionNode.childForFieldName?.("parameters");
+  if (!paramsNode) return fields;
+
+  for (const param of paramsNode.children || []) {
+    const nameNode =
+      param.childForFieldName?.("pattern") ||
+      param.childForFieldName?.("name") ||
+      (param.namedChildren ? param.namedChildren.find((c: any) => c.type === "identifier") : null);
+    if (!nameNode) continue;
+    const paramName = content.slice(nameNode.startIndex, nameNode.endIndex);
+    if (!bodyVars.has(paramName)) continue;
+
+    const typeNode =
+      param.childForFieldName?.("type") ||
+      (param.namedChildren ? param.namedChildren.find((c: any) => c.type === "type_annotation") : null);
+    if (!typeNode) continue;
+    const astKeys = extractKeysFromInlineObjectTypeNode(typeNode, content);
+    if (astKeys.length > 0) {
+      for (const key of astKeys) fields.add(key);
+    } else {
+      const typeText = content.slice(typeNode.startIndex, typeNode.endIndex);
+      for (const key of extractKeysFromInlineObjectType(typeText)) fields.add(key);
+    }
+  }
+
+  return fields;
+}
+
+function extractKeysFromInlineObjectTypeNode(typeNode: any, content: string): string[] {
+  const keys: string[] = [];
+  let objectType: any | null = null;
+
+  const findObjectType = (node: any) => {
+    if (!node || objectType) return;
+    if (node.type === "object_type") {
+      objectType = node;
+      return;
+    }
+    for (const child of node.children || []) findObjectType(child);
+  };
+  findObjectType(typeNode);
+  if (!objectType) return keys;
+
+  for (const child of objectType.children || []) {
+    if (child.type !== "property_signature") continue;
+    const nameNode =
+      child.childForFieldName?.("name") ||
+      (child.namedChildren ? child.namedChildren.find((c: any) => c.type === "property_identifier" || c.type === "identifier" || c.type === "string") : null);
+    if (!nameNode) continue;
+    const raw = content.slice(nameNode.startIndex, nameNode.endIndex);
+    const cleaned = raw.replace(/^['"`]/, "").replace(/['"`]$/, "");
+    if (cleaned) keys.push(cleaned);
+  }
+
+  return keys;
+}
+
+function extractJsonStringifyIdentifier(node: any, content: string): string | null {
+  // JSON.stringify(userData)
+  if (node?.type !== "call_expression") return null;
+  const fn = node.childForFieldName?.("function");
+  if (!fn || fn.type !== "member_expression") return null;
+  const obj = fn.childForFieldName?.("object");
+  const prop = fn.childForFieldName?.("property");
+  if (!obj || !prop) return null;
+  const objText = content.slice(obj.startIndex, obj.endIndex);
+  const propText = content.slice(prop.startIndex, prop.endIndex);
+  if (objText !== "JSON" || propText !== "stringify") return null;
+
+  const args = node.childForFieldName?.("arguments");
+  if (!args) return null;
+  const firstArg = (args.children || []).find((c: any) => c.type === "identifier");
+  if (!firstArg) return null;
+  return content.slice(firstArg.startIndex, firstArg.endIndex);
+}
+
+function extractKeysFromInlineObjectType(typeText: string): string[] {
+  // Very small heuristic parser for inline object types like:
+  // { name: string; email: string; phone: string; }
+  const keys: string[] = [];
+  let inside = typeText.trim();
+  // Tree-sitter may include a leading ':' in type annotations.
+  if (inside.startsWith(":")) inside = inside.slice(1).trim();
+  if (!inside.startsWith("{") || !inside.endsWith("}")) return keys;
+  const body = inside.slice(1, -1);
+  const re = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\??\s*:/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body))) {
+    keys.push(m[1]);
+  }
+  return keys;
+}
+
+function findExpressRouteHandler(root: any, content: string, method: string, backendPath: string): any | null {
+  let found: any | null = null;
+  const targetMethod = method.toLowerCase();
+  const targetPath = normalizePathForComparison(backendPath);
+
+  const visit = (node: any) => {
+    if (!node || found) return;
+    if (node.type === "call_expression") {
+      const fn = node.childForFieldName?.("function");
+      const args = node.childForFieldName?.("arguments");
+      if (fn?.type === "member_expression" && args) {
+        const obj = fn.childForFieldName?.("object");
+        const prop = fn.childForFieldName?.("property");
+        const propText = prop ? content.slice(prop.startIndex, prop.endIndex).toLowerCase() : "";
+        if (propText === targetMethod && (obj?.type === "identifier")) {
+          const firstArg = (args.children || []).find((c: any) => c.type === "string" || c.type === "template_string");
+          if (firstArg && firstArg.type === "string") {
+            const raw = content.slice(firstArg.startIndex, firstArg.endIndex).trim().replace(/^['"`]/, "").replace(/['"`]$/, "");
+            if (normalizePathForComparison(raw) === targetPath) {
+              // Find the first function-like arg after the path
+              const fnArg = (args.children || []).find((c: any) => c.type === "arrow_function" || c.type === "function");
+              if (fnArg) {
+                found = fnArg;
+                return;
+              }
+            }
+          }
+        }
+      }
+    }
+    for (const child of node.children || []) visit(child);
+  };
+
+  visit(root);
+  return found;
+}
+
+function extractBackendResponseFields(handlerFnNode: any, content: string): Set<string> {
+  const fields = new Set<string>();
+  const visit = (node: any) => {
+    if (!node) return;
+    if (node.type === "call_expression") {
+      const fn = node.childForFieldName?.("function");
+      const args = node.childForFieldName?.("arguments");
+      if (fn?.type === "member_expression" && args) {
+        const obj = fn.childForFieldName?.("object");
+        const prop = fn.childForFieldName?.("property");
+        const objText = obj ? content.slice(obj.startIndex, obj.endIndex) : "";
+        const propText = prop ? content.slice(prop.startIndex, prop.endIndex) : "";
+        if (objText === "res" && propText === "json") {
+          const objArg = (args.children || []).find((c: any) => c.type === "object");
+          if (objArg) {
+            for (const child of objArg.children || []) {
+              if (child.type === "pair") {
+                const keyNode = child.childForFieldName?.("key");
+                if (!keyNode) continue;
+                const keyText = content
+                  .slice(keyNode.startIndex, keyNode.endIndex)
+                  .replace(/^['"`]/, "")
+                  .replace(/['"`]$/, "");
+                if (keyText) fields.add(keyText);
+              }
+
+              // Shorthand properties: { name, email }
+              if (child.type === "shorthand_property_identifier" || child.type === "shorthand_property_identifier_pattern") {
+                const keyText = content.slice(child.startIndex, child.endIndex);
+                if (keyText) fields.add(keyText);
+              }
+            }
+          }
+        }
+      }
+    }
+    for (const child of node.children || []) visit(child);
+  };
+  visit(handlerFnNode);
+  return fields;
+}
+
+function extractBackendRequestFields(handlerFnNode: any, content: string): Set<string> {
+  const fields = new Set<string>();
+  const visit = (node: any) => {
+    if (!node) return;
+
+    // const { name, email } = req.body
+    if (node.type === "variable_declarator") {
+      const nameNode = node.childForFieldName?.("name");
+      const valueNode = node.childForFieldName?.("value");
+      if (nameNode?.type === "object_pattern" && valueNode?.type === "member_expression") {
+        const obj = valueNode.childForFieldName?.("object");
+        const prop = valueNode.childForFieldName?.("property");
+        const objText = obj ? content.slice(obj.startIndex, obj.endIndex) : "";
+        const propText = prop ? content.slice(prop.startIndex, prop.endIndex) : "";
+        if (objText === "req" && propText === "body") {
+          const patternText = content.slice(nameNode.startIndex, nameNode.endIndex);
+          const re = /\b([A-Za-z_][A-Za-z0-9_]*)\b/g;
+          let m: RegExpExecArray | null;
+          while ((m = re.exec(patternText))) {
+            fields.add(m[1]);
+          }
+        }
+      }
+    }
+
+    // req.body.phone
+    if (node.type === "member_expression") {
+      const objectNode = node.childForFieldName?.("object");
+      const propertyNode = node.childForFieldName?.("property");
+      if (propertyNode?.type === "property_identifier" && objectNode?.type === "member_expression") {
+        const innerObj = objectNode.childForFieldName?.("object");
+        const innerProp = objectNode.childForFieldName?.("property");
+        const innerObjText = innerObj ? content.slice(innerObj.startIndex, innerObj.endIndex) : "";
+        const innerPropText = innerProp ? content.slice(innerProp.startIndex, innerProp.endIndex) : "";
+        if (innerObjText === "req" && innerPropText === "body") {
+          fields.add(content.slice(propertyNode.startIndex, propertyNode.endIndex));
+        }
+      }
+    }
+
+    for (const child of node.children || []) visit(child);
+  };
+  visit(handlerFnNode);
+  return fields;
 }
 
 /**

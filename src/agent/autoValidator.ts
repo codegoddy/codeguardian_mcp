@@ -484,6 +484,26 @@ export class AutoValidator {
     });
   }
 
+  /**
+   * Apply the final lenient-mode filtering rules.
+   *
+   * NOTE: This is intentionally a static helper so we can unit-test
+   * guardian filtering behavior without needing to run the file watcher.
+   */
+  static applyLenientModeFiltering(allIssues: any[]): any[] {
+    return allIssues.filter((i) =>
+      i.severity === "critical" ||
+      i.severity === "high" ||
+      // Keep common, high-signal hygiene findings
+      i.type === "unusedImport" ||
+      i.type === "unusedFunction" ||
+      i.type === "unusedExport" ||
+      // Keep dependency issues even if low severity (important during vibecoding)
+      i.type === "dependencyHallucination" ||
+      i.type === "missingDependency",
+    );
+  }
+
   private pushLearningModeNotification(): void {
     const alert: ValidationAlert = {
       file: "SYSTEM",
@@ -1196,13 +1216,7 @@ export class AutoValidator {
         // BUT keep unusedImport, unusedFunction, and unusedExport warnings
         // - unusedImport: the #1 vibecoder mistake
         // - unusedFunction/unusedExport: local dead code (cheap to detect, high signal)
-        allIssues = allIssues.filter(i =>
-          i.severity === "critical" ||
-          i.severity === "high" ||
-          i.type === "unusedImport" ||
-          i.type === "unusedFunction" ||
-          i.type === "unusedExport"
-        );
+        allIssues = AutoValidator.applyLenientModeFiltering(allIssues);
       }
 
       if (allIssues.length > 0) {

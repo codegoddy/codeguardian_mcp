@@ -91,11 +91,24 @@ export function extractStringValue(
   node: any,
   content: string,
 ): { endpoint: string; queryParams: QueryParam[] } | null {
+  const stripUrlOrigin = (raw: string): string => {
+    const s = (raw || "").trim();
+    if (!s) return s;
+    // Handle absolute URLs so contract matching works when frontend uses full base URLs.
+    // Examples:
+    // - http://localhost:3000/api/users/{id} -> /api/users/{id}
+    // - https://example.com/api/users -> /api/users
+    const m = s.match(/^https?:\/\/[^/]+(\/.*)$/i);
+    if (m && m[1]) return m[1];
+    return s;
+  };
+
   if (node?.type === "string") {
     const text = getNodeText(node, content).trim();
     const cleaned = text.replace(/^['"`]/, "").replace(/['"`]$/, "");
-    const queryParams = extractQueryParamsFromUrl(cleaned);
-    let endpoint = cleaned.split("?")[0].replace(/\/$/, "");
+    const normalized = stripUrlOrigin(cleaned);
+    const queryParams = extractQueryParamsFromUrl(normalized);
+    let endpoint = normalized.split("?")[0].replace(/\/$/, "");
     if (!endpoint || endpoint === "/") return null;
     return { endpoint, queryParams };
   }
@@ -131,7 +144,7 @@ export function extractStringValue(
 
     if (parts.length === 0) return null;
 
-    const fullUrl = parts.join("");
+    const fullUrl = stripUrlOrigin(parts.join(""));
     const queryParams = extractQueryParamsFromUrl(fullUrl);
     let endpoint = fullUrl.split("?")[0].replace(/\/$/, "");
     if (!endpoint || endpoint === "/") return null;
@@ -179,8 +192,15 @@ export function findEnclosingFunctionName(node: any, content: string): string | 
     }
 
     if (current.type === "variable_declarator") {
-      const nameNode = current.childForFieldName?.("name");
-      if (nameNode) return getNodeText(nameNode, content);
+      // Only treat variable names as function names when they actually
+      // define a function (e.g., const getUser = async () => ...).
+      // Avoid picking up local variables like `const response = await fetch(...)`.
+      const valueNode = current.childForFieldName?.("value");
+      const isFunctionValue = valueNode?.type === "arrow_function" || valueNode?.type === "function";
+      if (isFunctionValue) {
+        const nameNode = current.childForFieldName?.("name");
+        if (nameNode) return getNodeText(nameNode, content);
+      }
     }
 
     if (current.type === "method_definition") {
@@ -189,9 +209,13 @@ export function findEnclosingFunctionName(node: any, content: string): string | 
     }
 
     if (current.type === "property_definition" || current.type === "pair") {
-      const keyNode =
-        current.childForFieldName?.("key") || current.childForFieldName?.("name");
-      if (keyNode) return getNodeText(keyNode, content);
+      const valueNode = current.childForFieldName?.("value");
+      const isFunctionValue = valueNode?.type === "arrow_function" || valueNode?.type === "function";
+      if (isFunctionValue) {
+        const keyNode =
+          current.childForFieldName?.("key") || current.childForFieldName?.("name");
+        if (keyNode) return getNodeText(keyNode, content);
+      }
     }
 
     current = current.parent;

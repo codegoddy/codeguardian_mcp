@@ -410,6 +410,7 @@ export interface ApiTypeMapping {
 // ============================================================================
 
 interface CachedContext {
+  schemaVersion: number;
   context: ProjectContext;
   timestamp: number;
   fileHashes: Map<string, number | FileFingerprint>; // file -> fingerprint for invalidation (number = legacy mtimeMs)
@@ -453,6 +454,10 @@ const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const QUICK_CHECK_SAMPLE_SIZE = 20; // Number of files to sample for quick staleness check
 const CACHE_DIR_NAME = ".codeguardian";
 const CACHE_FILE_NAME = "context_cache.json";
+
+// Bump this whenever cached context structure or extraction logic changes
+// in a way that could affect results (e.g., API contract extraction fixes).
+const CONTEXT_CACHE_SCHEMA_VERSION = 2;
 
 // Track projects with an active guardian — skips TTL/staleness checks since
 // the file watcher keeps context fresh via refreshFileContext
@@ -614,6 +619,7 @@ export async function getProjectContext(
 
   // Cache it
   contextCache.set(cacheKey, {
+    schemaVersion: CONTEXT_CACHE_SCHEMA_VERSION,
     context,
     timestamp: Date.now(),
     fileHashes,
@@ -2606,6 +2612,14 @@ async function loadContextFromDisk(
 
     const content = await fs.readFile(cacheFile, "utf-8");
     const cached = deserialize<CachedContext>(content);
+
+    // Invalidate cache if schema version doesn't match (prevents stale extraction results after upgrades)
+    if ((cached as any).schemaVersion !== CONTEXT_CACHE_SCHEMA_VERSION) {
+      logger.info(
+        `Disk cache invalid: schema version mismatch (${(cached as any).schemaVersion} vs ${CONTEXT_CACHE_SCHEMA_VERSION})`,
+      );
+      return null;
+    }
 
     // Backward compat: migrate old "framework" (singular) to "frameworks" (array)
     const ctx = cached.context as any;

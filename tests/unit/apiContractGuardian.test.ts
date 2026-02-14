@@ -152,6 +152,32 @@ describe("API Contract Guardian - Service Extraction", () => {
         await fs.rm(tmpDir, { recursive: true });
       }
     });
+
+    it("should strip URL origin for fetch() absolute URLs", async () => {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+      const os = await import("os");
+
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "api-contract-test-"));
+      const tmpFile = path.join(tmpDir, "api.ts");
+      await fs.writeFile(
+        tmpFile,
+        `
+        export async function getUser(id: string) {
+          const res = await fetch(\`http://localhost:3000/api/users/\${id}\`);
+          return res.json();
+        }
+        `,
+      );
+
+      try {
+        const services = await extractServicesFromFileAST(tmpFile);
+        expect(services).toHaveLength(1);
+        expect(services[0].endpoint).toBe("/api/users/{id}");
+      } finally {
+        await fs.rm(tmpDir, { recursive: true });
+      }
+    });
   });
 });
 
@@ -347,6 +373,133 @@ describe("API Contract Guardian - Validation", () => {
       );
       expect(missingFieldIssue).toBeDefined();
       expect(missingFieldIssue?.message).toContain("email");
+    });
+
+    it("should detect inline request/response field mismatches for Express + fetch", async () => {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+      const os = await import("os");
+
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "api-contract-inline-"));
+      const frontendDir = path.join(tmpDir, "frontend");
+      const backendDir = path.join(tmpDir, "backend");
+      await fs.mkdir(frontendDir);
+      await fs.mkdir(backendDir);
+
+      const feFile = path.join(frontendDir, "api.ts");
+      const beFile = path.join(backendDir, "server.ts");
+
+      await fs.writeFile(
+        beFile,
+        `
+        import express from 'express';
+        const app = express();
+
+        app.get('/api/users/:id', (req, res) => {
+          res.json({ id: req.params.id, name: 'John', email: 'john@example.com', age: 30 });
+        });
+
+        app.post('/api/users', (req, res) => {
+          const { name, email, age } = req.body;
+          res.json({ id: '123', name, email, age, createdAt: new Date() });
+        });
+        `,
+      );
+
+      await fs.writeFile(
+        feFile,
+        `
+        export async function getUser(id: string) {
+          const response = await fetch(\`http://localhost:3000/api/users/\${id}\`);
+          const data = await response.json();
+          return {
+            id: data.id,
+            username: data.username,
+            email: data.email,
+            age: data.age,
+            status: data.status,
+          };
+        }
+
+        export async function createUser(userData: { name: string; email: string; age: number; phone: string; }) {
+          const response = await fetch('http://localhost:3000/api/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(userData),
+          });
+          return response.json();
+        }
+        `,
+      );
+
+      const ctx: ProjectContext = {
+        projectPath: tmpDir,
+        language: "typescript",
+        buildTime: new Date().toISOString(),
+        totalFiles: 0,
+        files: new Map(),
+        symbolIndex: new Map(),
+        dependencies: [],
+        importGraph: new Map(),
+        reverseImportGraph: new Map(),
+        keywordIndex: new Map(),
+        externalDependencies: new Set(),
+        entryPoints: [],
+        apiContract: {
+          projectStructure: {
+            relationship: "separate",
+            frontend: {
+              path: frontendDir,
+              framework: "react",
+              apiPattern: "rest",
+              httpClient: "fetch",
+            },
+            backend: {
+              path: backendDir,
+              framework: "express",
+              apiPattern: "rest",
+              apiPrefix: "/api",
+            },
+          },
+          frontendServices: [],
+          frontendTypes: [],
+          backendRoutes: [],
+          backendModels: [],
+          endpointMappings: new Map([
+            [
+              "/api/users/{id}",
+              {
+                frontend: { name: "getUser", method: "GET", endpoint: "/api/users/{id}", file: feFile, line: 2 },
+                backend: { method: "GET", path: "/api/users/:id", handler: "getUser", file: beFile, line: 5 },
+                score: 100,
+              },
+            ],
+            [
+              "/api/users",
+              {
+                frontend: { name: "createUser", method: "POST", endpoint: "/api/users", file: feFile, line: 12 },
+                backend: { method: "POST", path: "/api/users", handler: "createUser", file: beFile, line: 9 },
+                score: 100,
+              },
+            ],
+          ]),
+          typeMappings: new Map(),
+          unmatchedFrontend: [],
+          unmatchedBackend: [],
+          lastUpdated: new Date().toISOString(),
+        },
+      };
+
+      try {
+        const result = validateApiContractsFromContext(ctx);
+        // username + status missing in response
+        expect(result.issues.some((i) => i.type === "apiMissingRequiredField" && i.message.includes("username"))).toBe(true);
+        expect(result.issues.some((i) => i.type === "apiMissingRequiredField" && i.message.includes("status"))).toBe(true);
+        // phone extra in request
+        expect(result.issues.some((i) => i.type === "apiExtraField" && i.message.includes("phone"))).toBe(true);
+      } finally {
+        await fs.rm(tmpDir, { recursive: true });
+      }
     });
   });
 });

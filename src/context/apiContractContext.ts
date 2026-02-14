@@ -127,17 +127,32 @@ async function extractFrontendServices(
 
   // Find service files using the context's file index
   // Include /features/, /hooks/, /lib/ since many React projects make API calls there
-  const serviceFiles = Array.from(context.files.values()).filter(
-    (f) =>
-      f.path.startsWith(frontendPath) &&
-      (f.path.endsWith(".ts") || f.path.endsWith(".tsx")) &&
-      (f.path.includes("/services/") ||
-        f.path.includes("/api/") ||
-        f.path.includes("/clients/") ||
-        f.path.includes("/features/") ||
-        f.path.includes("/hooks/") ||
-        f.path.includes("/lib/")),
-  );
+  const serviceFiles = Array.from(context.files.values()).filter((f) => {
+    if (!f.path.startsWith(frontendPath)) return false;
+    if (!f.path.endsWith(".ts") && !f.path.endsWith(".tsx")) return false;
+
+    const normalized = f.path.toLowerCase();
+    const base = path.basename(normalized);
+
+    // Typical service directories
+    if (
+      normalized.includes("/services/") ||
+      normalized.includes("/api/") ||
+      normalized.includes("/clients/") ||
+      normalized.includes("/features/") ||
+      normalized.includes("/hooks/") ||
+      normalized.includes("/lib/")
+    ) {
+      return true;
+    }
+
+    // Common root-level API files (e.g., frontend/api.ts, frontend/apiClient.ts)
+    if (base === "api.ts" || base === "api.tsx" || base.endsWith(".api.ts") || base.includes("apiclient")) {
+      return true;
+    }
+
+    return false;
+  });
 
   logger.debug(`[API Contract] Found ${serviceFiles.length} service files in ${frontendPath}`);
 
@@ -164,20 +179,34 @@ async function extractFrontendTypes(
 
   // Find type definition files using the context's file index
   // Also extract types from service files since many projects define types there
-  const typeFiles = Array.from(context.files.values()).filter(
-    (f) =>
-      f.path.startsWith(frontendPath) &&
-      (f.path.endsWith(".ts") || f.path.endsWith(".tsx")) &&
-      (f.path.includes("/types/") ||
-        f.path.includes("/interfaces/") ||
-        f.path.includes("/models/") ||
-        f.path.includes("/services/") ||
-        f.path.includes("/api/") ||
-        f.path.includes("/clients/") ||
-        f.path.includes("/features/") ||
-        f.path.includes("/hooks/") ||
-        f.path.includes("/lib/")),
-  );
+  const typeFiles = Array.from(context.files.values()).filter((f) => {
+    if (!f.path.startsWith(frontendPath)) return false;
+    if (!f.path.endsWith(".ts") && !f.path.endsWith(".tsx")) return false;
+
+    const normalized = f.path.toLowerCase();
+    const base = path.basename(normalized);
+
+    if (
+      normalized.includes("/types/") ||
+      normalized.includes("/interfaces/") ||
+      normalized.includes("/models/") ||
+      normalized.includes("/services/") ||
+      normalized.includes("/api/") ||
+      normalized.includes("/clients/") ||
+      normalized.includes("/features/") ||
+      normalized.includes("/hooks/") ||
+      normalized.includes("/lib/")
+    ) {
+      return true;
+    }
+
+    // Some projects define request/response types directly in root-level api.ts
+    if (base === "api.ts" || base === "api.tsx" || base.endsWith(".api.ts")) {
+      return true;
+    }
+
+    return false;
+  });
 
   logger.debug(`[API Contract] Found ${typeFiles.length} type files in ${frontendPath}`);
 
@@ -216,11 +245,22 @@ async function extractBackendRoutes(
     // Express/Node.js backend — process TS/JS files
     for (const fileInfo of routeFiles) {
       if (!fileInfo.path.endsWith(".ts") && !fileInfo.path.endsWith(".js")) continue;
-      // Only process route files (in routes/ or controllers/ directories, or files with .routes. or .controller. in name)
-      const isRouteFile = fileInfo.path.includes("/routes/") ||
-        fileInfo.path.includes("/controllers/") ||
-        fileInfo.path.includes(".routes.") ||
-        fileInfo.path.includes(".controller.");
+      const normalized = fileInfo.path.toLowerCase();
+      const base = path.basename(normalized);
+
+      // Route definitions are often in routes/controllers, but vibecoding frequently puts
+      // Express handlers directly in backend/server.ts or backend/app.ts.
+      const isRouteFile =
+        normalized.includes("/routes/") ||
+        normalized.includes("/controllers/") ||
+        normalized.includes(".routes.") ||
+        normalized.includes(".controller.") ||
+        base === "server.ts" ||
+        base === "server.js" ||
+        base === "app.ts" ||
+        base === "app.js" ||
+        base === "index.ts" ||
+        base === "index.js";
       if (!isRouteFile) continue;
 
       try {
@@ -501,7 +541,7 @@ function extractRoutesFromExpressContent(
     //   router.post("/upload", requireAuth, uploadLimiter, upload.array("files", 100), async (req, res) => {
     //   router.delete("/:id/sops/:sopId", async (req, res) => {
     const routeMatch = line.match(
-      /router\.(get|post|put|patch|delete)\s*\(\s*["']([^"']*)["']/i,
+      /(?:router|app)\.(get|post|put|patch|delete)\s*\(\s*["']([^"']*)["']/i,
     );
     if (!routeMatch) continue;
 
