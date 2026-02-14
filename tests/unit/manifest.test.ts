@@ -26,7 +26,8 @@ describe("Manifest Loader Module", () => {
 
       // Should have loaded dependencies from the actual package.json
       expect(manifest.all.size).toBeGreaterThan(0);
-      expect(manifest.all.has("tree-sitter")).toBe(true);
+      // CodeGuardian uses web-tree-sitter (WASM) for parsing
+      expect(manifest.all.has("web-tree-sitter")).toBe(true);
     });
 
     it("should return empty manifest for non-existent project", async () => {

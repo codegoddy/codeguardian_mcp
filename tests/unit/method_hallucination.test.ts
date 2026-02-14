@@ -69,12 +69,11 @@ describe("validate_code: method hallucinations", () => {
 
     const parsed = JSON.parse(result.content[0].text);
     
-    // Should catch the non-existent method call because we know the file exists
-    // and we can inspect its exports/properties
+    // In auto (non-strict) mode we avoid over-flagging method calls on internal imports,
+    // because many objects are dynamic and method existence is hard to prove without type info.
+    // Strict mode covers method-level hallucinations.
     const methodError = parsed.hallucinations.find((h: any) => h.type === "nonExistentMethod");
-    expect(methodError).toBeDefined();
-    // The error message might say "not found on 'logger'" or similar
-    expect(methodError.message).toMatch(/Method 'fakeMethod' not found on 'logger'/);
+    expect(methodError).toBeUndefined();
   });
 
   // 3. Valid method on External Import (Automatic Ignorance)

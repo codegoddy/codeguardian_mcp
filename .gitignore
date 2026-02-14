@@ -177,7 +177,7 @@ api-contract-results.txt
 
 # Qodo AI files
 .qodo/
-
+codeguardian-report.json
 vibeathon_presentation_script.py
 SOCIAL_MEDIA_KIT.md
 RECORDING_GUIDE.md

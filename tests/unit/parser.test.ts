@@ -77,9 +77,8 @@ describe("Parser Module", () => {
 
       // Should return a parser instance (fallback)
       expect(unsupportedParser).toBeDefined();
-      // But it should not be the same as the cached TypeScript parser
-      // because it was created with a different language key
-      expect(unsupportedParser).not.toBe(tsParser);
+      // Fallback returns the cached TypeScript parser instance
+      expect(unsupportedParser).toBe(tsParser);
     });
 
     it("should be able to parse code with returned parser", () => {

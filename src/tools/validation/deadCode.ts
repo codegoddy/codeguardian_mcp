@@ -30,8 +30,8 @@ import { minimatch as minimatchFunc } from "minimatch";
 const minimatch = minimatchFunc;
 
 // Import the AST-based unused locals detection
-import { detectUnusedLocals, detectUnusedLocalsAST } from "./unusedLocals.js";
-export { detectUnusedLocals, detectUnusedLocalsAST };
+import { detectUnusedLocals, detectUnusedLocalsAST, shouldSkipFrameworkPattern } from "./unusedLocals.js";
+export { detectUnusedLocals, detectUnusedLocalsAST, shouldSkipFrameworkPattern };
 
 // ============================================================================
 // Caches for Performance

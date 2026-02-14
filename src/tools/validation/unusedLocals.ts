@@ -210,7 +210,7 @@ function detectFileLanguage(filePath: string): string {
 /**
  * Check if a symbol should be skipped due to framework patterns
  */
-function shouldSkipFrameworkPattern(name: string): boolean {
+export function shouldSkipFrameworkPattern(name: string): boolean {
   // React hooks
   if (name.startsWith("use") && name.length > 3 && /[A-Z]/.test(name[3])) {
     return false; // Actually check these - they might be custom hooks

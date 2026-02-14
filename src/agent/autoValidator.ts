@@ -32,7 +32,7 @@ import {
   validateUsagePatterns,
   getLineFromCode,
 } from "../tools/validation/validation.js";
-import { detectDeadCode, detectUnusedLocals } from "../tools/validation/deadCode.js";
+import { detectDeadCode, detectUnusedLocals, shouldSkipFrameworkPattern } from "../tools/validation/deadCode.js";
 import { impactAnalyzer } from "../analyzers/impactAnalyzer.js";
 import { logger } from "../utils/logger.js";
 import { sendNotification } from "./mcpNotifications.js";
@@ -992,14 +992,71 @@ export class AutoValidator {
         }
       }
 
-      // Tier 2: Per-file dead code checks (unused functions/constants in THIS file only).
-      // Project-wide checks (orphaned files, unused exports) run in the initial health check,
-      // NOT on every file change — they are slow, race-prone during rapid vibecoding,
-      // and produce false positives when the dependency graph is mid-update.
-      // 
-      // Use detectUnusedLocals directly for per-file dead code detection.
-      // This finds unused local functions and constants within the file.
+      // Tier 2: Dead code detection
+      // We run BOTH per-file AND project-wide checks:
+      // - Per-file: unused local functions/constants (fast, accurate)
+      // - Project-wide: unused exports (slower, but catches exported dead code)
+      //
+      // Per-file checks find unused local functions and constants within the file.
       const deadCodeIssues = detectUnusedLocals(content, filePath);
+      
+      // Tier 2b: Project-wide dead code check for EXPORTED symbols in this file.
+      // This catches exported functions that are never imported anywhere else.
+      // We only run this for the changed file to avoid full project scans.
+      const exportedDeadCodeIssues: any[] = [];
+      const fileSymbols = extractSymbolsAST(content, filePath, fileLang);
+      const exportedSymbols = fileSymbols.filter(s => s.isExported);
+      
+      if (exportedSymbols.length > 0 && context.reverseImportGraph) {
+        for (const sym of exportedSymbols) {
+          // Skip React components and framework patterns
+          if (shouldSkipFrameworkPattern(sym.name)) continue;
+          // Skip type exports (interfaces, types) - they might be used as type annotations
+          if (sym.type === 'interface' || sym.type === 'type') continue;
+          
+          // Check if this exported symbol is imported anywhere
+          const importers = context.reverseImportGraph.get(filePath);
+          if (!importers || importers.length === 0) {
+            // File has no importers - all exports are potentially dead
+            exportedDeadCodeIssues.push({
+              type: "unusedExport",
+              severity: "medium",
+              message: `Exported ${sym.type} '${sym.name}' is never imported anywhere in the project`,
+              line: sym.line,
+              file: relativePath,
+              suggestion: `Consider removing this export or check if it's used dynamically`,
+            });
+          } else {
+            // File has importers - check if THIS symbol is imported
+            let isImported = false;
+            for (const importerPath of importers) {
+              const importerInfo = context.files.get(importerPath);
+              if (importerInfo) {
+                for (const imp of importerInfo.imports) {
+                  if (imp.namedImports.includes(sym.name) || imp.defaultImport === sym.name) {
+                    isImported = true;
+                    break;
+                  }
+                }
+              }
+              if (isImported) break;
+            }
+            
+            if (!isImported) {
+              exportedDeadCodeIssues.push({
+                type: "unusedExport",
+                severity: "medium",
+                message: `Exported ${sym.type} '${sym.name}' is never imported anywhere in the project`,
+                line: sym.line,
+                file: relativePath,
+                suggestion: `Consider removing this export or check if it's used dynamically`,
+              });
+            }
+          }
+        }
+      }
+      
+      deadCodeIssues.push(...exportedDeadCodeIssues);
 
       // Tier 3: API Contract Validation (for service/route files)
       // Debounced to at most once per 30s to avoid full project-wide scans on every keystroke
@@ -1012,6 +1069,16 @@ export class AutoValidator {
       if ((isServiceFile || isRouteFile) && apiContractCooldown) {
         logger.debug(`API Contract file changed: ${relativePath} - running contract validation...`);
         this.lastApiContractValidation = Date.now();
+        
+        // IMPORTANT: Force a fresh context build to pick up the changed routes
+        // The cached context may have stale route definitions
+        const freshOrchestration = await orchestrateContext({
+          projectPath: this.projectPath,
+          language: "all",
+          forceRebuild: true, // Force rebuild to get latest routes
+        });
+        
+        // Use the fresh context for validation
         const apiContractResult = await validateApiContracts(this.projectPath);
         
         // Only report critical and high severity issues for real-time validation

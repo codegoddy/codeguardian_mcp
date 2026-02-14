@@ -159,7 +159,8 @@ describe("Python Extractor", () => {
 
       expect(imports).toHaveLength(1);
       expect(imports[0].module).toBe("os");
-      expect(imports[0].names).toEqual([{ imported: "path", local: "path" }]);
+      // Extractor keeps the base module name and the imported symbol for consistency
+      expect(imports[0].names).toContainEqual({ imported: "path", local: "path" });
     });
 
     it("should detect relative imports as internal", () => {

@@ -1334,8 +1334,57 @@ export function validateSymbols(
           }
         }
 
-        // If the method is NOT whitelisted, we still proceed to check if it exists in the project
-        // but we've already validated the object.
+        // For non-global whitelisted objects (app, router, db, prisma, etc.),
+        // skip entirely — their methods are framework-provided and can't be
+        // statically validated (e.g., app.listen(), router.get(), db.select()).
+        // Only fall through for true globals where shouldCheck may catch real issues.
+        if (!STEALTH_HALLUCINATION_GLOBALS.has(rootObject)) {
+          // SPECIAL CASE: ORM Pattern Detection (Prisma, TypeORM, Sequelize, etc.)
+          // These ORMs have dynamic model access patterns like:
+          // - prisma.user.findMany() - 'user' is a model name
+          // - prisma.pantryItem.create() - 'pantryItem' is a model name
+          // We should validate that the METHOD (findMany, create, etc.) is a known ORM method
+          // and flag hallucinated methods like hallucinateMissingFunction()
+          const ORM_OBJECTS = new Set(["prisma", "db", "entityManager", "repository", "queryBuilder"]);
+          if (ORM_OBJECTS.has(rootObject)) {
+            // Known Prisma methods
+            const KNOWN_PRISMA_METHODS = new Set([
+              // Model-level methods (called on prisma.model)
+              "findMany", "findUnique", "findFirst", "findFirstOrThrow", "findUniqueOrThrow",
+              "create", "createMany", "update", "updateMany", "upsert",
+              "delete", "deleteMany", "count", "aggregate", "groupBy",
+              // Client-level methods (called on prisma)
+              "$connect", "$disconnect", "$transaction", "$queryRaw", "$executeRaw",
+              "$use", "$on", "$extends", "$extends",
+            ]);
+            
+            // Check if this is a model-level call (prisma.modelName.method())
+            // or a client-level call (prisma.$method())
+            if (used.object?.includes(".")) {
+              // This is likely prisma.modelName.method() pattern
+              // The method should be a known Prisma model method
+              if (!KNOWN_PRISMA_METHODS.has(used.name)) {
+                // Check for @ts-ignore or @ts-expect-error which indicates intentional bypass
+                const codeLines = newCode.split("\n");
+                const prevLine = codeLines[used.line - 2]; // line is 1-indexed
+                if (prevLine?.includes("@ts-ignore") || prevLine?.includes("@ts-expect-error")) {
+                  issues.push({
+                    type: "nonExistentMethod",
+                    severity: "high",
+                    message: `Potential hallucinated ORM method: '${used.name}' is not a known Prisma method. The @ts-ignore suggests this method doesn't exist.`,
+                    line: used.line,
+                    file: filePath,
+                    code: used.code,
+                    suggestion: `Verify this method exists in your Prisma schema or use a known method like: ${Array.from(KNOWN_PRISMA_METHODS).slice(0, 5).join(", ")}`,
+                    confidence: 85,
+                    reasoning: `Method '${used.name}' is not a known Prisma method and the code uses @ts-ignore to bypass type checking, suggesting a hallucinated method.`,
+                  });
+                }
+              }
+            }
+          }
+          continue;
+        }
       }
 
       // 1. Check contextual naming patterns first (e.preventDefault(), req.body, etc.)
