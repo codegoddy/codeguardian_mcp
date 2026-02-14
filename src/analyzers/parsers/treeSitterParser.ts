@@ -22,13 +22,7 @@ import {
 } from "../../types/codeGraph.js";
 import { logger } from "../../utils/logger.js";
 import * as crypto from "crypto";
-// Compatibility alias so existing ParserT.SyntaxNode references keep working
-namespace ParserT {
-  export type SyntaxNode = import("web-tree-sitter").Node;
-  export type Tree = import("web-tree-sitter").Tree;
-  export type TreeCursor = import("web-tree-sitter").TreeCursor;
-  export type Language = import("web-tree-sitter").Language;
-}
+
 
 export class TreeSitterParser {
   private config: ParserConfig;
@@ -101,7 +95,7 @@ export class TreeSitterParser {
    * Build CodeGraph from Tree-sitter AST
    */
   private async buildCodeGraph(
-    tree: ParserT.Tree,
+    tree: TreeType,
     code: string,
     filePath: string,
     language: string,
@@ -167,7 +161,7 @@ export class TreeSitterParser {
    * Extract symbols from JavaScript/TypeScript AST
    */
   private async extractJavaScriptSymbols(
-    cursor: ParserT.TreeCursor,
+    cursor: TreeCursorType,
     code: string,
     filePath: string,
     graph: CodeGraph,
@@ -175,7 +169,7 @@ export class TreeSitterParser {
   ): Promise<void> {
     const visited = new Set<number>();
 
-    const traverse = (node: ParserT.SyntaxNode, scope: Scope) => {
+    const traverse = (node: SyntaxNode, scope: Scope) => {
       if (visited.has(node.id)) return;
       visited.add(node.id);
 
@@ -392,7 +386,7 @@ export class TreeSitterParser {
    * Extract symbols from Python AST
    */
   private async extractPythonSymbols(
-    cursor: ParserT.TreeCursor,
+    cursor: TreeCursorType,
     code: string,
     filePath: string,
     graph: CodeGraph,
@@ -400,7 +394,7 @@ export class TreeSitterParser {
   ): Promise<void> {
     const visited = new Set<number>();
 
-    const traverse = (node: ParserT.SyntaxNode, scope: Scope) => {
+    const traverse = (node: SyntaxNode, scope: Scope) => {
       if (visited.has(node.id)) return;
       visited.add(node.id);
 
@@ -555,7 +549,7 @@ export class TreeSitterParser {
   private createFunctionSymbol(
     name: string,
     location: Location,
-    node: ParserT.SyntaxNode,
+    node: SyntaxNode,
     code: string,
     scope: Scope,
   ): SymbolNode {
@@ -595,7 +589,7 @@ export class TreeSitterParser {
   private createPythonFunctionSymbol(
     name: string,
     location: Location,
-    node: ParserT.SyntaxNode,
+    node: SyntaxNode,
     code: string,
     scope: Scope,
   ): SymbolNode {
@@ -644,7 +638,7 @@ export class TreeSitterParser {
    */
   private buildSignature(
     parameters: string[],
-    node: ParserT.SyntaxNode,
+    node: SyntaxNode,
     code: string,
   ): string {
     const params = parameters.join(", ");
@@ -664,7 +658,7 @@ export class TreeSitterParser {
    * Extract import statement
    */
   private extractImport(
-    node: ParserT.SyntaxNode,
+    node: SyntaxNode,
     code: string,
     filePath: string,
     graph: CodeGraph,
@@ -736,7 +730,7 @@ export class TreeSitterParser {
    * Extract Python import statement
    */
   private extractPythonImport(
-    node: ParserT.SyntaxNode,
+    node: SyntaxNode,
     code: string,
     filePath: string,
     graph: CodeGraph,
@@ -798,7 +792,7 @@ export class TreeSitterParser {
    * Extract export statement
    */
   private extractExport(
-    node: ParserT.SyntaxNode,
+    node: SyntaxNode,
     code: string,
     filePath: string,
     graph: CodeGraph,
@@ -837,7 +831,7 @@ export class TreeSitterParser {
    * Extract call expression for call graph
    */
   private extractCallExpression(
-    node: ParserT.SyntaxNode,
+    node: SyntaxNode,
     code: string,
     graph: CodeGraph,
     scope: Scope,
@@ -863,7 +857,7 @@ export class TreeSitterParser {
    * Extract Python call expression
    */
   private extractPythonCallExpression(
-    node: ParserT.SyntaxNode,
+    node: SyntaxNode,
     code: string,
     graph: CodeGraph,
     scope: Scope,

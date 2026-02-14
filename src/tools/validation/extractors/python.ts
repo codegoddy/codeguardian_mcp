@@ -15,8 +15,6 @@
  */
 
 import type { Node as SyntaxNode } from "web-tree-sitter";
-// Compatibility alias so existing `Parser.SyntaxNode` references keep working
-namespace Parser { export type SyntaxNode = import("web-tree-sitter").Node; }
 import type {
   ASTSymbol,
   ASTUsage,
@@ -49,7 +47,7 @@ const INTERNAL_PREFIXES = [
  * @param currentClass - Name of the current class context (for methods), or null
  */
 export function extractPythonSymbols(
-  node: Parser.SyntaxNode,
+  node: SyntaxNode,
   code: string,
   filePath: string,
   symbols: ASTSymbol[],
@@ -192,7 +190,7 @@ export function extractPythonSymbols(
  * @param definitions - Set to accumulate locally-defined names
  */
 export function collectPythonLocalDefinitions(
-  node: Parser.SyntaxNode,
+  node: SyntaxNode,
   code: string,
   definitions: Set<string>,
 ): void {
@@ -278,7 +276,7 @@ export function collectPythonLocalDefinitions(
  * @param localDefinitions - Set of locally-defined names to skip (from collectPythonLocalDefinitions)
  */
 export function extractPythonUsages(
-  node: Parser.SyntaxNode,
+  node: SyntaxNode,
   code: string,
   usages: ASTUsage[],
   externalSymbols: Set<string>,
@@ -370,7 +368,7 @@ export function extractPythonUsages(
       // Skip decorator identifiers: @staticmethod, @app.route(...), etc.
       // These frequently cause false positives when treated as normal references.
       // Decorator metadata is captured separately via symbol extraction (see getDecorators).
-      let decoratorAncestor: Parser.SyntaxNode | null = parent;
+      let decoratorAncestor: SyntaxNode | null = parent;
       while (decoratorAncestor) {
         if (decoratorAncestor.type === "decorator") {
           return;
@@ -466,7 +464,7 @@ export function extractPythonUsages(
  * @param imports - Array to accumulate extracted imports
  */
 export function extractPythonImports(
-  node: Parser.SyntaxNode,
+  node: SyntaxNode,
   code: string,
   imports: ASTImport[],
 ): void {
@@ -570,7 +568,7 @@ export function extractPythonImports(
  * @param references - Array to accumulate extracted type references
  */
 export function extractPythonTypeReferences(
-  node: Parser.SyntaxNode,
+  node: SyntaxNode,
   code: string,
   references: ASTTypeReference[],
 ): void {
@@ -653,7 +651,7 @@ export function extractPythonTypeReferences(
  * @returns Array of parameter names (excluding self/cls)
  */
 export function extractPythonParams(
-  paramsNode: Parser.SyntaxNode | null,
+  paramsNode: SyntaxNode | null,
   code: string,
 ): string[] {
   if (!paramsNode) return [];
@@ -692,7 +690,7 @@ export function extractPythonParams(
  * @param context - The context in which the type appears
  */
 export function extractPythonTypeNamesFromNode(
-  node: Parser.SyntaxNode,
+  node: SyntaxNode,
   code: string,
   references: ASTTypeReference[],
   context: ASTTypeReference["context"],
@@ -805,7 +803,7 @@ export function extractPythonTypeNamesFromNode(
  * @param code - The source code string
  * @returns The text content of the node
  */
-function getText(node: Parser.SyntaxNode, code: string): string {
+function getText(node: SyntaxNode, code: string): string {
   return code.slice(node.startIndex, node.endIndex);
 }
 
@@ -829,7 +827,7 @@ function getLineText(code: string, lineIndex: number): string {
  * @param argsNode - The arguments node from a call expression
  * @returns The number of arguments
  */
-function countArgs(argsNode: Parser.SyntaxNode | null): number {
+function countArgs(argsNode: SyntaxNode | null): number {
   if (!argsNode) return 0;
   let count = 0;
   for (const child of argsNode.children) {
@@ -848,7 +846,7 @@ function countArgs(argsNode: Parser.SyntaxNode | null): number {
  * @param node - The identifier node to check
  * @returns true if the identifier is an unpacking target (definition, not usage)
  */
-function isUnpackingTarget(node: Parser.SyntaxNode): boolean {
+function isUnpackingTarget(node: SyntaxNode): boolean {
   let current = node.parent;
   while (current) {
     // If we hit a tuple/list that is the left side of an assignment, it's an unpacking target
@@ -887,7 +885,7 @@ function isUnpackingTarget(node: Parser.SyntaxNode): boolean {
  * @param code - The source code string
  * @returns Array of decorator strings (including the @ symbol)
  */
-function getDecorators(node: Parser.SyntaxNode, code: string): string[] {
+function getDecorators(node: SyntaxNode, code: string): string[] {
   const decorators: string[] = [];
   const parent = node.parent;
 

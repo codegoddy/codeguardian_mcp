@@ -9,10 +9,28 @@
  * @format
  */
 
-import { validateCodeTool } from "../../src/tools/validateCode.js";
+import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+
+vi.mock("../../src/tools/validation/registry.js", () => ({
+  checkPackageRegistry: vi.fn(),
+}));
+
+let validateCodeTool: typeof import("../../src/tools/validateCode.js").validateCodeTool;
+let mockCheckPackageRegistry: Mock;
 
 describe("Method Call Hallucination Detection", () => {
   const projectPath = ".";
+
+  beforeAll(async () => {
+    ({ validateCodeTool } = await import("../../src/tools/validateCode.js"));
+    ({ checkPackageRegistry: mockCheckPackageRegistry } =
+      (await import("../../src/tools/validation/registry.js")) as any);
+  });
+
+  beforeEach(() => {
+    mockCheckPackageRegistry.mockReset();
+    mockCheckPackageRegistry.mockResolvedValue(true);
+  });
 
   it("should catch method calls on non-existent objects", async () => {
     const newCode = `
@@ -85,6 +103,8 @@ const stats = TaskAnalytics.compute(tasks);
   });
 
   it("should catch method calls on objects from hallucinated packages", async () => {
+    mockCheckPackageRegistry.mockResolvedValue(false);
+
     const newCode = `
 import { devtools, persist, immer } from 'zustand/middleware';
 import AIPredictor from 'ai-predictor-lib';

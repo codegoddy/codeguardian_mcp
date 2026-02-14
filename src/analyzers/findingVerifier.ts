@@ -388,21 +388,21 @@ async function verifyHallucinationWithCache(
           reasons.push(...futureFeatureCheck.reasons);
           reasons.push("Not a hallucination - code is for planned functionality");
         } else {
-          // Quick git check using cached status
-          if (cache.gitStatus?.isNew || cache.gitStatus?.isModified) {
-            status = "false_positive";
-            confidence = 85;
-            method = "git_history";
-            reasons.push("Symbol found in recent git changes");
-            reasons.push("This may be part of an incomplete feature");
+          // Do NOT auto-dismiss hallucinations just because the file is uncommitted.
+          // That heuristic caused watch-mode to drop almost all hallucinations during active development.
+          // If we have no strong future-feature signals and the symbol truly doesn't exist in the project,
+          // treat it as a real hallucination (slightly lower confidence when the file is uncommitted).
+          const hasUncommittedChanges = Boolean(cache.gitStatus?.isNew || cache.gitStatus?.isModified);
+          status = "confirmed";
+          confidence = hasUncommittedChanges ? 90 : 95;
+          method = "static_analysis";
+          reasons.push("Symbol not found anywhere in project");
+          if (hasUncommittedChanges) {
+            reasons.push("File has uncommitted changes, but no strong signals of a planned feature");
           } else {
-            status = "confirmed";
-            confidence = 95;
-            method = "static_analysis";
-            reasons.push("Symbol not found anywhere in project");
             reasons.push("No indicators of planned/incomplete feature");
-            reasons.push("This is a true hallucination");
           }
+          reasons.push("This is a true hallucination");
         }
       }
       break;

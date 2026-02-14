@@ -311,14 +311,19 @@ export function buildSymbolTable(
     }
 
     for (const def of definitions) {
+      const params = def.symbol.params?.map((p) => p.name);
+      const paramCount =
+        def.symbol.paramCount ?? (params ? params.length : undefined);
+      const minParamCount = def.symbol.minParamCount ?? paramCount;
+
       symbols.push({
         name,
         type: mapSymbolKind(def.symbol.kind),
         file: def.file,
         line: def.symbol.line,
-        params: def.symbol.params?.map((p) => p.name),
-        paramCount: def.symbol.paramCount,
-        minParamCount: def.symbol.minParamCount,
+        params,
+        paramCount,
+        minParamCount,
         scope: def.symbol.scope,
       });
     }
@@ -1142,13 +1147,13 @@ export function validateSymbols(
       } else if (
         func &&
         used.argCount !== undefined &&
-        func.paramCount !== undefined &&
-        func.minParamCount !== undefined
+        func.paramCount !== undefined
       ) {
-        // Check if argument count is within valid range [minParamCount, paramCount]
-        const isValidArgCount = 
-          used.argCount >= func.minParamCount && 
-          used.argCount <= func.paramCount;
+        const min = func.minParamCount ?? func.paramCount;
+        const max = func.paramCount;
+
+        // Check if argument count is within valid range [min, max]
+        const isValidArgCount = used.argCount >= min && used.argCount <= max;
         
         if (!isValidArgCount && strictMode) {
           const { confidence, reasoning } = calculateConfidence({
@@ -1160,9 +1165,9 @@ export function validateSymbols(
           });
 
           const expectedRange = 
-            func.minParamCount === func.paramCount 
-              ? `${func.paramCount}` 
-              : `${func.minParamCount}-${func.paramCount}`;
+            min === max
+              ? `${max}`
+              : `${min}-${max}`;
 
           issues.push({
             type: "wrongParamCount",

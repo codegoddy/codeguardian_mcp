@@ -296,7 +296,7 @@ describe("JavaScript Extractor", () => {
       const funcNode = tree.rootNode.children[0];
       const paramsNode = funcNode?.childForFieldName("parameters");
 
-      const params = extractJSParams(paramsNode, code);
+      const { params } = extractJSParams(paramsNode, code);
 
       expect(params).toEqual(["a", "b", "c"]);
     });
@@ -308,7 +308,7 @@ describe("JavaScript Extractor", () => {
       const funcNode = tree.rootNode.children[0];
       const paramsNode = funcNode?.childForFieldName("parameters");
 
-      const params = extractJSParams(paramsNode, code);
+      const { params } = extractJSParams(paramsNode, code);
 
       expect(params).toEqual([]);
     });

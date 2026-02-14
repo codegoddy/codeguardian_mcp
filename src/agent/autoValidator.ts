@@ -969,30 +969,32 @@ export class AutoValidator {
       const isApiFile = /\/(routes|controllers|services|api)\//i.test(filePath) ||
                         /\/(routes|controllers|api)\.(ts|js|py)$/i.test(filePath);
       
-      // Trigger API contract validation if this is an API file
-      if (isApiFile && this.isFullStack) {
+      // Trigger API contract validation if this is an API-related file.
+      // IMPORTANT: Do NOT gate this on python+ts "full-stack" detection — many real projects
+      // are TS-only but still have a frontend/backend contract.
+      const apiContractCooldown = Date.now() - this.lastApiContractValidation >= AutoValidator.API_CONTRACT_DEBOUNCE_MS;
+      if (isApiFile && apiContractCooldown) {
+        this.lastApiContractValidation = Date.now();
         logger.info(`API file changed, triggering contract validation: ${relativePath}`);
         try {
           const apiContractResult = await validateApiContracts(this.projectPath);
-          if (apiContractResult.issues.length > 0) {
-            const apiContractAlert: ValidationAlert = {
-              file: "API_CONTRACT_SCAN",
-              issues: apiContractResult.issues.map((issue) => ({
-                type: issue.type,
-                severity: issue.severity,
-                message: issue.message,
-                suggestion: issue.suggestion,
-                line: issue.line,
-                file: issue.file ? path.relative(this.projectPath, issue.file) : undefined,
-              })),
-              timestamp: Date.now(),
-              llmMessage: this.createApiContractMessage(apiContractResult),
-              isInitialScan: false,
-            };
-            
-            if (this.onAlert) {
-              this.onAlert(apiContractAlert);
-            }
+          const apiContractAlert: ValidationAlert = {
+            file: "API_CONTRACT_SCAN",
+            issues: apiContractResult.issues.map((issue) => ({
+              type: issue.type,
+              severity: issue.severity,
+              message: issue.message,
+              suggestion: issue.suggestion,
+              line: issue.line,
+              file: issue.file ? path.relative(this.projectPath, issue.file) : undefined,
+            })),
+            timestamp: Date.now(),
+            llmMessage: this.createApiContractMessage(apiContractResult),
+            isInitialScan: false,
+          };
+
+          if (this.onAlert) {
+            this.onAlert(apiContractAlert);
           }
         } catch (err) {
           logger.error(`API contract validation failed:`, err);
@@ -1143,47 +1145,8 @@ export class AutoValidator {
 
       deadCodeIssues.push(...exportedDeadCodeIssues);
 
-      // Tier 3: API Contract Validation (for service/route files)
-      // Debounced to at most once per 30s to avoid full project-wide scans on every keystroke
-      let apiContractIssues: any[] = [];
-      const isServiceFile = filePath.includes('/services/') || filePath.includes('/api/');
-      const isRouteFile = filePath.includes('/routes/') || filePath.includes('/controllers/') ||
-        (filePath.includes('/api/') && filePath.endsWith('.py'));
-      const apiContractCooldown = Date.now() - this.lastApiContractValidation >= AutoValidator.API_CONTRACT_DEBOUNCE_MS;
-
-      if ((isServiceFile || isRouteFile) && apiContractCooldown) {
-        logger.debug(`API Contract file changed: ${relativePath} - running contract validation...`);
-        this.lastApiContractValidation = Date.now();
-
-        // IMPORTANT: Force a fresh context build to pick up the changed routes
-        // The cached context may have stale route definitions
-        const freshOrchestration = await orchestrateContext({
-          projectPath: this.projectPath,
-          language: "all",
-          forceRebuild: true, // Force rebuild to get latest routes
-        });
-
-        // Use the fresh context for validation
-        const apiContractResult = await validateApiContracts(this.projectPath);
-
-        // Only report critical and high severity issues for real-time validation
-        apiContractIssues = apiContractResult.issues
-          .filter(issue => issue.severity === 'critical' || issue.severity === 'high')
-          .map(issue => ({
-            type: issue.type,
-            severity: issue.severity,
-            message: issue.message,
-            line: issue.line,
-            suggestion: issue.suggestion,
-          }));
-
-        if (apiContractIssues.length > 0) {
-          logger.info(`API Contract validation found ${apiContractIssues.length} issues in ${relativePath}`);
-        }
-      }
-
       // Combine all issues for verification
-      let allIssues = [...manifestIssues, ...symbolIssues, ...patternIssues, ...deadCodeIssues, ...impactIssues, ...apiContractIssues];
+      let allIssues = [...manifestIssues, ...symbolIssues, ...patternIssues, ...deadCodeIssues, ...impactIssues];
 
       // === SMART SCOPE FILTERING (NEW) ===
       // Detect file scope and filter issues by relevance

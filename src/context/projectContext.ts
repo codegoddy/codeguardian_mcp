@@ -138,7 +138,17 @@ function isApiContractRelevantFile(filePath: string): boolean {
     return true;
   }
   // Backend route/API files
-  if ((normalized.includes('/api/') || normalized.includes('/routes/') || normalized.includes('/routers/')) && normalized.endsWith('.py')) {
+  if (
+    (normalized.includes('/api/') ||
+      normalized.includes('/routes/') ||
+      normalized.includes('/routers/') ||
+      normalized.includes('/controllers/')) &&
+    (normalized.endsWith('.py') ||
+      normalized.endsWith('.ts') ||
+      normalized.endsWith('.tsx') ||
+      normalized.endsWith('.js') ||
+      normalized.endsWith('.jsx'))
+  ) {
     return true;
   }
   // Backend schema/model files (Pydantic models)
@@ -169,6 +179,19 @@ export interface FileInfo {
   isConfig: boolean;
   isEntryPoint: boolean;
   lastModified?: number;
+  /**
+   * Used for cache invalidation. Prefer this over `lastModified` when available.
+   *
+   * NOTE: Some workflows preserve mtime (e.g., copy-with-preserve or untar),
+   * so we include ctime + size to detect content changes reliably.
+   */
+  fingerprint?: FileFingerprint;
+}
+
+export interface FileFingerprint {
+  mtimeMs: number;
+  ctimeMs: number;
+  size: number;
 }
 
 export interface SymbolInfo {
@@ -389,9 +412,40 @@ export interface ApiTypeMapping {
 interface CachedContext {
   context: ProjectContext;
   timestamp: number;
-  fileHashes: Map<string, number>; // file -> mtime for invalidation
+  fileHashes: Map<string, number | FileFingerprint>; // file -> fingerprint for invalidation (number = legacy mtimeMs)
   fileCount: number; // Track file count for quick change detection
   gitInfo: GitInfo | null; // Git state when cache was created
+}
+
+function getFileFingerprintFromStats(stats: { mtimeMs: number; ctimeMs: number; size: number }): FileFingerprint {
+  return {
+    mtimeMs: stats.mtimeMs,
+    ctimeMs: stats.ctimeMs,
+    size: stats.size,
+  };
+}
+
+function fingerprintChanged(
+  cached: number | FileFingerprint | undefined,
+  stats: { mtimeMs: number; ctimeMs: number; size: number },
+  cacheTimestampMs?: number,
+): boolean {
+  if (!cached) return true;
+  if (typeof cached === "number") {
+    // Legacy cache stored only mtimeMs.
+    if (stats.mtimeMs !== cached) return true;
+    // If mtime is preserved, fall back to ctime vs. cache timestamp.
+    if (typeof cacheTimestampMs === "number" && stats.ctimeMs > cacheTimestampMs) {
+      return true;
+    }
+    return false;
+  }
+
+  return (
+    stats.mtimeMs !== cached.mtimeMs ||
+    stats.ctimeMs !== cached.ctimeMs ||
+    stats.size !== cached.size
+  );
 }
 
 const contextCache = new Map<string, CachedContext>();
@@ -548,9 +602,12 @@ export async function getProjectContext(
   context.gitInfo = gitInfo;
 
   // Build file hash map for smart invalidation
-  const fileHashes = new Map<string, number>();
+  const fileHashes = new Map<string, number | FileFingerprint>();
   for (const [filePath, fileInfo] of context.files) {
-    if (fileInfo.lastModified) {
+    if (fileInfo.fingerprint) {
+      fileHashes.set(filePath, fileInfo.fingerprint);
+    } else if (fileInfo.lastModified) {
+      // Legacy fallback
       fileHashes.set(filePath, fileInfo.lastModified);
     }
   }
@@ -636,7 +693,7 @@ export async function refreshFileContext(
   // Update file hashes in cached record
   try {
     const stats = await fs.stat(filePath);
-    cached.fileHashes.set(filePath, stats.mtimeMs);
+    cached.fileHashes.set(filePath, getFileFingerprintFromStats(stats));
     cached.timestamp = Date.now(); // Update timestamp to extend TTL
   } catch (err) {
     // File might have been deleted
@@ -676,13 +733,13 @@ async function reconcileContextWithDisk(
     const toUpdate: string[] = [];
     
     // 2. Scan for deleted or modified files
-    for (const [filePath, cachedMtime] of cached.fileHashes.entries()) {
+    for (const [filePath, cachedFingerprint] of cached.fileHashes.entries()) {
       if (!currentFileSet.has(filePath)) {
         toUpdate.push(filePath); // Deleted
       } else {
         try {
           const stats = await fs.stat(filePath);
-          if (stats.mtimeMs > cachedMtime) {
+          if (fingerprintChanged(cachedFingerprint, stats, cached.timestamp)) {
             toUpdate.push(filePath); // Modified
           }
         } catch {
@@ -736,7 +793,7 @@ async function reconcileContextWithDisk(
     for (const file of toUpdate) {
       try {
         const stats = await fs.stat(file);
-        cached.fileHashes.set(file, stats.mtimeMs);
+        cached.fileHashes.set(file, getFileFingerprintFromStats(stats));
       } catch {
         cached.fileHashes.delete(file);
       }
@@ -796,8 +853,8 @@ async function isContextStale(
     for (const filePath of filesToCheck) {
       try {
         const stats = await fs.stat(filePath);
-        const cachedMtime = cached.fileHashes.get(filePath);
-        if (cachedMtime && stats.mtimeMs > cachedMtime) {
+        const cachedFingerprint = cached.fileHashes.get(filePath);
+        if (fingerprintChanged(cachedFingerprint, stats, cached.timestamp)) {
           logger.debug(`File modified: ${filePath}`);
           return true;
         }
@@ -925,6 +982,8 @@ async function buildProjectContext(
         context.frameworks,
       );
       fileInfo.lastModified = stats.mtimeMs;
+      fileInfo.fingerprint = getFileFingerprintFromStats(stats);
+      fileInfo.fingerprint = getFileFingerprintFromStats(stats);
 
       context.files.set(filePath, fileInfo);
 
@@ -984,6 +1043,7 @@ async function buildProjectContext(
         context.frameworks,
       );
       fileInfo.lastModified = stats.mtimeMs;
+      fileInfo.fingerprint = getFileFingerprintFromStats(stats);
       fileInfo.isTest = true; // Ensure it's marked as test
 
       // Add to files map (needed for dependency graph building)
