@@ -23,11 +23,90 @@ import type {
   TypeDefinition,
   TypeField,
   HttpClient,
+  RouteDefinition,
+  BackendFramework,
 } from "../types.js";
+
+type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" | "HEAD";
 
 // ============================================================================
 // Service Extraction
 // ============================================================================
+
+/**
+ * Extract routes from TypeScript backend (Express/NestJS)
+ */
+export async function extractRoutesFromTypeScript(
+  projectPath: string,
+  framework: BackendFramework,
+): Promise<RouteDefinition[]> {
+  const routes: RouteDefinition[] = [];
+
+  const routePatterns = [
+    `${projectPath}/**/routes/**/*.ts`,
+    `${projectPath}/**/routers/**/*.ts`,
+    `${projectPath}/**/controllers/**/*.ts`,
+    `${projectPath}/src/routes.ts`,
+    `${projectPath}/src/server.ts`,
+    `${projectPath}/src/app.ts`,
+  ];
+
+  const excludePatterns = [
+    "**/node_modules/**",
+    "**/*.test.ts",
+    "**/*.spec.ts",
+    "**/dist/**",
+    "**/build/**",
+  ];
+
+  for (const pattern of routePatterns) {
+    const files = await glob(pattern, {
+      ignore: excludePatterns,
+      nodir: true,
+      absolute: true,
+    });
+
+    for (const file of files) {
+      try {
+        const content = await fs.readFile(file, "utf-8");
+        const fileRoutes = extractRoutesFromFileRegex(content, file);
+        routes.push(...fileRoutes);
+      } catch (err) {
+        logger.debug(`Failed to extract routes from ${file}`);
+      }
+    }
+  }
+
+  logger.info(`Extracted ${routes.length} routes from ${projectPath}`);
+  return routes;
+}
+
+/**
+ * Extract Express/NestJS routes using regex
+ */
+function extractRoutesFromFileRegex(content: string, filePath: string): RouteDefinition[] {
+  const routes: RouteDefinition[] = [];
+  
+  // Match: router.get('/path', ...) or app.get('/path', ...)
+  const routeRegex = /(?:router|app)\.(get|post|put|patch|delete)\s*\(\s*['"`]([^'"`]+)['"`]/g;
+  
+  let match;
+  while ((match = routeRegex.exec(content)) !== null) {
+    const method = match[1].toUpperCase() as "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+    const path = match[2];
+    const line = content.substring(0, match.index).split('\n').length;
+    
+    routes.push({
+      method,
+      path,
+      handler: "", // Not extracted for TypeScript routes
+      file: filePath,
+      line,
+    });
+  }
+  
+  return routes;
+}
 
 /**
  * Extract all API service functions from a project

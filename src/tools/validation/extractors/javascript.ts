@@ -54,7 +54,7 @@ export function extractJSSymbols(
 
       if (nameNode) {
         const name = getText(nameNode, code);
-        const params = extractJSParams(paramsNode, code, filePath, symbols, options);
+        const { params, minParamCount } = extractJSParams(paramsNode, code, filePath, symbols, options);
         const isAsync = node.children.some(
           (c: Parser.SyntaxNode) => getText(c, code) === "async",
         );
@@ -68,6 +68,7 @@ export function extractJSSymbols(
           column: node.startPosition.column,
           params,
           paramCount: params.length,
+          minParamCount,
           isAsync,
           isExported,
         });
@@ -121,7 +122,7 @@ export function extractJSSymbols(
                 valueNode?.type === "function_expression"
               ) {
                 const paramsNode = valueNode.childForFieldName("parameters") || valueNode.childForFieldName("parameter");
-                const params = extractJSParams(
+                const { params, minParamCount } = extractJSParams(
                   paramsNode,
                   code,
                   filePath,
@@ -140,6 +141,7 @@ export function extractJSSymbols(
                   column: node.startPosition.column,
                   params,
                   paramCount: params.length,
+                  minParamCount,
                   isAsync,
                   isExported,
                 });
@@ -236,7 +238,7 @@ export function extractJSSymbols(
       if (nameNode) {
         const name = getText(nameNode, code);
         if (name !== "constructor") {
-          const params = extractJSParams(paramsNode, code, filePath, symbols, options);
+          const { params, minParamCount } = extractJSParams(paramsNode, code, filePath, symbols, options);
           const isAsync = node.children.some(
             (c: Parser.SyntaxNode) => getText(c, code) === "async",
           );
@@ -253,6 +255,7 @@ export function extractJSSymbols(
             column: node.startPosition.column,
             params,
             paramCount: params.length,
+            minParamCount,
             scope: currentClass || undefined,
             isAsync,
             returnType,
@@ -371,7 +374,7 @@ export function extractJSSymbols(
               const paramsNode = valueNode.childForFieldName("parameters") || valueNode.childForFieldName("parameter");
               // Pass undefined for symbols to avoid registering params as local variables
               // We only want the parameter names for the method signature
-              const params = extractJSParams(paramsNode, code, filePath, undefined, options);
+              const { params, minParamCount } = extractJSParams(paramsNode, code, filePath, undefined, options);
               const isAsync = valueNode.children.some(
                 (c: Parser.SyntaxNode) => getText(c, code) === "async",
               );
@@ -387,6 +390,7 @@ export function extractJSSymbols(
                 column: child.startPosition.column,
                 params,
                 paramCount: params.length,
+                minParamCount,
                 scope: parentVariableName || undefined,
                 isAsync,
                 isExported: parent?.parent?.parent?.type === "export_statement",
@@ -409,7 +413,7 @@ export function extractJSSymbols(
           if (nameNode) {
             const name = getText(nameNode, code);
             // Pass symbols to register params as local variables
-            const params = extractJSParams(paramsNode, code, filePath, symbols, options);
+            const { params, minParamCount } = extractJSParams(paramsNode, code, filePath, symbols, options);
             const isAsync = child.children.some(
               (c: Parser.SyntaxNode) => getText(c, code) === "async",
             );
@@ -426,6 +430,7 @@ export function extractJSSymbols(
               column: child.startPosition.column,
               params,
               paramCount: params.length,
+              minParamCount,
               scope: parentVariableName || undefined,
               isAsync,
               isExported: parent?.parent?.parent?.type === "export_statement",
@@ -523,14 +528,17 @@ export function extractJSParams(
   filePath: string = "",
   symbols?: ASTSymbol[],
   options: { includeParameterSymbols?: boolean } = {},
-): string[] {
-  if (!paramsNode) return [];
+): { params: string[]; minParamCount: number } {
+  if (!paramsNode) return { params: [], minParamCount: 0 };
 
   const params: string[] = [];
+  let minParamCount = 0;
+  
   for (const child of paramsNode.children) {
     if (child.type === "identifier") {
       const name = getText(child, code);
       params.push(name);
+      minParamCount++; // Simple identifiers are required
       // ALWAYS register simple parameter identifiers as local symbols.
       // This prevents false positives where function parameters are flagged
       // as "undefinedVariable" when used within the function body.
@@ -574,12 +582,18 @@ export function extractJSParams(
             );
           }
           // For param list, we use the raw text
-          params.push(getText(nameNode, code));
+          const paramText = getText(nameNode, code);
+          params.push(paramText);
+          // Optional parameters are marked with '?'
+          if (child.type !== "optional_parameter") {
+            minParamCount++;
+          }
         } else if (nameNode.type === "rest_pattern") {
           const id = nameNode.children.find((c) => c.type === "identifier");
           if (id) {
             const name = getText(id, code);
             params.push(name);
+            // Rest parameters are optional (can be 0 or more)
             // Rest parameters are registered as symbols
             if (symbols) {
               symbols.push({
@@ -595,6 +609,10 @@ export function extractJSParams(
           // Handle simple typed parameters: function foo(x: Type)
           const name = getText(nameNode, code);
           params.push(name);
+          // Optional parameters are marked with '?'
+          if (child.type !== "optional_parameter") {
+            minParamCount++;
+          }
           // ALWAYS register parameter symbols to prevent false positives
           // when validating local variable usage within the function scope
           if (symbols) {
@@ -619,10 +637,12 @@ export function extractJSParams(
           child.startPosition.row + 1,
         );
       }
-      params.push(getText(child, code));
+      const paramText = getText(child, code);
+      params.push(paramText);
+      minParamCount++; // Top-level destructured params are required
     }
   }
-  return params;
+  return { params, minParamCount };
 }
 
 /**

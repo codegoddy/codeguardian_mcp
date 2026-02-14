@@ -24,6 +24,7 @@ import {
   extractTypeReferencesAST,
 } from "./extractors/index.js";
 import { logger } from "../../utils/logger.js";
+import { shouldExcludeFile } from "../../utils/fileFilter.js";
 import * as path from "path";
 // @ts-ignore
 import { minimatch as minimatchFunc } from "minimatch";
@@ -128,7 +129,7 @@ export async function isSymbolTypeReferenced(
       return true;
     }
   }
-  
+
   // Check if any file imports this symbol as a type
   // This is faster than parsing AST for type references
   for (const [filePath, fileInfo] of context.files) {
@@ -284,7 +285,7 @@ export async function isSymbolUsedInSameFileExports(
 
   // OPTIMIZED: Check if symbol is used by other exports in the same file
   // by examining the import/export relationships in the context
-  
+
   // Check if any other symbol in the same file references this symbol
   for (const sym of fileInfo.symbols) {
     if (sym.name === symbolName) continue;
@@ -301,7 +302,7 @@ export async function isSymbolUsedInSameFileExports(
       content = await fs.readFile(definedInFile, "utf-8");
       fileContentCache.set(definedInFile, content);
     }
-    
+
     // Pattern 1: symbolName followed by a dot (member access via dot notation)
     // Pattern 2: symbolName followed by [ (member access via bracket notation)
     const memberAccessPattern = new RegExp(
@@ -496,10 +497,10 @@ export async function detectDeadCode(
 
       // Track Wildcard imports: import * as utils from './utils'
       if (imp.namespaceImport) {
-          const resolved = resolveImport(imp.source, filePath, allFileKeysEarly);
-          if (resolved) {
-              wildcardImportedModules.set(imp.namespaceImport, resolved);
-          }
+        const resolved = resolveImport(imp.source, filePath, allFileKeysEarly);
+        if (resolved) {
+          wildcardImportedModules.set(imp.namespaceImport, resolved);
+        }
       }
     }
   }
@@ -565,9 +566,9 @@ export async function detectDeadCode(
   for (const [filePath, fileInfo] of context.files) {
     if (fileInfo.isTest || fileInfo.isConfig || fileInfo.isEntryPoint) continue;
     if (fileInfo.exports.length === 0 && !fileInfo.symbols.some((s) => s.exported)) continue;
-    
+
     // Only deep-analyze if exports aren't in import graph
-    const hasUnimportedExports = fileInfo.exports.some(exp => 
+    const hasUnimportedExports = fileInfo.exports.some(exp =>
       !isSymbolImported(exp.name, filePath, symbolsImportedFromFile)
     );
     if (hasUnimportedExports) {
@@ -591,6 +592,13 @@ export async function detectDeadCode(
   for (const [filePath, fileInfo] of context.files) {
     if (fileInfo.isTest || fileInfo.isConfig || fileInfo.isEntryPoint) continue;
 
+    // Defense-in-depth: skip node_modules and other excluded directories.
+    // The file discovery layer should have filtered these out, but when
+    // the guardian scans from a project root where detectRootSourceDirs
+    // falls back to ".", excluded dirs can leak into context.files.
+    // Also handles cases where relative paths (../../) bypass glob patterns.
+    if (shouldExcludeFile(filePath) || shouldExcludeFile(fileInfo.relativePath)) continue;
+
     // Check against ignore patterns
     if (isIgnored(fileInfo.relativePath, ignorePatterns)) continue;
 
@@ -600,14 +608,14 @@ export async function detectDeadCode(
     // Collect from exports list
     for (const exp of fileInfo.exports) {
       const symbol = fileInfo.symbols.find((s) => s.name === exp.name);
-      
+
       // SKIP type-only exports (interfaces, type aliases, enums)
       // These are compile-time constructs and don't generate runtime code
       // They should not be flagged as "dead code"
       if (symbol?.kind === "interface" || symbol?.kind === "type") {
         continue;
       }
-      
+
       exportsToCheck.push({
         name: exp.name,
         file: filePath,
@@ -624,13 +632,13 @@ export async function detectDeadCode(
         exportsToCheck.some((e) => e.name === sym.name && e.file === filePath)
       )
         continue;
-      
+
       // SKIP type-only symbols (interfaces, type aliases, enums)
       // These are compile-time constructs and don't generate runtime code
       if (sym.kind === "interface" || sym.kind === "type") {
         continue;
       }
-      
+
       exportsToCheck.push({
         name: sym.name,
         file: filePath,
@@ -681,7 +689,7 @@ export async function detectDeadCode(
       exp.file,
       symbolsImportedFromFile,
     );
-    
+
     // Reflective usage check: Is this symbol name used in any string literal?
     // This perfectly handles dynamic registration (e.g. tools, handlers, routes)
     const isReflective = stringLiteralUsage.has(exp.name);
@@ -720,7 +728,7 @@ export async function detectDeadCode(
   const DEEP_BATCH_SIZE = 20;
   for (let i = 0; i < toAnalyze.length; i += DEEP_BATCH_SIZE) {
     const batch = toAnalyze.slice(i, i + DEEP_BATCH_SIZE);
-    
+
     const batchResults = await Promise.all(
       batch.map(async (exp) => {
         // Check cache first to avoid redundant work
@@ -728,14 +736,14 @@ export async function detectDeadCode(
         const cached = symbolUsageCache.get(cacheKey);
         if (cached !== undefined) {
           return cached ? null : (
-              {
-                type: "unusedExport" as const,
-                severity: "low" as const, // Downgrade from medium to low
-                name: exp.name,
-                file: exp.relativePath,
-                message: `Export '${exp.name}' is never used anywhere in the codebase`,
-              }
-            );
+            {
+              type: "unusedExport" as const,
+              severity: "low" as const, // Downgrade from medium to low
+              name: exp.name,
+              file: exp.relativePath,
+              message: `Export '${exp.name}' is never used anywhere in the codebase`,
+            }
+          );
         }
 
         // Check same-file usage first (fastest - uses cached file content)
@@ -797,6 +805,8 @@ export async function detectDeadCode(
   // Find orphaned files (files with exports but never imported AND no symbols used)
   for (const [filePath, fileInfo] of context.files) {
     if (fileInfo.isTest || fileInfo.isConfig || fileInfo.isEntryPoint) continue;
+    // Defense-in-depth: skip excluded directories for orphaned file detection
+    if (shouldExcludeFile(filePath)) continue;
 
     const importers = context.reverseImportGraph.get(filePath) || [];
     const hasExports =

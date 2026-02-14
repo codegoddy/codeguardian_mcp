@@ -9,10 +9,13 @@
 import { logger } from "../../utils/logger.js";
 import type { BackendContext, BackendProject } from "../types.js";
 import {
-  extractRoutes,
+  extractRoutes as extractPythonRoutes,
   extractModels,
   extractApiConfig,
+  extractRoutesFromFile as extractPythonRoutesFromFile,
+  extractModelsFromFile,
 } from "../extractors/python.js";
+import { extractRoutesFromTypeScript } from "../extractors/typescript.js";
 
 /**
  * Build backend context from a project path
@@ -25,9 +28,16 @@ export async function buildBackendContext(
 
   const startTime = Date.now();
 
-  // Extract routes and models in parallel
-  const [routes, models, config] = await Promise.all([
-    extractRoutes(project.path, project.framework),
+  // Extract routes based on framework
+  let routes;
+  if (project.framework === "express" || project.framework === "nestjs") {
+    routes = await extractRoutesFromTypeScript(project.path, project.framework);
+  } else {
+    routes = await extractPythonRoutes(project.path, project.framework);
+  }
+
+  // Extract models and config in parallel
+  const [models, config] = await Promise.all([
     extractModels(project.path),
     extractApiConfig(project.path),
   ]);

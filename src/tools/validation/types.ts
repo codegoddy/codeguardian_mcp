@@ -32,6 +32,7 @@ export interface ASTSymbol {
   column: number;
   params?: string[];
   paramCount?: number;
+  minParamCount?: number; // Minimum required params (excludes optional params)
   returnType?: string;
   scope?: string;
   isAsync?: boolean;
@@ -140,6 +141,7 @@ export interface ProjectSymbol {
   line?: number;
   params?: string[];
   paramCount?: number;
+  minParamCount?: number; // Minimum required params (excludes optional params)
   scope?: string;
   isAsync?: boolean;
   decorators?: string[];

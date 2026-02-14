@@ -188,6 +188,8 @@ export interface SymbolInfo {
   async?: boolean;
   returnType?: string;
   params?: Array<{ name: string; type?: string }>;
+  paramCount?: number; // Total number of parameters
+  minParamCount?: number; // Minimum required params (excludes optional params)
   scope?: string; // For object literal methods: the parent object name (e.g., "timeEntriesApi")
 }
 
@@ -1494,6 +1496,8 @@ function extractJSSymbolsAST(
         exported: sym.isExported ?? false,
         async: sym.isAsync,
         params: sym.params?.map((p) => ({ name: p })),
+        paramCount: sym.paramCount,
+        minParamCount: sym.minParamCount,
         returnType: sym.returnType,
         scope: sym.scope,
       });
@@ -1870,6 +1874,8 @@ function extractPythonSymbolsAST(
         exported: isExported,
         async: sym.isAsync,
         params: sym.params?.map((p) => ({ name: p })),
+        paramCount: sym.paramCount,
+        minParamCount: sym.minParamCount,
         scope: sym.scope,
       });
 

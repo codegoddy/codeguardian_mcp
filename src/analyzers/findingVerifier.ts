@@ -32,6 +32,7 @@ import * as path from "path";
 import { extractSymbolsAST } from "../tools/validation/extractors/index.js";
 import { checkPackageRegistry } from "../tools/validation/registry.js";
 import { impactAnalyzer, type BlastRadius } from "./impactAnalyzer.js";
+import { shouldExcludeFile } from "../utils/fileFilter.js";
 
 // ============================================================================
 // Types
@@ -166,9 +167,24 @@ export async function verifyFindingsAutomatically(
   onProgress?: (progress: VerificationProgress) => void,
 ): Promise<VerificationResult> {
   const allFindings: (ValidationIssue | DeadCodeIssue)[] = [...hallucinations, ...deadCode];
-  
+
+  // Defense-in-depth: filter out findings from excluded directories (node_modules, dist, etc.)
+  // before spending time verifying them. These are always false positives.
+  const filteredFindings = allFindings.filter(f => {
+    const file = f.file;
+    if (file && shouldExcludeFile(file)) {
+      logger.debug(`Skipping finding in excluded dir: ${file}`);
+      return false;
+    }
+    return true;
+  });
+  const excludedCount = allFindings.length - filteredFindings.length;
+  if (excludedCount > 0) {
+    logger.info(`Pre-filtered ${excludedCount} findings from excluded directories (node_modules, etc.)`);
+  }
+
   logger.info(
-    `Starting batched verification of ${allFindings.length} findings ` +
+    `Starting batched verification of ${filteredFindings.length} findings ` +
     `(${hallucinations.length} hallucinations, ${deadCode.length} dead code)...`
   );
 
@@ -181,7 +197,7 @@ export async function verifyFindingsAutomatically(
   };
 
   // Group findings by file for efficient batch processing
-  const fileBatches = groupFindingsByFile(allFindings);
+  const fileBatches = groupFindingsByFile(filteredFindings);
   logger.info(`Grouped into ${fileBatches.length} file batches for concurrent processing`);
 
   // Pre-batch git status for ALL files in a single git call (instead of per-file)
@@ -199,40 +215,40 @@ export async function verifyFindingsAutomatically(
 
   // Process file batches concurrently with limit
   const verifiedResults: VerifiedFinding[] = [];
-  
+
   for (let i = 0; i < fileBatches.length; i += MAX_CONCURRENCY) {
     const batch = fileBatches.slice(i, i + MAX_CONCURRENCY);
-    
+
     // Process this concurrent batch
     const batchResults = await Promise.all(
       batch.map(async (fileBatch) => {
         // Create file cache for this file
         const fileCache: FileCache = {};
-        
+
         // Pre-load file data (git status, content if needed)
         await preloadFileCache(fileBatch.filePath, ctx, fileCache);
-        
+
         // Verify all findings for this file
         const results: VerifiedFinding[] = [];
         for (const finding of fileBatch.findings) {
           const verified = await verifyFindingWithCache(finding, ctx, fileCache);
           results.push(verified);
         }
-        
+
         // Update progress
         progress.processedFiles++;
         progress.processedFindings += fileBatch.findings.length;
         onProgress?.(progress);
-        
+
         return results;
       })
     );
-    
+
     // Flatten results
     for (const results of batchResults) {
       verifiedResults.push(...results);
     }
-    
+
     // Yield to event loop between batches
     await new Promise((resolve) => setImmediate(resolve));
   }
@@ -269,17 +285,17 @@ function groupFindingsByFile(
   findings: (ValidationIssue | DeadCodeIssue)[]
 ): FileBatch[] {
   const fileMap = new Map<string, (ValidationIssue | DeadCodeIssue)[]>();
-  
+
   for (const finding of findings) {
     // Use a virtual key for findings without a file path (inline newCode validation)
     const filePath = finding.file || "(inline)";
-    
+
     if (!fileMap.has(filePath)) {
       fileMap.set(filePath, []);
     }
     fileMap.get(filePath)!.push(finding);
   }
-  
+
   return Array.from(fileMap.entries()).map(([filePath, findings]) => ({
     filePath,
     findings,
@@ -295,7 +311,7 @@ async function preloadFileCache(
   if (ctx.gitAvailable && ctx.gitStatusBatch) {
     cache.gitStatus = ctx.gitStatusBatch.get(filePath) ?? { isNew: false, isModified: false };
   }
-  
+
   // Feature branch is already cached on context during init
   if (ctx.gitAvailable) {
     cache.featureBranch = ctx.featureBranchCached;
@@ -353,7 +369,7 @@ async function verifyHallucinationWithCache(
 
       // Check if symbol exists in any form (maybe just not imported)
       const existsInProject = checkSymbolExistsInProject(issue, ctx);
-      
+
       if (existsInProject.exists) {
         status = "false_positive";
         confidence = 90;
@@ -363,7 +379,7 @@ async function verifyHallucinationWithCache(
       } else {
         // Use cached future feature detection
         const futureFeatureCheck = await detectFutureFeatureWithCache(issue, ctx, cache);
-        
+
         if (futureFeatureCheck.isFutureFeature) {
           status = "false_positive";
           confidence = futureFeatureCheck.confidence;
@@ -394,7 +410,7 @@ async function verifyHallucinationWithCache(
 
     case "nonExistentImport": {
       const moduleCheck = await checkModuleExports(issue, ctx);
-      
+
       if (moduleCheck.moduleExists && !moduleCheck.exportExists) {
         status = "confirmed";
         confidence = 98;
@@ -421,7 +437,7 @@ async function verifyHallucinationWithCache(
       const pkgName = extractPackageName(issue.message);
       const fileLang = issue.file ? detectFileLanguage(issue.file, ctx.language) : ctx.language;
       const existsOnNpm = await checkPackageExistsOnRegistry(pkgName, fileLang);
-      
+
       if (!existsOnNpm) {
         status = "confirmed";
         confidence = 99;
@@ -464,7 +480,7 @@ async function verifyHallucinationWithCache(
 
     case "wrongParamCount": {
       const paramCheck = await verifyParameterCount(issue, ctx);
-      
+
       if (paramCheck.isMismatch) {
         status = "confirmed";
         confidence = 92;
@@ -519,7 +535,7 @@ async function verifyHallucinationWithCache(
       }
 
       const usageCheck = await checkImportUsage(issue, ctx);
-      
+
       if (usageCheck.isUsed) {
         status = "false_positive";
         confidence = 90;
@@ -544,11 +560,11 @@ async function verifyHallucinationWithCache(
       const objectNameMatch = issue.message.match(/on '([^']+)'/);
       const methodName = methodNameMatch?.[1];
       const objectName = objectNameMatch?.[1];
-      
+
       if (methodName) {
         // Check if method exists with matching scope
         const methodExists = checkMethodExistsInProject(methodName, objectName, ctx);
-        
+
         if (methodExists.exists) {
           status = "false_positive";
           confidence = 90;
@@ -561,10 +577,10 @@ async function verifyHallucinationWithCache(
           break;
         }
       }
-      
+
       // Fallback: check inheritance chain (for class-based methods)
       const inheritanceCheck = await checkInheritanceChain(issue, ctx);
-      
+
       if (inheritanceCheck.foundInParent) {
         status = "false_positive";
         confidence = 85;
@@ -650,10 +666,10 @@ async function verifyDeadCodeWithCache(
         reasons.push("Not dead code - will likely be used when feature is complete");
         break;
       }
-      
+
       const isPublicApi = await checkIfPublicApi(issue, ctx);
       const isTestFile = issue.file.includes('.test.') || issue.file.includes('.spec.') || issue.file.includes('/test/');
-      
+
       if (isPublicApi) {
         status = "false_positive";
         confidence = 88;
@@ -679,7 +695,7 @@ async function verifyDeadCodeWithCache(
 
     case "unusedFunction": {
       const indirectCheck = await checkIndirectUsage(issue, ctx);
-      
+
       if (indirectCheck.isUsed) {
         status = "false_positive";
         confidence = 85;
@@ -698,7 +714,7 @@ async function verifyDeadCodeWithCache(
 
     case "orphanedFile": {
       const importCheck = await checkFileImports(issue, ctx);
-      
+
       if (importCheck.isImported) {
         status = "false_positive";
         confidence = 95;
@@ -707,7 +723,7 @@ async function verifyDeadCodeWithCache(
         reasons.push("This is not an orphaned file");
       } else {
         const isEntryPoint = await checkIfEntryPoint(issue, ctx);
-        
+
         if (isEntryPoint) {
           status = "false_positive";
           confidence = 90;
@@ -931,7 +947,7 @@ async function checkIfStubImplementation(
       cache.content = await fs.readFile(filePath, "utf-8");
     }
     const content = cache?.content ?? await fs.readFile(filePath, "utf-8");
-    
+
     const stubPatterns = [
       /throw\s+new\s+Error\s*\(\s*["']\s*not\s+implemented/i,
       /throw\s+new\s+Error\s*\(\s*["']\s*TODO/i,
@@ -1051,7 +1067,7 @@ function checkMethodExistsInProject(
       }
     }
   }
-  
+
   return { exists: false };
 }
 
@@ -1061,7 +1077,7 @@ async function checkModuleExports(
 ): Promise<{ moduleExists: boolean; exportExists: boolean }> {
   const moduleMatch = issue.message.match(/module ['"]([^'"]+)['"]/);
   const exportMatch = issue.message.match(/export ['"]([^'"]+)['"]/);
-  
+
   const moduleName = moduleMatch?.[1];
   const exportName = exportMatch?.[1];
 
@@ -1167,7 +1183,7 @@ async function checkPackageExistsOnRegistry(pkgName: string, language: string): 
     const scope = pkgName.split("/")[0];
     const name = pkgName.split("/")[1];
     if (!name) return false;
-    
+
     const commonScopes = ["@types", "@babel", "@rollup", "@vitejs", "@nestjs", "@angular", "@mui"];
     if (commonScopes.includes(scope)) return true;
   }
@@ -1230,7 +1246,7 @@ async function verifyParameterCount(
   const actual = parseInt(match[2], 10);
 
   const symbolName = issue.message.match(/Function ['"]([^'"]+)['"]/)?.[1];
-  
+
   if (symbolName) {
     const definitions = ctx.projectContext.symbolIndex.get(symbolName);
     if (definitions && definitions.length > 0) {
@@ -1257,7 +1273,7 @@ async function checkImportUsage(
       rawContent = await fs.readFile(issue.file, "utf-8");
       ctx.fileContentCache.set(issue.file, rawContent);
     }
-    
+
     // Strip import lines, comment-only lines, and the definition line so they
     // don't count as "usage".
     // Previously, `import { ChefHat } from 'lucide-react'; // ChefHat is unused`
@@ -1314,7 +1330,7 @@ async function checkImportUsage(
         return true;
       })
       .join("\n");
-    
+
     const patterns = [
       { regex: new RegExp(`\\b${escapedName}\\s*\\(`, "g"), type: "function call" },
       { regex: new RegExp(`\\b${escapedName}\\.`, "g"), type: "property access" },
@@ -1408,7 +1424,7 @@ async function checkFileImports(
         absPath === fileName ||
         absPath.endsWith(`/${fileName}`) ||
         path.basename(absPath).replace(/\.[^.]+$/, "") ===
-          path.basename(fileName).replace(/\.[^.]+$/, "")
+        path.basename(fileName).replace(/\.[^.]+$/, "")
       ) {
         importers.push(...reverseList);
       }

@@ -317,7 +317,8 @@ export function buildSymbolTable(
         file: def.file,
         line: def.symbol.line,
         params: def.symbol.params?.map((p) => p.name),
-        paramCount: def.symbol.params?.length,
+        paramCount: def.symbol.paramCount,
+        minParamCount: def.symbol.minParamCount,
         scope: def.symbol.scope,
       });
     }
@@ -1141,9 +1142,15 @@ export function validateSymbols(
       } else if (
         func &&
         used.argCount !== undefined &&
-        func.paramCount !== undefined
+        func.paramCount !== undefined &&
+        func.minParamCount !== undefined
       ) {
-        if (used.argCount !== func.paramCount && strictMode) {
+        // Check if argument count is within valid range [minParamCount, paramCount]
+        const isValidArgCount = 
+          used.argCount >= func.minParamCount && 
+          used.argCount <= func.paramCount;
+        
+        if (!isValidArgCount && strictMode) {
           const { confidence, reasoning } = calculateConfidence({
             issueType: "wrongParamCount",
             symbolName: used.name,
@@ -1152,10 +1159,15 @@ export function validateSymbols(
             strictMode,
           });
 
+          const expectedRange = 
+            func.minParamCount === func.paramCount 
+              ? `${func.paramCount}` 
+              : `${func.minParamCount}-${func.paramCount}`;
+
           issues.push({
             type: "wrongParamCount",
             severity: "high",
-            message: `Function '${used.name}' expects ${func.paramCount} args, got ${used.argCount}`,
+            message: `Function '${used.name}' expects ${expectedRange} args, got ${used.argCount}`,
             line: used.line,
             file: filePath,
             code: used.code,
@@ -1478,8 +1490,26 @@ export function validateSymbols(
         // For non-global whitelisted objects (app, router, db, prisma, etc.),
         // skip entirely — their methods are framework-provided and can't be
         // statically validated (e.g., app.listen(), router.get(), db.select()).
-        // Only fall through for true globals where shouldCheck may catch real issues.
+        // HOWEVER: If the code uses @ts-ignore, this is a red flag that the
+        // developer (or AI) knows the method doesn't exist. Flag it as suspicious.
         if (!STEALTH_HALLUCINATION_GLOBALS.has(rootObject)) {
+          // Check for @ts-ignore or @ts-expect-error which indicates intentional bypass
+          const codeLines = newCode.split("\n");
+          const prevLine = codeLines[used.line - 2]; // line is 1-indexed
+          if (prevLine?.includes("@ts-ignore") || prevLine?.includes("@ts-expect-error")) {
+            issues.push({
+              type: "nonExistentMethod",
+              severity: "high",
+              message: `Suspicious method call: '${used.object}.${used.name}()' uses @ts-ignore to bypass type checking`,
+              line: used.line,
+              file: filePath,
+              code: used.code,
+              suggestion: `Verify that '${used.object}' has a '${used.name}' method. The @ts-ignore comment suggests this method may not exist.`,
+              confidence: 85,
+              reasoning: `Method call on '${used.object}' uses @ts-ignore to bypass type checking, which often indicates the method doesn't exist or has incorrect types.`,
+            });
+          }
+          
           // SPECIAL CASE: ORM Pattern Detection (Prisma, TypeORM, Sequelize, etc.)
           // These ORMs have dynamic model access patterns like:
           // - prisma.user.findMany() - 'user' is a model name
