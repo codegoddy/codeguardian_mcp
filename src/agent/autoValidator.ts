@@ -94,6 +94,11 @@ export class AutoValidator {
   private static readonly MAX_CONCURRENT_VALIDATIONS = 2;
   private static readonly MAX_CONCURRENT_REFRESHES = 3;
 
+  // During guardian initialization, we start the watcher early but buffer events.
+  // This prevents missing changes that occur while context/manifest scans are running.
+  private isInitialized: boolean = false;
+  private bufferedEvents: Map<string, FileChangeEvent> = new Map();
+
   // Thresholds for smart mode
   private static readonly NEW_PROJECT_THRESHOLD = 5; // Less than 5 files = new project
   private static readonly LEARNING_MODE_FILE_COUNT = 10; // After 10 files created, switch to strict
@@ -163,6 +168,11 @@ export class AutoValidator {
     });
     */
 
+    // Start watcher early so we don't miss edits during initialization.
+    // Events are buffered until context + manifests are ready.
+    logger.info("Starting file watcher (early, buffered until ready)...");
+    this.watcher.start();
+
     // Pre-build context: detect full-stack and use "all" to include every language
     logger.info("Loading project context...");
     this.isFullStack = await this.detectFullStackProject();
@@ -215,8 +225,20 @@ export class AutoValidator {
       this.pushLearningModeNotification();
     }
 
-    logger.info("Starting file watcher...");
-    this.watcher.start();
+    // Mark initialized and flush any buffered file change events.
+    this.isInitialized = true;
+    if (this.bufferedEvents.size > 0) {
+      const buffered = Array.from(this.bufferedEvents.values());
+      this.bufferedEvents.clear();
+      logger.info(`Flushing ${buffered.length} buffered file event(s) from initialization window...`);
+      for (const ev of buffered) {
+        try {
+          this.handleFileChange(ev);
+        } catch {
+          // Best-effort
+        }
+      }
+    }
 
     // Silent ready status to avoid UI clutter
     /*
@@ -422,6 +444,12 @@ export class AutoValidator {
       // Always show API contract mismatches (they affect both sides)
       if (issue.type === 'apiContractMismatch') return true;
       
+      // Always show dead-code hygiene findings (local unuseds) regardless of scope.
+      // These are high-signal and should not be dropped by scope heuristics.
+      if (issue.type === 'unusedFunction' || issue.type === 'unusedExport' || issue.type === 'orphanedFile') {
+        return true;
+      }
+
       // For high severity, show if relevant to scope
       if (issue.severity === 'high') {
         // If we can't determine scope, show all high severity
@@ -770,6 +798,14 @@ export class AutoValidator {
   }
 
   private handleFileChange(event: FileChangeEvent): void {
+    // If initialization is still running, buffer the latest event per path.
+    // This avoids missing real-time edits made immediately after start_guardian returns.
+    if (!this.isInitialized) {
+      this.bufferedEvents.set(event.path, event);
+      logger.debug(`Buffered file event during init: ${event.type} ${event.path}`);
+      return;
+    }
+
     // Detect language for this specific file (full-stack aware)
     const fileLang = AutoValidator.detectFileLanguage(event.path);
     const refreshLang = this.isFullStack ? "all" : this.language;
@@ -902,6 +938,11 @@ export class AutoValidator {
       const mode = this.detectProjectMode();
       const isLenient = mode === "learning" || isNewFile;
 
+      // Propagate EFFECTIVE mode into underlying analyzers.
+      // NOTE: when this.mode === "auto", detectProjectMode() returns the computed
+      // operational mode (learning vs strict). We must use that for strictness.
+      const strictMode = mode === "strict" && !isLenient;
+
       // Detect the correct language for THIS file (not the project-level language)
       const fileLang = AutoValidator.detectFileLanguage(filePath);
       if (fileLang === "unknown") {
@@ -950,7 +991,7 @@ export class AutoValidator {
         symbolTable,
         content,
         fileLang,
-        false, // strictMode
+        strictMode,
         imports,
         this.pythonExports,
         context,

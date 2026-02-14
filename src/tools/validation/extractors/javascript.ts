@@ -14,9 +14,12 @@
  * @format
  */
 
-import type { Node as SyntaxNode } from "web-tree-sitter";
+import type { Node as WTSNode } from "web-tree-sitter";
 // Compatibility alias so existing `Parser.SyntaxNode` references keep working
-namespace Parser { export type SyntaxNode = import("web-tree-sitter").Node; }
+// eslint-disable-next-line @typescript-eslint/no-namespace
+namespace Parser {
+  export type SyntaxNode = WTSNode;
+}
 import type {
   ASTSymbol,
   ASTUsage,
@@ -914,8 +917,13 @@ export function extractJSUsages(
           const propNode = funcNode.childForFieldName("property");
 
           if (objNode && propNode) {
-            const obj = getText(objNode, code);
             const method = getText(propNode, code);
+
+            // IMPORTANT: preserve the full object expression for downstream validators.
+            // We still compute the root identifier for builtin/import filtering.
+            const rawObjText = getText(objNode, code);
+            const normalizedObjExpr = normalizeMemberExpressionText(rawObjText);
+            const rootObj = getRootObject(objNode, code);
 
             // Skip built-in objects (console, window, etc.) but NOT imported symbols
             // We need to track method calls on imported symbols for validation
@@ -924,21 +932,18 @@ export function extractJSUsages(
             // EXCEPTION: If the builtin is cast to `any` (e.g., `(window as any).foo()`),
             // do NOT skip — the `as any` cast is a deliberate type-safety bypass,
             // which is a strong signal of a stealth hallucination.
-            const rawObjText = getText(objNode, code);
             const isCastToAny = rawObjText.includes("as any") || rawObjText.includes("as unknown");
-            if (isJSBuiltin(obj) && !externalSymbols.has(obj) && !isCastToAny) {
+            if (isJSBuiltin(rootObj) && !externalSymbols.has(rootObj) && !isCastToAny) {
               // Skip method calls on built-in objects (Array.map, String.split, etc.)
               // These are standard library methods we don't need to validate
             } else {
-              // Extract the root object from complex expressions like:
-              // - (err as Type).property -> err
-              // - arr[index].property -> arr[index]
-              // - fn().property -> fn()
-              const rootObj = getRootObject(objNode, code);
               usages.push({
                 name: method,
                 type: "methodCall",
-                object: rootObj,
+                // Keep full chain (e.g., prisma.ghostItems) so validators can
+                // detect deep property hallucinations. Root extraction happens
+                // later in validateSymbols.
+                object: normalizedObjExpr || rootObj,
                 line: node.startPosition.row + 1,
                 column: node.startPosition.column,
                 code: getLineText(code, node.startPosition.row),
@@ -2053,6 +2058,29 @@ function getText(node: Parser.SyntaxNode, code: string): string {
 function getLineText(code: string, lineIndex: number): string {
   const lines = code.split("\n");
   return lines[lineIndex]?.trim() || "";
+}
+
+/**
+ * Normalize an object expression extracted from a member_expression.
+ *
+ * Goal: keep the semantic chain intact (e.g., `prisma.ghostItems`, `foo?.bar`)
+ * while removing newline/indentation noise that would break downstream string
+ * parsing and root-object extraction.
+ */
+function normalizeMemberExpressionText(text: string): string {
+  if (!text) return "";
+  // Collapse whitespace and normalize common separators.
+  // Keep spaces inside parenthesized expressions for `as any` detection.
+  return text
+    .trim()
+    // Normalize optional chaining and dot access
+    .replace(/\s*\?\.\s*/g, "?.")
+    .replace(/\s*\.\s*/g, ".")
+    // Normalize bracket access spacing
+    .replace(/\s*\[\s*/g, "[")
+    .replace(/\s*\]\s*/g, "]")
+    // Collapse remaining whitespace runs (newlines, indentation)
+    .replace(/\s+/g, " ");
 }
 
 /**

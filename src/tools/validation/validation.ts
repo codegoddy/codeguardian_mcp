@@ -17,6 +17,8 @@
  */
 
 import * as path from "path";
+import * as fsSync from "fs";
+import { globSync } from "glob";
 import type { ProjectContext } from "../../context/projectContext.js";
 import type {
   ValidationIssue,
@@ -45,6 +47,93 @@ import {
   getContextualReason,
 } from "./contextualNaming.js";
 import { checkPackageRegistry } from "./registry.js";
+
+// =============================================================================
+// Optional Prisma model delegate validation (monorepo-friendly, sync)
+// =============================================================================
+
+type PrismaDelegateCache = {
+  rootPath: string;
+  schemaPath: string;
+  mtimeMs: number;
+  delegates: Set<string>;
+};
+
+let prismaDelegateCache: PrismaDelegateCache | null = null;
+
+function toPrismaDelegateName(modelName: string): string {
+  if (!modelName) return modelName;
+  return modelName[0]!.toLowerCase() + modelName.slice(1);
+}
+
+function findPrismaSchemaPathSync(projectPath: string): string | null {
+  // Common locations first (fast path)
+  const candidates = [
+    path.join(projectPath, "prisma/schema.prisma"),
+    path.join(projectPath, "backend/prisma/schema.prisma"),
+    path.join(projectPath, "server/prisma/schema.prisma"),
+    path.join(projectPath, "apps/backend/prisma/schema.prisma"),
+    path.join(projectPath, "packages/backend/prisma/schema.prisma"),
+  ];
+  for (const p of candidates) {
+    if (fsSync.existsSync(p)) return p;
+  }
+
+  // Fallback: scan for any prisma/schema.prisma under the project root
+  // (best-effort; guarded by caching so it won't run repeatedly).
+  try {
+    const matches = globSync(path.join(projectPath, "**/prisma/schema.prisma"), {
+      ignore: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.git/**"],
+      nodir: true,
+      absolute: true,
+    });
+    if (!matches || matches.length === 0) return null;
+    matches.sort((a, b) => a.split(path.sep).length - b.split(path.sep).length);
+    return matches[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+function loadPrismaDelegatesSync(projectPath: string): Set<string> {
+  try {
+    const schemaPath = findPrismaSchemaPathSync(projectPath);
+    if (!schemaPath) return new Set();
+    const stat = fsSync.statSync(schemaPath);
+
+    if (
+      prismaDelegateCache &&
+      prismaDelegateCache.rootPath === projectPath &&
+      prismaDelegateCache.schemaPath === schemaPath &&
+      prismaDelegateCache.mtimeMs === stat.mtimeMs
+    ) {
+      return prismaDelegateCache.delegates;
+    }
+
+    const content = fsSync.readFileSync(schemaPath, "utf-8");
+    const delegates = new Set<string>();
+
+    const re = /^\s*model\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{/gm;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(content))) {
+      const modelName = m[1];
+      delegates.add(toPrismaDelegateName(modelName));
+      // Keep original model name too (rare, but helps for custom generators)
+      delegates.add(modelName);
+    }
+
+    prismaDelegateCache = {
+      rootPath: projectPath,
+      schemaPath,
+      mtimeMs: stat.mtimeMs,
+      delegates,
+    };
+
+    return delegates;
+  } catch {
+    return new Set();
+  }
+}
 
 // ============================================================================
 // Manifest Validation (Tier 0)
@@ -1293,6 +1382,58 @@ export function validateSymbols(
             "sk",
           ].includes(rootObject))
       ) {
+        // Prisma deep-property hallucination detection (real-time safe, schema-backed)
+        //
+        // If we see a delegate-style access like `prisma.<model>.findMany()`, validate
+        // that `<model>` exists as a Prisma delegate derived from schema.prisma.
+        // This catches hallucinations like `prisma.ghostItems.findMany()`.
+        if (rootObject === "prisma" && typeof used.object === "string") {
+          const expr = used.object
+            .replace(/\s+/g, "")
+            .replace(/\?\./g, ".");
+
+          // Only handle the delegate form. Client-level methods like `prisma.$transaction()`
+          // have used.object === "prisma" and should not be checked here.
+          const parts = expr.split(".").filter(Boolean);
+          const looksLikeDelegateCall = parts.length >= 2 && parts[0] === "prisma";
+          if (looksLikeDelegateCall && context?.projectPath) {
+            const delegate = parts[1];
+            // Ignore $-prefixed Prisma client methods just in case the parser produced a chain.
+            if (delegate && !delegate.startsWith("$")) {
+              const delegates = loadPrismaDelegatesSync(context.projectPath);
+              if (delegates.size > 0 && !delegates.has(delegate)) {
+                const suggestion = suggestSimilar(delegate, Array.from(delegates));
+                const similarSymbols = extractSimilarSymbols(suggestion);
+                const { confidence, reasoning } = calculateConfidence({
+                  issueType: "undefinedVariable",
+                  symbolName: delegate,
+                  similarSymbols,
+                  existsInProject: false,
+                  strictMode,
+                });
+
+                issues.push({
+                  type: "undefinedVariable",
+                  severity: "critical",
+                  message: `Prisma model delegate '${delegate}' does not exist (used in prisma.${delegate}.${used.name}())`,
+                  line: used.line,
+                  file: filePath,
+                  code: used.code,
+                  suggestion:
+                    suggestion && suggestion.trim().length > 0
+                      ? `Did you mean '${suggestion}'? Ensure your Prisma schema defines the model, then regenerate the client.`
+                      : `Ensure your Prisma schema defines the model for delegate '${delegate}', then regenerate the client.`,
+                  confidence: Math.max(confidence, 92),
+                  reasoning:
+                    reasoning +
+                    " Prisma delegate names are derived from schema.prisma model names (typically lowerCamelCase).",
+                });
+                continue;
+              }
+            }
+          }
+        }
+
         // Special Case: Still validate the method name itself if it's NOT a known builtin
         // This ensures we catch true hallucinations like toast.hallucinatedMethod()
         if (isJSBuiltin(used.name) || isPythonBuiltin(used.name)) {
