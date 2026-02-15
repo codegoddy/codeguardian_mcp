@@ -173,10 +173,21 @@ The two primary tools that handle everything for you:
 
 Scans your entire codebase for hallucinations, dead code, and bad imports. Best for on-demand audits.
 
+> **Where to run:** From the **specific subdirectory** you want to validate (e.g., `frontend/` or `backend/`), not the monorepo root.
+
 ```
+# Example: Validate frontend only
+cd /path/to/your/project/frontend
 start_validation({
-  projectPath: "/absolute/path/to/your/project",
+  projectPath: "/path/to/your/project/frontend",
   language: "typescript"
+})
+
+# Example: Validate backend only  
+cd /path/to/your/project/backend
+start_validation({
+  projectPath: "/path/to/your/project/backend", 
+  language: "python"
 })
 ```
 
@@ -188,19 +199,23 @@ This runs in the background (no timeouts). Check progress and get results with:
 
 Watches your project and automatically validates files as you (or your AI) edit them. Runs continuously in the background.
 
+> **Where to run:** From the **project root directory** (monorepo root). Guardian will auto-detect and watch all subprojects (frontend, backend, etc.).
+
 ```
+# Run from project root (monorepo root)
+cd /path/to/your/project
 start_guardian({
-  projectPath: "/absolute/path/to/your/project",
-  language: "typescript"
+  projectPath: "/path/to/your/project",
+  language: "typescript"  // or "python" or "auto"
 })
 ```
 
-Once running, it catches issues in real-time. Use these companion tools:
+Once running, it catches issues in real-time across all subprojects. Use these companion tools:
 - `get_guardian_alerts` — see current issues found by the watcher
-- `get_guardian_status` — check which guardians are active
+- `get_guardian_status` — check which guardians are active  
 - `stop_guardian` — stop a guardian when done
 
-> **Tip:** These two tools handle everything without needing to call individual validation tools manually. `start_validation` for audits, `start_guardian` for continuous protection.
+> **Tip:** These two tools handle everything without needing to call individual validation tools manually. `start_validation` for focused audits on specific subdirectories, `start_guardian` for continuous protection across the entire project.
 
 ## Features
 
