@@ -609,13 +609,6 @@ export async function detectDeadCode(
     for (const exp of fileInfo.exports) {
       const symbol = fileInfo.symbols.find((s) => s.name === exp.name);
 
-      // SKIP type-only exports (interfaces, type aliases, enums)
-      // These are compile-time constructs and don't generate runtime code
-      // They should not be flagged as "dead code"
-      if (symbol?.kind === "interface" || symbol?.kind === "type") {
-        continue;
-      }
-
       exportsToCheck.push({
         name: exp.name,
         file: filePath,
@@ -632,12 +625,6 @@ export async function detectDeadCode(
         exportsToCheck.some((e) => e.name === sym.name && e.file === filePath)
       )
         continue;
-
-      // SKIP type-only symbols (interfaces, type aliases, enums)
-      // These are compile-time constructs and don't generate runtime code
-      if (sym.kind === "interface" || sym.kind === "type") {
-        continue;
-      }
 
       exportsToCheck.push({
         name: sym.name,

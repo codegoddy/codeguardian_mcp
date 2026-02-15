@@ -1,6 +1,6 @@
 {
   "name": "codeguardian-mcp",
-  "version": "1.1.8",
+  "version": "1.2.4",
   "description": "CodeGuardian MCP - Automated Quality Assurance for Vibe Coding with AI Hallucination Prevention",
   "main": "dist/server.js",
   "bin": {
@@ -37,7 +37,7 @@
     "testing",
     "hallucination-prevention"
   ],
-  "author": "BridgeMind",
+  "author": "CodeGoddy",
   "license": "MIT",
   "repository": {
     "type": "git",

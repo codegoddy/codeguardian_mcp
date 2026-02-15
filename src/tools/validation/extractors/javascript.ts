@@ -81,7 +81,7 @@ export function extractJSSymbols(
       // const/let/var declarations
       // Check if this declaration is exported
       const isExported = node.parent?.type === "export_statement";
-      
+
       for (const child of node.children) {
         if (child.type === "variable_declarator") {
           const nameNode = child.childForFieldName("name");
@@ -242,7 +242,7 @@ export function extractJSSymbols(
           const isAsync = node.children.some(
             (c: Parser.SyntaxNode) => getText(c, code) === "async",
           );
-          
+
           // Extract return type for TypeScript methods
           const returnTypeNode = node.childForFieldName("return_type");
           const returnType = returnTypeNode ? getText(returnTypeNode, code) : undefined;
@@ -337,8 +337,34 @@ export function extractJSSymbols(
           column: node.startPosition.column,
           isExported,
         });
+
+        // Also extract enum members as symbols to prevent false positives
+        // e.g., enum OrderPriority { Low = 'low', Normal = 'normal' }
+        // Without this, 'Low' and 'Normal' are flagged as undefinedVariable
+        const bodyNode = node.children.find((c: Parser.SyntaxNode) => c.type === "enum_body");
+        if (bodyNode) {
+          for (const member of bodyNode.children) {
+            if (member.type === "enum_assignment" || member.type === "property_identifier") {
+              const memberNameNode = member.type === "enum_assignment"
+                ? member.children.find((c: Parser.SyntaxNode) => c.type === "property_identifier" || c.type === "identifier")
+                : member;
+              if (memberNameNode) {
+                const memberName = getText(memberNameNode, code);
+                symbols.push({
+                  name: memberName,
+                  type: "variable",
+                  file: filePath,
+                  line: memberNameNode.startPosition.row + 1,
+                  column: memberNameNode.startPosition.column,
+                  scope: name, // scope is the enum name
+                });
+              }
+            }
+          }
+        }
       }
-      break;
+      // Don't recurse into enum body — we've already handled all members
+      return;
     }
 
     // Object literals: const api = { method: () => {} }
@@ -348,28 +374,28 @@ export function extractJSSymbols(
       // This handles: const timeEntriesApi = { getPending: async () => {} }
       const parent = node.parent;
       let parentVariableName: string | null = null;
-      
+
       if (parent?.type === "variable_declarator") {
         const nameNode = parent.childForFieldName("name");
         if (nameNode?.type === "identifier") {
           parentVariableName = getText(nameNode, code);
         }
       }
-      
+
       // Extract all method properties from the object literal
       for (const child of node.children) {
         if (child.type === "pair") {
           const keyNode = child.childForFieldName("key");
           const valueNode = child.childForFieldName("value");
-          
+
           if (keyNode && valueNode) {
             const keyName = getText(keyNode, code);
-            
+
             // Check if the value is a function (arrow_function, function, or call_expression that returns a function)
-            const isFunctionValue = 
+            const isFunctionValue =
               valueNode.type === "arrow_function" ||
               valueNode.type === "function";
-            
+
             if (isFunctionValue) {
               const paramsNode = valueNode.childForFieldName("parameters") || valueNode.childForFieldName("parameter");
               // Pass undefined for symbols to avoid registering params as local variables
@@ -378,7 +404,7 @@ export function extractJSSymbols(
               const isAsync = valueNode.children.some(
                 (c: Parser.SyntaxNode) => getText(c, code) === "async",
               );
-              
+
               // Register as a method with scope = parent variable name
               // Note: We don't extract params here - let recursion handle it
               // to avoid duplicate parameter symbols
@@ -395,7 +421,7 @@ export function extractJSSymbols(
                 isAsync,
                 isExported: parent?.parent?.parent?.type === "export_statement",
               });
-              
+
               // Recurse into the arrow function to extract its parameter symbols
               // This ensures parameters like (id) in { mutationFn: (id) => ... } are registered
               extractJSSymbols(valueNode, code, filePath, symbols, null, options);
@@ -409,7 +435,7 @@ export function extractJSSymbols(
         else if (child.type === "method_definition") {
           const nameNode = child.childForFieldName("name");
           const paramsNode = child.childForFieldName("parameters");
-          
+
           if (nameNode) {
             const name = getText(nameNode, code);
             // Pass symbols to register params as local variables
@@ -417,11 +443,11 @@ export function extractJSSymbols(
             const isAsync = child.children.some(
               (c: Parser.SyntaxNode) => getText(c, code) === "async",
             );
-            
+
             // Extract return type for TypeScript methods
             const returnTypeNode = child.childForFieldName("return_type");
             const returnType = returnTypeNode ? getText(returnTypeNode, code) : undefined;
-            
+
             symbols.push({
               name,
               type: "method",
@@ -436,7 +462,7 @@ export function extractJSSymbols(
               isExported: parent?.parent?.parent?.type === "export_statement",
               returnType,
             });
-            
+
             // Recurse into method body to extract any nested symbols
             const bodyNode = child.childForFieldName("body");
             if (bodyNode) {
@@ -533,7 +559,7 @@ export function extractJSParams(
 
   const params: string[] = [];
   let minParamCount = 0;
-  
+
   for (const child of paramsNode.children) {
     if (child.type === "identifier") {
       const name = getText(child, code);
@@ -556,6 +582,16 @@ export function extractJSParams(
       child.type === "optional_parameter" ||
       child.type === "rest_pattern"
     ) {
+      const rawParamText = getText(child, code);
+      const hasOptionalMarker =
+        child.type === "optional_parameter" ||
+        rawParamText.includes("?") ||
+        child.children.some((c) => c?.type === "?" || getText(c, code) === "?");
+      // Default-initialized params are effectively optional.
+      const hasDefaultInitializer =
+        rawParamText.includes("=") ||
+        child.children.some((c) => c?.type === "=" || c?.type === "assignment_pattern");
+
       // Logic for destructuring or simple names in typed parameters
       // TypeScript: function foo({ x }: Type) or function foo(x: Type)
       const nameNode =
@@ -584,8 +620,7 @@ export function extractJSParams(
           // For param list, we use the raw text
           const paramText = getText(nameNode, code);
           params.push(paramText);
-          // Optional parameters are marked with '?'
-          if (child.type !== "optional_parameter") {
+          if (!hasOptionalMarker && !hasDefaultInitializer) {
             minParamCount++;
           }
         } else if (nameNode.type === "rest_pattern") {
@@ -609,8 +644,7 @@ export function extractJSParams(
           // Handle simple typed parameters: function foo(x: Type)
           const name = getText(nameNode, code);
           params.push(name);
-          // Optional parameters are marked with '?'
-          if (child.type !== "optional_parameter") {
+          if (!hasOptionalMarker && !hasDefaultInitializer) {
             minParamCount++;
           }
           // ALWAYS register parameter symbols to prevent false positives
@@ -624,6 +658,24 @@ export function extractJSParams(
               column: nameNode.startPosition.column,
             });
           }
+        }
+      }
+    } else if (child.type === "assignment_pattern") {
+      // Default parameter: function foo(x = 1)
+      // Treated as optional for minParamCount.
+      const leftNode = child.childForFieldName("left");
+      if (leftNode) {
+        const paramText = getText(leftNode, code);
+        params.push(paramText);
+        if (symbols && leftNode.type === "identifier") {
+          const name = getText(leftNode, code);
+          symbols.push({
+            name,
+            type: "variable",
+            file: filePath,
+            line: leftNode.startPosition.row + 1,
+            column: leftNode.startPosition.column,
+          });
         }
       }
     } else if (child.type === "object_pattern" || child.type === "array_pattern") {
@@ -692,15 +744,15 @@ export function extractDestructuredNames(
     }
 
     case "object_assignment_pattern": {
-       // Handle { a = 1 } in object destructuring (with default value)
-       for (const child of node.children) {
-         // Only extract the identifier being defined, not the default value
-         if (child.type === "shorthand_property_identifier_pattern" ||
-             child.type === "identifier") {
-           extractDestructuredNames(child, code, filePath, symbols, line, depth + 1);
-         }
-       }
-       break;
+      // Handle { a = 1 } in object destructuring (with default value)
+      for (const child of node.children) {
+        // Only extract the identifier being defined, not the default value
+        if (child.type === "shorthand_property_identifier_pattern" ||
+          child.type === "identifier") {
+          extractDestructuredNames(child, code, filePath, symbols, line, depth + 1);
+        }
+      }
+      break;
     }
 
     case "object_pattern":
@@ -722,7 +774,7 @@ export function extractDestructuredNames(
       }
       break;
     }
-    
+
     case "rest_pattern": {
       // Handle ...rest - find the identifier inside
       for (const child of node.children) {
@@ -832,11 +884,28 @@ export function collectJSLocalDefinitions(
       break;
     }
 
-    // Enum declaration
+    // Enum declaration — collect both the enum name and all member names
     case "enum_declaration": {
       const nameNode = node.childForFieldName("name");
       if (nameNode && nameNode.type === "identifier") {
         definitions.add(getText(nameNode, code));
+      }
+      // Also collect enum member names to prevent false undefinedVariable positives
+      const bodyNode = node.children.find((c: any) => c.type === "enum_body");
+      if (bodyNode) {
+        for (const member of bodyNode.children) {
+          if (member.type === "enum_assignment") {
+            const memberNameNode = member.children.find(
+              (c: any) => c.type === "property_identifier" || c.type === "identifier"
+            );
+            if (memberNameNode) {
+              definitions.add(getText(memberNameNode, code));
+            }
+          } else if (member.type === "property_identifier" || member.type === "identifier") {
+            // Bare enum member without assignment (e.g., enum Foo { Bar })
+            definitions.add(getText(member, code));
+          }
+        }
       }
       break;
     }
@@ -1021,8 +1090,8 @@ export function extractJSUsages(
       ) {
         const parentCall =
           node.parent?.type === "call_expression" ? node.parent
-          : node.parent?.parent?.type === "call_expression" ? node.parent.parent
-          : null;
+            : node.parent?.parent?.type === "call_expression" ? node.parent.parent
+              : null;
         if (parentCall) {
           const argsNode = parentCall.childForFieldName("arguments");
           if (argsNode && argsNode.children.length > 0) {
@@ -1115,7 +1184,7 @@ export function extractJSUsages(
         const objNode = parent.childForFieldName("object");
         // Use getRootObject to handle complex expressions like (err as Type).property
         const objName = objNode ? getRootObject(objNode, code) : "";
-        
+
         // Special case: member_expression inside JSX-misparsed context
         // This happens with: <button aria-label="Close" role="button">
         // where 'role' becomes property_identifier in member_expression inside assignment_expression
@@ -1141,7 +1210,7 @@ export function extractJSUsages(
                 const typeAssertChild = ancestor.children.find(c => c.type === "type_assertion");
                 const dashChild = ancestor.children.find(c => c.type === "-" || c.text === "-");
                 const assignChild = ancestor.children.find(c => c.type === "assignment_expression");
-                
+
                 if (typeAssertChild && dashChild && assignChild) {
                   isInJsxContext = true;
                   break;
@@ -1156,13 +1225,13 @@ export function extractJSUsages(
           }
           ancestor = ancestor.parent;
         }
-        
+
         if (isInJsxContext) {
           // Skip this property_identifier - it's likely a JSX attribute name
           // that got misparsed as member_expression due to parser confusion
           break;
         }
-        
+
         // Check if this member_expression is the function of a call_expression.
         // If so, it's already handled by the call_expression case above (line ~892).
         // If NOT, it's just property access (e.g., dashboard.projects, arr[0].name)
@@ -1170,12 +1239,12 @@ export function extractJSUsages(
         const memberParent = parent.parent;
         const isCallTarget = memberParent?.type === "call_expression" &&
           memberParent.childForFieldName("function")?.id === parent.id;
-        
+
         if (isCallTarget) {
           // Already handled by call_expression case — skip to avoid double-reporting
           break;
         }
-        
+
         // This is pure property access (not a call), e.g.:
         // - dashboard.projects (API response property)
         // - updated[idx].deliverables (array element property)
@@ -1203,6 +1272,11 @@ export function extractJSUsages(
       if (parent.type === "pair" && parent.childForFieldName("key")?.id === node.id)
         break;
 
+      // 2. Skip enum member names (e.g., Low in `Low = 'low'` inside enum body)
+      // Tree-sitter parses these as property_identifier inside enum_assignment
+      if (parent.type === "enum_assignment" || parent.type === "enum_body")
+        break;
+
       // 2a. Skip if it's a property name in an interface or type literal
       // e.g., interface Foo { bar: string } or type Foo = { bar: string }
       // The property name is a definition, not a usage of an external variable
@@ -1213,12 +1287,12 @@ export function extractJSUsages(
       // e.g., class Foo { private bar: string }
       // TypeScript uses public_field_definition, private_field_definition, etc.
       // Note: property_identifier is used as the name node for class fields
-      if ((parent.type === "property_definition" || 
-           parent.type === "public_field_definition" ||
-           parent.type === "private_field_definition" ||
-           parent.type === "protected_field_definition" ||
-           parent.type === "field_definition") && 
-          parent.childForFieldName("name")?.id === node.id)
+      if ((parent.type === "property_definition" ||
+        parent.type === "public_field_definition" ||
+        parent.type === "private_field_definition" ||
+        parent.type === "protected_field_definition" ||
+        parent.type === "field_definition") &&
+        parent.childForFieldName("name")?.id === node.id)
         break;
 
       // 2c. Skip if it's a JSX attribute name (e.g., <div className="foo" />)
@@ -1226,7 +1300,7 @@ export function extractJSUsages(
       // JSX attributes have the name as the first child (property_identifier or jsx_identifier)
       if (parent.type === "jsx_attribute" && parent.children[0]?.id === node.id)
         break;
-      
+
       // 2d. Skip property_identifier when it's used as a JSX attribute name
       // This handles cases where JSX parsing produces different AST structures
       // e.g., <img src={url} /> where 'src' might be parsed as property_identifier
@@ -1237,8 +1311,8 @@ export function extractJSUsages(
         while (ancestor) {
           if (ancestor.type === "jsx_attribute") {
             // This property_identifier is the attribute name
-            if (ancestor.children[0]?.id === node.id || 
-                (ancestor.childForFieldName("name")?.id === node.id)) {
+            if (ancestor.children[0]?.id === node.id ||
+              (ancestor.childForFieldName("name")?.id === node.id)) {
               return; // Skip - this is a JSX attribute name, not a variable reference
             }
           }
@@ -1256,7 +1330,7 @@ export function extractJSUsages(
                 }
               }
             }
-            
+
             // Special case: property_identifier inside member_expression inside ERROR
             // This happens with: <button aria-label="Close" role="button">
             // where 'role' becomes property_identifier in member_expression
@@ -1273,7 +1347,7 @@ export function extractJSUsages(
           }
           ancestor = ancestor.parent;
         }
-        
+
         // Additional check: property_identifier in member_expression that's part of
         // a JSX-like pattern even without ERROR nodes
         // This handles: <button aria-label="Close menu" role="button">
@@ -1284,7 +1358,7 @@ export function extractJSUsages(
           // This is "value"?.property = something
           const objNode = parent.childForFieldName("object");
           const propNode = parent.childForFieldName("property");
-          
+
           if (objNode?.type === "string" && propNode === node) {
             // The member_expression looks like "string"?.property
             // Check if parent of member_expression is followed by =
@@ -1302,7 +1376,7 @@ export function extractJSUsages(
           }
         }
       }
-      
+
       // 2e. Skip identifiers/type_identifiers that are actually JSX attribute names
       // This handles cases where JSX parsing produces type-related AST nodes
       // e.g., <img src={url} /> where 'src' might be parsed as type_identifier
@@ -1314,16 +1388,16 @@ export function extractJSUsages(
         if (nodeIndexInParent >= 0) {
           const nextSibling = parent.children[nodeIndexInParent + 1];
           if (nextSibling && (
-            nextSibling.type === "=" || 
+            nextSibling.type === "=" ||
             nextSibling.text === "="
           )) {
             return; // Skip - this is attr= pattern (JSX attribute name)
           }
-          
+
           // Handle hyphenated attributes like aria-label, data-testid
           // Pattern: attr-name= (identifier, -, identifier, =)
           if (nextSibling && (
-            nextSibling.type === "-" || 
+            nextSibling.type === "-" ||
             nextSibling.text === "-"
           )) {
             const nextNextSibling = parent.children[nodeIndexInParent + 2];
@@ -1331,14 +1405,14 @@ export function extractJSUsages(
             if (nextNextSibling && nextNextSibling.type === "identifier") {
               // Check if after the second part there's an = 
               if (nextNextNextSibling && (
-                nextNextNextSibling.type === "=" || 
+                nextNextNextSibling.type === "=" ||
                 nextNextNextSibling.text === "="
               )) {
                 return; // Skip - this is aria-label= pattern (JSX attribute name)
               }
             }
           }
-          
+
           // Handle identifiers in type_assertion that are actually JSX attribute names
           // Pattern: <button aria-label="..."> where 'aria' is parsed as type_assertion's expression
           // The structure is: type_assertion (type_arguments + identifier) - assignment_expression
@@ -1348,7 +1422,7 @@ export function extractJSUsages(
             if (parentIndex !== undefined && parentIndex >= 0 && parent.parent) {
               const nextAfterParent = parent.parent.children[parentIndex + 1];
               if (nextAfterParent && (
-                nextAfterParent.type === "-" || 
+                nextAfterParent.type === "-" ||
                 nextAfterParent.text === "-"
               )) {
                 return; // Skip - this looks like aria-label pattern
@@ -1356,15 +1430,15 @@ export function extractJSUsages(
             }
           }
         }
-        
+
         // Check if this is inside a JSX-like context (ERROR node or type_parameters)
         // where the identifier is followed by = or has JSX-like structure
         let ancestor: Parser.SyntaxNode | null = parent;
         while (ancestor) {
           // Check if we're inside what looks like a JSX element
-          if (ancestor.type === "ERROR" || ancestor.type === "type_parameters" || 
-              ancestor.type === "type_arguments") {
-            
+          if (ancestor.type === "ERROR" || ancestor.type === "type_parameters" ||
+            ancestor.type === "type_arguments") {
+
             // For type_identifiers inside type_parameter (e.g., src={val} parsed as type)
             // Structure: type_parameter -> type_identifier (attr name) -> default_type (=value)
             if (parent.type === "type_parameter") {
@@ -1377,13 +1451,13 @@ export function extractJSUsages(
                 }
               }
             }
-            
+
             // Handle identifiers inside ERROR nodes that are inside type_parameter
             // This happens with: <Tag type="file" /> where 'type' is parsed as type_identifier
             // Structure: type_parameter -> ERROR (only child is identifier "type") -> default_type
             if (parent.type === "ERROR") {
               const grandparent = parent.parent;
-              
+
               // Case 1: ERROR is inside type_parameter, and ERROR only contains this identifier
               // This is the "type" in <input type="file" ...>
               if (grandparent && grandparent.type === "type_parameter") {
@@ -1399,7 +1473,7 @@ export function extractJSUsages(
                   }
                 }
               }
-              
+
               // Case 2: ERROR is inside default_type, containing multiple identifiers
               // This is "multiple" or "accept" in <input type="file" multiple accept="..." />
               const greatGrandparent = grandparent?.parent;
@@ -1408,7 +1482,7 @@ export function extractJSUsages(
                 // Check if this identifier follows a literal_type (boolean attr after value)
                 const nodeIndex = parent.children.indexOf(node as any);
                 const prevSibling = nodeIndex > 0 ? parent.children[nodeIndex - 1] : null;
-                
+
                 if (prevSibling && (
                   prevSibling.type === "literal_type" ||
                   prevSibling.type === "identifier"
@@ -1418,12 +1492,12 @@ export function extractJSUsages(
               }
             }
           }
-          
+
           // Check if we're inside a jsx_expression - this is the {value} part, not the attribute name
           if (ancestor.type === "jsx_expression") {
             break; // Don't skip - identifiers inside { } are actual variable references
           }
-          
+
           ancestor = ancestor.parent;
         }
       }
@@ -1432,14 +1506,15 @@ export function extractJSUsages(
       // e.g., Express.Multer.File[] — Express and Multer are namespace types, not variable references
       if (parent.type === "nested_identifier" || parent.type === "nested_type_identifier") break;
 
-      // 3. Skip if it's a function/class/variable declaration name
+      // 3. Skip if it's a function/class/variable/enum declaration name
       if (
         (parent.type === "function_declaration" ||
           parent.type === "class_declaration" ||
           parent.type === "variable_declarator" ||
           parent.type === "method_definition" ||
           parent.type === "interface_declaration" ||
-          parent.type === "type_alias_declaration") &&
+          parent.type === "type_alias_declaration" ||
+          parent.type === "enum_declaration") &&
         parent.childForFieldName("name")?.id === node.id
       )
         break;
@@ -1449,8 +1524,8 @@ export function extractJSUsages(
       // The 'ProtectedComponent' here is a local name for the function expression,
       // NOT a reference to an external variable
       // Note: Tree-sitter uses "function_expression" for function expressions, not "function"
-      if ((parent.type === "function" || parent.type === "function_expression") && 
-          parent.childForFieldName("name")?.id === node.id) {
+      if ((parent.type === "function" || parent.type === "function_expression") &&
+        parent.childForFieldName("name")?.id === node.id) {
         break;
       }
 
@@ -2131,7 +2206,7 @@ function countArgs(argsNode: Parser.SyntaxNode | null): number {
  */
 function getRootObject(node: Parser.SyntaxNode, code: string): string {
   if (!node) return "";
-  
+
   // Handle parenthesized expressions: (expr)
   // This includes type assertions like (err as Error) or (err satisfies Error)
   if (node.type === "parenthesized_expression") {
@@ -2142,7 +2217,7 @@ function getRootObject(node: Parser.SyntaxNode, code: string): string {
       }
     }
   }
-  
+
   // Handle type assertion expressions: expr as Type, expr satisfies Type
   if (node.type === "as_expression" || node.type === "satisfies_expression") {
     const leftNode = node.childForFieldName("left") || node.children[0];
@@ -2150,7 +2225,7 @@ function getRootObject(node: Parser.SyntaxNode, code: string): string {
       return getRootObject(leftNode, code);
     }
   }
-  
+
   // Handle non-null assertion expressions: expr!
   if (node.type === "non_null_expression") {
     const expression = node.children[0];
@@ -2158,7 +2233,7 @@ function getRootObject(node: Parser.SyntaxNode, code: string): string {
       return getRootObject(expression, code);
     }
   }
-  
+
   // Handle call expressions: fn() - extract the function name
   if (node.type === "call_expression" || node.type === "new_expression") {
     const funcNode = node.childForFieldName("function") || node.childForFieldName("constructor");
@@ -2166,7 +2241,7 @@ function getRootObject(node: Parser.SyntaxNode, code: string): string {
       return getRootObject(funcNode, code);
     }
   }
-  
+
   // Handle member expressions: obj.prop - recurse into the object to get the root identifier
   // This correctly handles multiline chains like db\n.select().from() → "db"
   // Previously returned getText which included newlines, causing FPs in validation
@@ -2177,12 +2252,12 @@ function getRootObject(node: Parser.SyntaxNode, code: string): string {
     }
     return getText(node, code);
   }
-  
+
   // Handle subscript expressions: arr[index] - return the full text
   if (node.type === "subscript_expression") {
     return getText(node, code);
   }
-  
+
   // Base case: identifier or simple expression
   return getText(node, code);
 }

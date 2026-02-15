@@ -164,7 +164,7 @@ cython_debug/
 #Testing Reports
 report/
 report.json
-
+report.md
 # API Contract test results
 api-contract-results.txt
 

@@ -588,6 +588,8 @@ export function validateSymbols(
       file: "(new code)",
       params: sym.params,
       paramCount: sym.paramCount,
+      minParamCount: sym.minParamCount,
+      scope: sym.scope,
     };
 
     switch (sym.type) {
@@ -1038,7 +1040,7 @@ export function validateSymbols(
   // Lightweight literal-type inference for locally-defined variables in the new code.
   // Used to validate method calls on obvious built-in types (e.g., array literals) without
   // over-flagging methods on unknown values (e.g., results of createRoot()).
-  const localLiteralKinds = new Map<string, "array" | "object" | "string">();
+  const localLiteralKinds = new Map<string, "array" | "object" | "string" | "json">();
   if (language === "javascript" || language === "typescript") {
     try {
       const tree = parseCodeCached(newCode, language, {
@@ -1046,14 +1048,54 @@ export function validateSymbols(
         useCache: false,
       });
 
+      const isJsonLikeInitializer = (valueNode: any): boolean => {
+        // const data = await response.json()
+        if (valueNode?.type === "await_expression") {
+          const arg = valueNode.childForFieldName("argument");
+          if (arg) return isJsonLikeInitializer(arg);
+        }
+
+        // const data = response.json()
+        if (valueNode?.type === "call_expression") {
+          const fn = valueNode.childForFieldName("function");
+          if (fn?.type === "member_expression") {
+            const prop = fn.childForFieldName("property");
+            if (prop && newCode.slice(prop.startIndex, prop.endIndex) === "json") {
+              return true;
+            }
+          }
+          // const data = JSON.parse(...)
+          if (fn?.type === "member_expression") {
+            const obj = fn.childForFieldName("object");
+            const prop = fn.childForFieldName("property");
+            if (
+              obj &&
+              prop &&
+              newCode.slice(obj.startIndex, obj.endIndex) === "JSON" &&
+              newCode.slice(prop.startIndex, prop.endIndex) === "parse"
+            ) {
+              return true;
+            }
+          }
+        }
+
+        return false;
+      };
+
       const walk = (node: any) => {
         if (node.type === "variable_declarator") {
           const nameNode = node.childForFieldName("name");
           const valueNode = node.childForFieldName("value");
           if (nameNode?.type === "identifier" && valueNode) {
             const name = newCode.slice(nameNode.startIndex, nameNode.endIndex);
-            if (valueNode.type === "array" || valueNode.type === "object" || valueNode.type === "string") {
+            if (
+              valueNode.type === "array" ||
+              valueNode.type === "object" ||
+              valueNode.type === "string"
+            ) {
               localLiteralKinds.set(name, valueNode.type);
+            } else if (isJsonLikeInitializer(valueNode)) {
+              localLiteralKinds.set(name, "json");
             }
           }
         }
@@ -1372,6 +1414,7 @@ export function validateSymbols(
             "engine",
             "metadata",
             "router",
+            "express",
             "schema",
             "serializer",
             "queryset",
@@ -1382,6 +1425,7 @@ export function validateSymbols(
             "redis",
             "cache",
             "config",
+            "dotenv",
             "settings",
             "flask",
             "django",
@@ -1696,6 +1740,68 @@ export function validateSymbols(
       //   - Internal imports where we have class/method information
       let shouldCheck = strictMode;
 
+      // React namespace validation: React.useNonExistentHook() is a common runtime
+      // hallucination. We special-case the well-known React namespace object so we
+      // can validate against a conservative allowlist (works in both strict + auto).
+      if (language === "javascript" || language === "typescript") {
+        const objectName = rootObject || used.object;
+        const reactImport = objectName
+          ? imports.find(
+              (i) =>
+                i.module === "react" &&
+                i.names.some((n) => n.local === objectName || n.local === used.object),
+            )
+          : undefined;
+
+        if (reactImport) {
+          const REACT_NAMESPACE_METHODS = new Set([
+            "createElement",
+            "cloneElement",
+            "createContext",
+            "createRef",
+            "forwardRef",
+            "memo",
+            "lazy",
+            "startTransition",
+            // Hooks (subset; conservative, widely available)
+            "useState",
+            "useEffect",
+            "useLayoutEffect",
+            "useInsertionEffect",
+            "useMemo",
+            "useCallback",
+            "useRef",
+            "useContext",
+            "useReducer",
+            "useImperativeHandle",
+            "useDebugValue",
+            "useDeferredValue",
+            "useTransition",
+            "useId",
+            "useSyncExternalStore",
+            "use",
+          ]);
+
+          if (REACT_NAMESPACE_METHODS.has(used.name)) {
+            continue;
+          }
+
+          const suggestion = suggestSimilar(used.name, Array.from(REACT_NAMESPACE_METHODS));
+          issues.push({
+            type: "nonExistentMethod",
+            severity: "medium",
+            message: `Method '${used.name}' does not exist on React (React namespace import from 'react')`,
+            line: used.line,
+            file: filePath,
+            code: used.code,
+            suggestion: suggestion || "Use a real React API (e.g., useState, useEffect, memo, forwardRef).",
+            confidence: 86,
+            reasoning: `The object '${objectName}' is imported from 'react'. React's public API is stable; '${used.name}' is not in a conservative allowlist of common React namespace methods/hooks.`,
+          });
+          continue;
+        }
+      }
+
       if (!shouldCheck) {
         const objectName = rootObject || used.object;
         const imp = imports.find((i) =>
@@ -1754,7 +1860,7 @@ export function validateSymbols(
           // can be validated without introducing false positives on unknown call results.
           if (!shouldCheck && objectName) {
             const kind = localLiteralKinds.get(objectName);
-            if (kind === "array" || kind === "string") {
+            if (kind === "array" || kind === "string" || kind === "json") {
               shouldCheck = true;
             }
           }

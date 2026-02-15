@@ -141,6 +141,9 @@ async function extractFrontendServices(
       normalized.includes("/clients/") ||
       normalized.includes("/features/") ||
       normalized.includes("/hooks/") ||
+      normalized.includes("/components/") ||
+      normalized.includes("/pages/") ||
+      normalized.includes("/views/") ||
       normalized.includes("/lib/")
     ) {
       return true;

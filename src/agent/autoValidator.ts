@@ -356,12 +356,85 @@ export class AutoValidator {
   }
 
   /**
-   * Get the correct manifest for a given file language
+   * Get the correct manifest for a given file language.
+   * For full-stack projects, returns the language-specific manifest.
+   * For non-full-stack projects, lazily loads the correct manifest if
+   * the file language differs from the guardian's start language.
    */
   private getManifestForLanguage(fileLang: string): ManifestDependencies | null {
-    if (!this.isFullStack) return this.manifest;
-    if (fileLang === "python") return this.pyManifest;
-    return this.tsManifest; // typescript, javascript
+    if (this.isFullStack) {
+      if (fileLang === "python") return this.pyManifest;
+      return this.tsManifest; // typescript, javascript
+    }
+
+    // Non-full-stack: check if the file language matches the loaded manifest
+    const manifestLang = this.normalizeManifestLang(fileLang);
+    const guardianManifestLang = this.normalizeManifestLang(this.language);
+
+    if (manifestLang === guardianManifestLang) {
+      return this.manifest;
+    }
+
+    // Lazy load: file language differs from guardian language.
+    // Check if we already lazy-loaded a manifest for this language.
+    if (manifestLang === "typescript" && this.tsManifest) return this.tsManifest;
+    if (manifestLang === "python" && this.pyManifest) return this.pyManifest;
+
+    // Schedule lazy load (non-blocking for the current call) and return null
+    // so validation still runs without manifest checks this time.
+    this.lazyLoadManifest(manifestLang);
+    return null;
+  }
+
+  /**
+   * Normalize a detected file language to a manifest-language bucket.
+   * "javascript" and "typescript" share the same package.json manifest.
+   */
+  private normalizeManifestLang(lang: string): string {
+    if (lang === "javascript" || lang === "typescript") return "typescript";
+    return lang;
+  }
+
+  /**
+   * Lazily load a manifest for a language that wasn't loaded at startup.
+   * This handles projects where the guardian language doesn't cover all file types.
+   */
+  private lazyLoadManifest(manifestLang: string): void {
+    // Avoid duplicate loads
+    if (manifestLang === "typescript" && this.tsManifest) return;
+    if (manifestLang === "python" && this.pyManifest) return;
+
+    logger.info(`Lazy-loading ${manifestLang} manifest (file language differs from guardian language "${this.language}")`);
+
+    // Fire-and-forget: load in the background so next validation picks it up
+    loadManifestDependencies(this.projectPath, manifestLang)
+      .then((manifest) => {
+        if (manifestLang === "typescript") {
+          this.tsManifest = manifest;
+        } else if (manifestLang === "python") {
+          this.pyManifest = manifest;
+        }
+        logger.info(`Lazy-loaded ${manifestLang} manifest: ${manifest.all.size} dependencies`);
+      })
+      .catch((err) => {
+        logger.warn(`Failed to lazy-load ${manifestLang} manifest:`, err);
+      });
+  }
+
+  /**
+   * Resolve the best context language for a file.
+   * If the file's language differs from the guardian's start language,
+   * we use the file's language so that context-building indexes the
+   * correct set of files (e.g., TSX files need a "typescript" context).
+   */
+  private resolveContextLanguage(fileLang: string): string {
+    if (fileLang === "unknown") return this.language;
+    // javascript and typescript both need a "typescript" context
+    const fileBucket = this.normalizeManifestLang(fileLang);
+    const guardianBucket = this.normalizeManifestLang(this.language);
+    if (fileBucket === guardianBucket) return this.language;
+    // File language differs — use the file's actual language for context
+    return fileLang;
   }
 
   /**
@@ -470,6 +543,7 @@ export class AutoValidator {
         // In frontend files, prioritize frontend-specific issues
         if (issue.type === 'unusedImport') return true;
         if (issue.type === 'nonExistentFunction') return true;
+        if (issue.type === 'nonExistentMethod') return true;
         return false; // Filter out less relevant issues
       }
 
@@ -477,6 +551,7 @@ export class AutoValidator {
         // In backend files, prioritize backend-specific issues
         if (issue.type === 'unusedImport') return true;
         if (issue.type === 'nonExistentFunction') return true;
+        if (issue.type === 'nonExistentMethod') return true;
         return false;
       }
 
@@ -498,6 +573,8 @@ export class AutoValidator {
       i.type === "unusedImport" ||
       i.type === "unusedFunction" ||
       i.type === "unusedExport" ||
+      // Keep method-call hallucinations in learning mode
+      i.type === "nonExistentMethod" ||
       // Keep dependency issues even if low severity (important during vibecoding)
       i.type === "dependencyHallucination" ||
       i.type === "missingDependency",
@@ -627,10 +704,22 @@ export class AutoValidator {
       });
       const symbolTable = buildSymbolTable(orchestrationForSymbols.projectContext, orchestrationForSymbols.relevantSymbols);
 
-      const MAX_INITIAL_FILES_TO_SCAN = 100;
+      const detectedMode = this.detectProjectMode();
+      const strictModeForInitialScan = detectedMode === "strict";
+
+      // If this is an established codebase, scan more files so issues show up
+      // while the tool is running (no need to touch/save every file).
+      const MAX_INITIAL_FILES_TO_SCAN = strictModeForInitialScan ? 1000 : 100;
       let filesScanned = 0;
 
-      for (const [filePath, fileInfo] of context.files) {
+      // Scan most-recently-modified files first.
+      const orderedFiles = (Array.from(
+        (context.files as Map<string, any>).entries(),
+      ) as Array<[string, any]>).sort(
+        (a, b) => (b[1].lastModified || 0) - (a[1].lastModified || 0),
+      );
+
+      for (const [filePath, fileInfo] of orderedFiles) {
         if (filesScanned >= MAX_INITIAL_FILES_TO_SCAN) break;
         // Defense-in-depth: skip node_modules and other excluded dirs even if
         // they leaked through the file discovery layer (e.g., when glob runs at
@@ -673,7 +762,7 @@ export class AutoValidator {
             symbolTable,
             content,
             fileLang,
-            false, // strictMode
+            strictModeForInitialScan,
             imports,
             this.pythonExports,
             context,
@@ -838,7 +927,12 @@ export class AutoValidator {
 
     // Detect language for this specific file (full-stack aware)
     const fileLang = AutoValidator.detectFileLanguage(event.path);
-    const refreshLang = this.isFullStack ? "all" : this.language;
+    // Use the FILE's language for context refresh, not just the guardian's language.
+    // This ensures TSX changes are properly indexed even if the guardian was started
+    // with a different language (e.g., "python"). Full-stack projects use "all".
+    const refreshLang = this.isFullStack
+      ? "all"
+      : this.resolveContextLanguage(fileLang);
 
     // Track new files and refresh context — store promise so validateFile can await it.
     // Throttle concurrent refreshes to avoid spawning too many git subprocesses.
@@ -966,7 +1060,9 @@ export class AutoValidator {
 
       const isNewFile = this.newFilesTracked.has(filePath);
       const mode = this.detectProjectMode();
-      const isLenient = mode === "learning" || isNewFile;
+      // In strict/established projects, new files should still be validated strictly.
+      // Vibecoders add new files constantly; leniency here hides real runtime issues.
+      const isLenient = mode === "learning";
 
       // Propagate EFFECTIVE mode into underlying analyzers.
       // NOTE: when this.mode === "auto", detectProjectMode() returns the computed
@@ -986,9 +1082,14 @@ export class AutoValidator {
       logger.info(`Auto-validating (${isLenient ? "Lenient" : "Strict"}) [${fileLang}]: ${relativePath}`);
 
       // Check if this is an API-related file (routes, controllers, services, api.ts)
-      const isApiFile = /\/(routes|controllers|services|api)\//i.test(filePath) ||
-                        /\/(routes|controllers|api)\.(ts|js|py)$/i.test(filePath);
-      
+      const isApiFile =
+        /\/(routes|controllers|services|api)\//i.test(filePath) ||
+        /\/(routes|controllers|api)\.(ts|js|py)$/i.test(filePath) ||
+        // Heuristic: frontend files that contain direct HTTP calls should also
+        // trigger contract validation (common in components/pages during vibecoding).
+        ((fileLang === "typescript" || fileLang === "javascript") &&
+          /\b(fetch\s*\(|axios\.|ApiService\.|api\.(get|post|put|patch|delete)\b)/.test(content));
+
       // Trigger API contract validation if this is an API-related file.
       // IMPORTANT: Do NOT gate this on python+ts "full-stack" detection — many real projects
       // are TS-only but still have a frontend/backend contract.
@@ -1021,8 +1122,10 @@ export class AutoValidator {
         }
       }
 
-      // Use orchestrateContext with "all" for full-stack, or the file's language
-      const contextLanguage = this.isFullStack ? "all" : this.language;
+      // Use orchestrateContext with "all" for full-stack, or the FILE's language
+      // so that TSX changes are validated against a TypeScript-aware context
+      // even if the guardian was started with a different language.
+      const contextLanguage = this.isFullStack ? "all" : this.resolveContextLanguage(fileLang);
       const orchestration = await orchestrateContext({
         projectPath: this.projectPath,
         language: contextLanguage,

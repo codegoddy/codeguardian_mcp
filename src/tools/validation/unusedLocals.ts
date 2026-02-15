@@ -127,8 +127,9 @@ export function detectUnusedLocalsAST(code: string, filePath: string): DeadCodeI
       if (sym.scope && language === "python") continue; // Python scoped symbols are class methods
       if (sym.scope && (language === "typescript" || language === "javascript")) {
         // In JS/TS, only skip if the symbol is a class method (not a function-scoped local)
-        // Class methods have scope = class name and are extracted from class_declaration/class bodies
-        // Function-scoped locals (inside React components) should still be checked
+        // However, we only catch function-scoped functions, NOT variables (to avoid noise)
+        if (sym.type === "variable") continue;
+
         const scopeDefs = symbols.filter(s => s.name === sym.scope);
         const scopeIsClass = scopeDefs.some(s => s.type === "class");
         if (scopeIsClass) continue;
@@ -304,8 +305,8 @@ function findUnusedLocalDefinitions(
         (topNode.type === "lexical_declaration" || topNode.type === "variable_declaration")
           ? topNode
           : (topNode.type === "export_statement"
-              ? topNode.children?.find((c: any) => c.type === "lexical_declaration" || c.type === "variable_declaration")
-              : null);
+            ? topNode.children?.find((c: any) => c.type === "lexical_declaration" || c.type === "variable_declaration")
+            : null);
 
       if (!declNode) continue;
 
