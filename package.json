@@ -1,6 +1,6 @@
 {
   "name": "codeguardian-mcp",
-  "version": "1.2.4",
+  "version": "1.2.6",
   "description": "CodeGuardian MCP - Automated Quality Assurance for Vibe Coding with AI Hallucination Prevention",
   "main": "dist/server.js",
   "bin": {

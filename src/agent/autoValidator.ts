@@ -88,6 +88,8 @@ export class AutoValidator {
   private pyManifest: ManifestDependencies | null = null;
   private pendingRefreshes: Map<string, Promise<any>> = new Map();
   private lastApiContractValidation: number = 0;
+  private apiContractValidationTimer: NodeJS.Timeout | null = null;
+  private pendingApiContractTriggerFile: string | null = null;
   private static readonly API_CONTRACT_DEBOUNCE_MS = 30_000; // At most once per 30s
   private activeValidationCount: number = 0;
   private validationQueue: Set<string> = new Set();
@@ -174,56 +176,65 @@ export class AutoValidator {
     logger.info("Starting file watcher (early, buffered until ready)...");
     this.watcher.start();
 
-    // Pre-build context: detect full-stack and use "all" to include every language
-    logger.info("Loading project context...");
-    this.isFullStack = await this.detectFullStackProject();
-    const contextLanguage = this.isFullStack ? "all" : this.language;
-    if (this.isFullStack) {
-      logger.info("Full-stack project detected — building unified multi-language context");
-    }
-    const orchestration = await orchestrateContext({
-      projectPath: this.projectPath,
-      language: contextLanguage,
-    });
-    const context = orchestration.projectContext;
-    logger.info("Context built.");
-
-    // Mark this project as guardian-managed — all tools will now
-    // use this cached context without TTL/staleness rebuilds
-    markGuardianActive(this.projectPath);
-
-    // Detect project type
-    this.projectFileCount = context.files?.size || 0;
-    const detectedMode = this.detectProjectMode();
-    logger.info(`VibeGuard Initialized: Found ${this.projectFileCount} files in ${this.projectPath}`);
-    logger.info(`Operating Mode: ${detectedMode} (Language: ${this.isFullStack ? "all (full-stack)" : this.language})`);
-
-    // Load manifests for all detected languages
-    logger.info("Loading dependency manifests...");
-    if (this.isFullStack) {
-      // Full-stack: load manifests from the correct subdirectories
-      // (e.g., frontend/package.json and backend/requirements.txt)
-      const tsRoot = this.projectStructure?.frontend || this.projectPath;
-      const pyRoot = this.projectStructure?.backend || this.projectPath;
-      this.tsManifest = await loadManifestDependencies(tsRoot, "typescript");
-      this.pyManifest = await loadManifestDependencies(pyRoot, "python");
-      this.pythonExports = await loadPythonModuleExports(pyRoot);
-      // Keep this.manifest as the "primary" for backward compat
-      this.manifest = this.language === "python" ? this.pyManifest : this.tsManifest;
-    } else {
-      this.manifest = await loadManifestDependencies(this.projectPath, this.language);
-      if (this.language === "python") {
-        this.pythonExports = await loadPythonModuleExports(this.projectPath);
+    try {
+      // Pre-build context: detect full-stack and use "all" to include every language
+      logger.info("Loading project context...");
+      this.isFullStack = await this.detectFullStackProject();
+      const contextLanguage = this.isFullStack ? "all" : this.language;
+      if (this.isFullStack) {
+        logger.info("Full-stack project detected — building unified multi-language context");
       }
-    }
+      const orchestration = await orchestrateContext({
+        projectPath: this.projectPath,
+        language: contextLanguage,
+      });
+      const context = orchestration.projectContext;
+      logger.info("Context built.");
 
-    // Run initial health check on existing codebase (skip for new projects)
-    if (detectedMode !== "learning") {
-      logger.info("Running initial health check...");
-      await this.runInitialHealthCheck(context);
-    } else {
-      logger.info("New project detected - skipping initial health check, entering Learning Mode");
-      this.pushLearningModeNotification();
+      // Mark this project as guardian-managed — all tools will now
+      // use this cached context without TTL/staleness rebuilds
+      markGuardianActive(this.projectPath);
+
+      // Detect project type
+      this.projectFileCount = context.files?.size || 0;
+      const detectedMode = this.detectProjectMode();
+      logger.info(`VibeGuard Initialized: Found ${this.projectFileCount} files in ${this.projectPath}`);
+      logger.info(`Operating Mode: ${detectedMode} (Language: ${this.isFullStack ? "all (full-stack)" : this.language})`);
+
+      // Load manifests for all detected languages
+      logger.info("Loading dependency manifests...");
+      if (this.isFullStack) {
+        // Full-stack: load manifests from the correct subdirectories
+        // (e.g., frontend/package.json and backend/requirements.txt)
+        const tsRoot = this.projectStructure?.frontend || this.projectPath;
+        const pyRoot = this.projectStructure?.backend || this.projectPath;
+        this.tsManifest = await loadManifestDependencies(tsRoot, "typescript");
+        this.pyManifest = await loadManifestDependencies(pyRoot, "python");
+        this.pythonExports = await loadPythonModuleExports(pyRoot);
+        // Keep this.manifest as the "primary" for backward compat
+        this.manifest = this.language === "python" ? this.pyManifest : this.tsManifest;
+      } else {
+        this.manifest = await loadManifestDependencies(this.projectPath, this.language);
+        if (this.language === "python") {
+          this.pythonExports = await loadPythonModuleExports(this.projectPath);
+        }
+      }
+
+      // Run initial health check on existing codebase in background so file
+      // watching is not blocked on large monorepos.
+      if (detectedMode !== "learning") {
+        logger.info("Scheduling initial health check in background...");
+        this.runInitialHealthCheck(context).catch((err) => {
+          logger.error("Error running initial health check:", err);
+        });
+      } else {
+        logger.info("New project detected - skipping initial health check, entering Learning Mode");
+        this.pushLearningModeNotification();
+      }
+    } catch (err) {
+      // Keep watcher alive even if initialization partially fails. Without this,
+      // buffered events can remain stuck forever and guardian appears "not working".
+      logger.error(`Guardian initialization failed for ${this.projectPath}, continuing in degraded mode:`, err);
     }
 
     // Mark initialized and flush any buffered file change events.
@@ -905,10 +916,107 @@ export class AutoValidator {
     return lines.join("\n");
   }
 
+  private isApiContractRelevantChange(filePath: string, fileLang: string, content: string): boolean {
+    const normalized = filePath.toLowerCase();
+    if (!/\.(py|ts|tsx|js|jsx)$/.test(normalized)) return false;
+
+    // Directory heuristics (routes, services, schemas, types, etc.)
+    if (/(?:\/(routes|routers|controllers|services|api|schemas|models|dto|types|interfaces|clients|hooks|lib)\/)/i.test(normalized)) {
+      return true;
+    }
+
+    // Common API entry files
+    if (
+      /\/(server|app)\.(ts|js)$/i.test(normalized) ||
+      /\/(main|app)\.py$/i.test(normalized) ||
+      /\/api\.(ts|tsx|js|jsx)$/i.test(normalized)
+    ) {
+      return true;
+    }
+
+    // Content heuristics for direct HTTP calls and route declarations
+    if (
+      (fileLang === "typescript" || fileLang === "javascript") &&
+      /\b(fetch\s*\(|axios\.|ApiService\.|api\.(get|post|put|patch|delete)\b|app\.(get|post|put|patch|delete)\b|router\.(get|post|put|patch|delete)\b)/.test(content)
+    ) {
+      return true;
+    }
+
+    if (
+      fileLang === "python" &&
+      /@(?:app|router)\.(get|post|put|patch|delete)\s*\(/i.test(content)
+    ) {
+      return true;
+    }
+
+    return false;
+  }
+
+  private scheduleApiContractValidation(triggerFile: string): void {
+    this.pendingApiContractTriggerFile = triggerFile;
+
+    const elapsed = Date.now() - this.lastApiContractValidation;
+    const remaining = AutoValidator.API_CONTRACT_DEBOUNCE_MS - elapsed;
+
+    if (remaining <= 0) {
+      if (this.apiContractValidationTimer) {
+        clearTimeout(this.apiContractValidationTimer);
+        this.apiContractValidationTimer = null;
+      }
+      this.runApiContractValidation(triggerFile).catch((err) => {
+        logger.error(`API contract validation failed:`, err);
+      });
+      return;
+    }
+
+    // Trailing debounce: ensure at least one validation runs after the cooldown
+    // window if changes keep happening.
+    if (!this.apiContractValidationTimer) {
+      logger.debug(`API contract validation throttled; scheduled in ${remaining}ms`);
+      this.apiContractValidationTimer = setTimeout(() => {
+        this.apiContractValidationTimer = null;
+        const pending = this.pendingApiContractTriggerFile || triggerFile;
+        this.runApiContractValidation(pending).catch((err) => {
+          logger.error(`API contract validation failed:`, err);
+        });
+      }, remaining);
+    }
+  }
+
+  private async runApiContractValidation(triggerFile: string): Promise<void> {
+    this.lastApiContractValidation = Date.now();
+    logger.info(`API file changed, triggering contract validation: ${triggerFile}`);
+
+    const apiContractResult = await validateApiContracts(this.projectPath);
+    const apiContractAlert: ValidationAlert = {
+      file: "API_CONTRACT_SCAN",
+      issues: apiContractResult.issues.map((issue) => ({
+        type: issue.type,
+        severity: issue.severity,
+        message: issue.message,
+        suggestion: issue.suggestion,
+        line: issue.line,
+        file: issue.file ? path.relative(this.projectPath, issue.file) : undefined,
+      })),
+      timestamp: Date.now(),
+      llmMessage: this.createApiContractMessage(apiContractResult),
+      isInitialScan: false,
+    };
+
+    if (this.onAlert) {
+      this.onAlert(apiContractAlert);
+    }
+  }
+
   stop(): void {
     this.watcher.stop();
     this.debounceTimers.forEach((timer) => clearTimeout(timer));
     this.debounceTimers.clear();
+    if (this.apiContractValidationTimer) {
+      clearTimeout(this.apiContractValidationTimer);
+      this.apiContractValidationTimer = null;
+    }
+    this.pendingApiContractTriggerFile = null;
     markGuardianInactive(this.projectPath);
   }
 
@@ -1081,45 +1189,12 @@ export class AutoValidator {
 
       logger.info(`Auto-validating (${isLenient ? "Lenient" : "Strict"}) [${fileLang}]: ${relativePath}`);
 
-      // Check if this is an API-related file (routes, controllers, services, api.ts)
-      const isApiFile =
-        /\/(routes|controllers|services|api)\//i.test(filePath) ||
-        /\/(routes|controllers|api)\.(ts|js|py)$/i.test(filePath) ||
-        // Heuristic: frontend files that contain direct HTTP calls should also
-        // trigger contract validation (common in components/pages during vibecoding).
-        ((fileLang === "typescript" || fileLang === "javascript") &&
-          /\b(fetch\s*\(|axios\.|ApiService\.|api\.(get|post|put|patch|delete)\b)/.test(content));
-
-      // Trigger API contract validation if this is an API-related file.
-      // IMPORTANT: Do NOT gate this on python+ts "full-stack" detection — many real projects
-      // are TS-only but still have a frontend/backend contract.
-      const apiContractCooldown = Date.now() - this.lastApiContractValidation >= AutoValidator.API_CONTRACT_DEBOUNCE_MS;
-      if (isApiFile && apiContractCooldown) {
-        this.lastApiContractValidation = Date.now();
-        logger.info(`API file changed, triggering contract validation: ${relativePath}`);
-        try {
-          const apiContractResult = await validateApiContracts(this.projectPath);
-          const apiContractAlert: ValidationAlert = {
-            file: "API_CONTRACT_SCAN",
-            issues: apiContractResult.issues.map((issue) => ({
-              type: issue.type,
-              severity: issue.severity,
-              message: issue.message,
-              suggestion: issue.suggestion,
-              line: issue.line,
-              file: issue.file ? path.relative(this.projectPath, issue.file) : undefined,
-            })),
-            timestamp: Date.now(),
-            llmMessage: this.createApiContractMessage(apiContractResult),
-            isInitialScan: false,
-          };
-
-          if (this.onAlert) {
-            this.onAlert(apiContractAlert);
-          }
-        } catch (err) {
-          logger.error(`API contract validation failed:`, err);
-        }
+      // Trigger API contract validation for API-relevant files. Includes routes,
+      // schemas/models/types, direct fetch/axios usage, and entry API files.
+      // Use trailing debounce so rapid edits still produce a follow-up scan.
+      const isApiFile = this.isApiContractRelevantChange(filePath, fileLang, content);
+      if (isApiFile) {
+        this.scheduleApiContractValidation(relativePath);
       }
 
       // Use orchestrateContext with "all" for full-stack, or the FILE's language

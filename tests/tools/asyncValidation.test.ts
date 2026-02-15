@@ -11,6 +11,21 @@ import {
 import { registerValidationJob } from "../../src/queue/validationJob.js";
 import { jobQueue } from "../../src/queue/jobQueue.js";
 import * as path from "path";
+import * as fs from "fs/promises";
+import * as os from "os";
+
+async function cleanupTempDir(root: string): Promise<void> {
+  const maxAttempts = 5;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await fs.rm(root, { recursive: true, force: true });
+      return;
+    } catch {
+      if (attempt === maxAttempts) return;
+      await new Promise((resolve) => setTimeout(resolve, 75));
+    }
+  }
+}
 
 // Initialize job queue before tests
 beforeAll(() => {
@@ -39,6 +54,57 @@ describe("Async Validation", () => {
     expect(response.jobId).toBeDefined();
     expect(response.status).toBe("queued");
     expect(response.jobId).toMatch(/^validation_/);
+  });
+
+  it("should block ambiguous monorepo root paths for start_validation", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "async-validation-scope-"));
+    try {
+      const frontendDir = path.join(tempDir, "frontend");
+      const backendDir = path.join(tempDir, "backend");
+
+      await fs.mkdir(frontendDir, { recursive: true });
+      await fs.mkdir(backendDir, { recursive: true });
+
+      // Root manifest exists, but there are multiple language scopes beneath it.
+      // start_validation should force the caller to choose a scoped subdirectory.
+      await fs.writeFile(path.join(tempDir, "package.json"), '{"name":"root","private":true}');
+      await fs.writeFile(path.join(frontendDir, "package.json"), '{"name":"frontend"}');
+      await fs.writeFile(path.join(backendDir, "package.json"), '{"name":"backend"}');
+
+      const result = await startValidationTool.handler({
+        projectPath: tempDir,
+        language: "typescript",
+      });
+
+      const response = JSON.parse(result.content[0].text);
+      expect(response.success).toBe(false);
+      expect(response.error).toBe("ambiguousValidationScope");
+      expect(response.suggestedProjectPaths).toContain(frontendDir);
+      expect(response.suggestedProjectPaths).toContain(backendDir);
+    } finally {
+      await cleanupTempDir(tempDir);
+    }
+  });
+
+  it("should auto-scope start_validation when only one subproject manifest exists", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "async-validation-autoscope-"));
+    try {
+      const frontendDir = path.join(tempDir, "frontend");
+      await fs.mkdir(frontendDir, { recursive: true });
+      await fs.writeFile(path.join(frontendDir, "package.json"), '{"name":"frontend"}');
+
+      const result = await startValidationTool.handler({
+        projectPath: tempDir,
+        language: "typescript",
+      });
+
+      const response = JSON.parse(result.content[0].text);
+      expect(response.success).toBe(true);
+      expect(response.requestedProjectPath).toBe(path.resolve(tempDir));
+      expect(response.effectiveProjectPath).toBe(frontendDir);
+    } finally {
+      await cleanupTempDir(tempDir);
+    }
   });
 
   it("should check job status", async () => {

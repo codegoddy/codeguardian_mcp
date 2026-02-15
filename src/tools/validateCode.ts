@@ -67,13 +67,14 @@ export const validateCodeTool: ToolDefinition = {
   definition: {
     name: "validate_code",
     description:
-      "Validate code for hallucinations, missing dependencies, and dead code in one pass. Smart filtering ensures only relevant project symbols are checked. ALWAYS call after generating code.",
+      "Validate code snippets or single-file changes for hallucinations, missing dependencies, and dead code in one pass. For full-project or monorepo-wide audits, use start_validation on a scoped subdirectory (e.g., frontend/ or backend/).",
     inputSchema: {
       type: "object",
       properties: {
         projectPath: {
           type: "string",
-          description: 'Path to your project (e.g., ".", "src", "backend")',
+          description:
+            'Path to the relevant project scope for this snippet/file (e.g., ".", "src", "backend"). For large repository scans, prefer start_validation.',
         },
         newCode: {
           type: "string",

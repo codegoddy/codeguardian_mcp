@@ -14,10 +14,117 @@
  */
 
 import * as path from "path";
+import * as fs from "fs/promises";
 import { ToolDefinition } from "../types/tools.js";
 import { logger } from "../utils/logger.js";
 import { jobQueue } from "../queue/jobQueue.js";
 import { validationReportStore } from "../resources/validationReportStore.js";
+
+const TS_MANIFESTS = ["package.json", "tsconfig.json"];
+const PY_MANIFESTS = ["requirements.txt", "pyproject.toml", "Pipfile"];
+const GO_MANIFESTS = ["go.mod"];
+
+type PathResolution = {
+  resolvedPath: string;
+  note?: string;
+  blocked?: boolean;
+  suggestions?: string[];
+};
+
+async function hasAnyManifest(projectPath: string, manifests: string[]): Promise<boolean> {
+  for (const manifest of manifests) {
+    try {
+      await fs.access(path.join(projectPath, manifest));
+      return true;
+    } catch {
+      // Not found
+    }
+  }
+  return false;
+}
+
+async function detectLanguageScopes(projectPath: string, language: string): Promise<string[]> {
+  const manifests = getLanguageManifests(language);
+  const candidates = new Set<string>();
+
+  const directDirs =
+    language === "python"
+      ? ["backend", "server", "api", "app", "src"]
+      : language === "go"
+      ? ["backend", "server", "api", "cmd", "internal", "pkg", "src"]
+      : ["frontend", "client", "web", "app", "src", "backend", "server"];
+
+  for (const dir of directDirs) {
+    const absDir = path.join(projectPath, dir);
+    try {
+      const stat = await fs.stat(absDir);
+      if (!stat.isDirectory()) continue;
+      if (await hasAnyManifest(absDir, manifests)) {
+        candidates.add(absDir);
+      }
+    } catch {
+      // Directory doesn't exist
+    }
+  }
+
+  // Monorepo containers: packages/* and apps/*
+  const containerDirs = ["packages", "apps"];
+  for (const container of containerDirs) {
+    const absContainer = path.join(projectPath, container);
+    try {
+      const entries = await fs.readdir(absContainer, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const absSubdir = path.join(absContainer, entry.name);
+        if (await hasAnyManifest(absSubdir, manifests)) {
+          candidates.add(absSubdir);
+        }
+      }
+    } catch {
+      // Container doesn't exist
+    }
+  }
+
+  return Array.from(candidates).sort();
+}
+
+function getLanguageManifests(language: string): string[] {
+  if (language === "python") return PY_MANIFESTS;
+  if (language === "go") return GO_MANIFESTS;
+  return TS_MANIFESTS;
+}
+
+async function resolveValidationProjectPath(projectPath: string, language: string): Promise<PathResolution> {
+  const manifests = getLanguageManifests(language);
+  const scopes = await detectLanguageScopes(projectPath, language);
+
+  // Guardrail: root-scoped runs are risky when multiple language-specific
+  // subprojects are present in a monorepo.
+  if (scopes.length > 1) {
+    return {
+      resolvedPath: projectPath,
+      blocked: true,
+      suggestions: scopes,
+      note:
+        `Multiple ${language} subprojects were detected under ${projectPath}. ` +
+        "Run start_validation on a specific subdirectory (e.g., frontend or backend) instead of the monorepo root.",
+    };
+  }
+
+  const rootHasManifest = await hasAnyManifest(projectPath, manifests);
+  if (rootHasManifest) {
+    return { resolvedPath: projectPath };
+  }
+
+  if (scopes.length === 1) {
+    return {
+      resolvedPath: scopes[0]!,
+      note: `No ${language} manifest found at ${projectPath}; auto-scoped validation to ${scopes[0]}.`,
+    };
+  }
+
+  return { resolvedPath: projectPath };
+}
 
 // ============================================================================
 // Tool 1: Start Validation
@@ -27,13 +134,14 @@ export const startValidationTool: ToolDefinition = {
   definition: {
     name: "start_validation",
     description:
-      "Start a background validation job for large codebases (>50 files) to avoid timeouts. Use 'get_validation_status' to poll for progress. Results are saved to codeguardian-report.json at the project root (readable by file tools, NOT inside .codeguardian/).",
+      "Start a background validation job for large codebases (>50 files) to avoid timeouts. In monorepos, run this on a scoped subdirectory (e.g., frontend/ or backend/) rather than the repo root. Use 'get_validation_status' to poll for progress. Results are saved to codeguardian-report.json at the project root (readable by file tools, NOT inside .codeguardian/).",
     inputSchema: {
       type: "object",
       properties: {
         projectPath: {
           type: "string",
-          description: 'Path to your project (e.g., ".", "frontend")',
+          description:
+            'Path to your validation scope (e.g., "frontend", "backend", or a single app/package path). Avoid monorepo root unless it is a single-project repo.',
         },
         language: {
           type: "string",
@@ -78,15 +186,41 @@ export const startValidationTool: ToolDefinition = {
     logger.info(`Starting async validation for: ${args.projectPath}`);
 
     try {
-      const jobId = await jobQueue.submitJob("validation", args);
-      const resolvedPath = path.resolve(args.projectPath);
-      const reportFilePath = validationReportStore.getLLMReportPath(resolvedPath);
+      const requestedPath = path.resolve(args.projectPath);
+      const pathResolution = await resolveValidationProjectPath(requestedPath, args.language);
+
+      if (pathResolution.blocked) {
+        return formatResponse({
+          success: false,
+          error: "ambiguousValidationScope",
+          message: pathResolution.note,
+          requestedProjectPath: requestedPath,
+          suggestedProjectPaths: pathResolution.suggestions || [],
+          nextSteps:
+            (pathResolution.suggestions || []).map((p) =>
+              `Run start_validation({ projectPath: "${p}", language: "${args.language}" })`,
+            ),
+        });
+      }
+
+      const effectivePath = pathResolution.resolvedPath;
+      const jobInput = {
+        ...args,
+        projectPath: effectivePath,
+      };
+
+      const jobId = await jobQueue.submitJob("validation", jobInput);
+      const reportFilePath = validationReportStore.getLLMReportPath(effectivePath);
 
       return formatResponse({
         success: true,
         jobId,
         status: "queued",
-        message: "Validation job submitted successfully",
+        message: pathResolution.note
+          ? `Validation job submitted successfully. ${pathResolution.note}`
+          : "Validation job submitted successfully",
+        requestedProjectPath: requestedPath,
+        effectiveProjectPath: effectivePath,
         reportFile: reportFilePath,
         nextSteps: [
           `Use get_validation_status({ jobId: "${jobId}" }) to check progress`,

@@ -133,32 +133,49 @@ function detectBackendPresence(context: ProjectContext): boolean {
  */
 function isApiContractRelevantFile(filePath: string): boolean {
   const normalized = filePath.toLowerCase();
-  // Frontend service files (API calls)
-  if (normalized.includes('/services/') && (normalized.endsWith('.ts') || normalized.endsWith('.tsx') || normalized.endsWith('.js'))) {
-    return true;
-  }
-  // Backend route/API files
+  const isCodeFile = /\.(py|ts|tsx|js|jsx)$/.test(normalized);
+  if (!isCodeFile) return false;
+
+  // Frontend API callers + adjacent contract types
   if (
-    (normalized.includes('/api/') ||
-      normalized.includes('/routes/') ||
-      normalized.includes('/routers/') ||
-      normalized.includes('/controllers/')) &&
-    (normalized.endsWith('.py') ||
-      normalized.endsWith('.ts') ||
-      normalized.endsWith('.tsx') ||
-      normalized.endsWith('.js') ||
-      normalized.endsWith('.jsx'))
+    normalized.includes('/services/') ||
+    normalized.includes('/api/') ||
+    normalized.includes('/clients/') ||
+    normalized.includes('/hooks/') ||
+    normalized.includes('/lib/') ||
+    normalized.includes('/types/') ||
+    normalized.includes('/interfaces/')
   ) {
     return true;
   }
-  // Backend schema/model files (Pydantic models)
-  if (normalized.includes('/schemas/') && normalized.endsWith('.py')) {
+
+  // Backend route + payload definition layers
+  if (
+    normalized.includes('/routes/') ||
+    normalized.includes('/routers/') ||
+    normalized.includes('/controllers/') ||
+    normalized.includes('/schemas/') ||
+    normalized.includes('/models/') ||
+    normalized.includes('/dto/')
+  ) {
     return true;
   }
-  // Frontend type definition files
-  if ((normalized.includes('/types/') || normalized.includes('/interfaces/')) && (normalized.endsWith('.ts') || normalized.endsWith('.tsx'))) {
+
+  // Common API entry files
+  const base = path.basename(normalized);
+  if (
+    base === "api.ts" ||
+    base === "api.tsx" ||
+    base === "server.ts" ||
+    base === "server.js" ||
+    base === "app.ts" ||
+    base === "app.js" ||
+    base === "main.py" ||
+    base === "app.py"
+  ) {
     return true;
   }
+
   return false;
 }
 
@@ -687,9 +704,9 @@ export async function refreshFileContext(
 
   // If the changed file is relevant to API contracts (services, routes, schemas),
   // rebuild the API contract context so all tools see fresh data
-  if (cached.context.apiContract && isApiContractRelevantFile(filePath)) {
+  if (isApiContractRelevantFile(filePath)) {
     try {
-      logger.debug(`API contract relevant file changed: ${filePath} — refreshing API contract context...`);
+      logger.debug(`API contract relevant file changed: ${filePath} — rebuilding API contract context...`);
       cached.context.apiContract = await extractApiContractContext(cached.context);
     } catch (err) {
       logger.warn(`Failed to refresh API contract context: ${err instanceof Error ? err.message : String(err)}`);
@@ -783,7 +800,7 @@ async function reconcileContextWithDisk(
     });
 
     // 5b. Refresh API contract context if any changed files are API-relevant
-    if (cached.context.apiContract && toUpdate.some(f => isApiContractRelevantFile(f))) {
+    if (toUpdate.some(f => isApiContractRelevantFile(f))) {
       try {
         logger.info(`Refreshing API contract context after offline reconciliation...`);
         cached.context.apiContract = await extractApiContractContext(cached.context);
@@ -1080,21 +1097,16 @@ async function buildProjectContext(
   });
 
   // Extract API Contract information (frontend/backend alignment)
-  // This integrates API Contract Guardian into the existing context system
-  // LAZY LOADING: Only build API contract context if both frontend and backend detected
+  // Always attempt extraction and let extractApiContractContext decide whether
+  // the project has a detectable frontend/backend contract.
   try {
-    const hasFrontend = detectFrontendPresence(context);
-    const hasBackend = detectBackendPresence(context);
-    
-    if (hasFrontend && hasBackend) {
-      logger.info("Full-stack project detected - building API contract context...");
-      const apiContractStart = Date.now();
-      context.apiContract = await extractApiContractContext(context);
+    const apiContractStart = Date.now();
+    const extractedApiContract = await extractApiContractContext(context);
+    if (extractedApiContract) {
+      context.apiContract = extractedApiContract;
       logger.info(`API contract context built in ${Date.now() - apiContractStart}ms`);
     } else {
-      logger.info(
-        `${hasFrontend ? 'Frontend' : hasBackend ? 'Backend' : 'Unknown'}-only project - skipping API contract context`
-      );
+      logger.info("API contract context not available (frontend/backend contract not detected)");
     }
   } catch (error) {
     logger.warn("Failed to extract API Contract context:", error);

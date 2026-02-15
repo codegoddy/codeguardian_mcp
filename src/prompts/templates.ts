@@ -18,7 +18,7 @@ export const VALIDATION_TEMPLATES = {
    * Best for: Simple, straightforward validation tasks
    */
   zeroShot: (code: string) =>
-    `Use validate_code to check this code for hallucinations (non-existent functions, wrong methods, etc.):\n\n${code}`,
+    `Use validate_code to check this snippet/single-file code for hallucinations (non-existent functions, wrong methods, etc.).\nFor full-project or monorepo checks, use start_validation on a scoped subdirectory (for example: frontend/ or backend/).\n\n${code}`,
 
   /**
    * Few-shot: Validation with examples of common mistakes
@@ -47,7 +47,7 @@ export const VALIDATION_TEMPLATES = {
    * Best for: Complex validation requiring detailed analysis
    */
   chainOfThought: (code: string) => {
-    const task = `Analyze this code systematically using validate_code:\n\n\`\`\`\n${code}\n\`\`\``;
+    const task = `Analyze this code systematically.\nUse validate_code for this snippet/single-file input; if the user asks for project-wide validation, use start_validation scoped to a specific subdirectory.\n\n\`\`\`\n${code}\n\`\`\``;
     const steps = [
       "Extract all function calls and class instantiations",
       "Check each symbol against the project's symbol table",
@@ -64,7 +64,7 @@ export const VALIDATION_TEMPLATES = {
    * Best for: High-stakes code requiring thorough review
    */
   selfConsistency: (code: string) => {
-    const task = `Validate this code from multiple perspectives using validate_code:\n\n\`\`\`\n${code}\n\`\`\``;
+    const task = `Validate this code from multiple perspectives.\nUse validate_code for snippet/single-file checks; use start_validation for large repository scans (scoped path only).\n\n\`\`\`\n${code}\n\`\`\``;
     const perspectives = [
       "Symbol Validation: Are all functions, classes, and methods defined?",
       "Dependency Validation: Are all packages in the manifest?",
@@ -79,7 +79,7 @@ export const VALIDATION_TEMPLATES = {
    * Best for: Integration with automated systems
    */
   structuredOutput: (code: string) => {
-    const task = `Use validate_code to analyze this code:\n\n\`\`\`\n${code}\n\`\`\``;
+    const task = `Analyze this code.\nUse validate_code for snippet/single-file checks; use start_validation for full-project validation on a scoped subdirectory.\n\n\`\`\`\n${code}\n\`\`\``;
     const format = `
 VALIDATION SUMMARY:
 - Status: [PASS/FAIL]

@@ -245,7 +245,7 @@ export function registerPrompts(server: Server) {
                 role: "user",
                 content: {
                   type: "text",
-                  text: `I want to validate this code for hallucinations and issues: ${target}\n\nPlease use the \`validate_code\` tool to check it against the project context.`,
+                  text: `I want to validate this code for hallucinations and issues: ${target}\n\nTool selection rules:\n- If this is a snippet or single-file change, use \`validate_code\`.\n- If this is a project-wide/monorepo validation request, use \`start_validation\` on a scoped subdirectory (for example: frontend/ or backend/), not the repo root.`,
                 },
               },
             ],

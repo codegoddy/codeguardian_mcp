@@ -1035,12 +1035,15 @@ function findMatchingRoute(
     // Replace all param formats with generic {param}:
     // - Python/FastAPI: {id}, {project_id}
     // - Express: :id, :projectId
+    // - Flask: <id>, <uuid:id>
     // - JavaScript template: ${id}, ${projectId}
     const routeWithGenericParams = normalizedRoute
       .replace(/\{[^}]+\}/g, "{param}")
+      .replace(/<[^>]+>/g, "{param}")
       .replace(/:([a-zA-Z_]\w*)/g, "{param}");
     const endpointWithGenericParams = normalizedServiceEndpoint
       .replace(/\{[^}]+\}/g, "{param}")
+      .replace(/<[^>]+>/g, "{param}")
       .replace(/\$\{\w+\}/g, "{param}")
       .replace(/:([a-zA-Z_]\w*)/g, "{param}");
     
@@ -1058,9 +1061,11 @@ function findMatchingRoute(
     
     const routeWithGenericParams = normalizedRoute
       .replace(/\{[^}]+\}/g, "{param}")
+      .replace(/<[^>]+>/g, "{param}")
       .replace(/:([a-zA-Z_]\w*)/g, "{param}");
     const endpointWithGenericParams = normalizedServiceEndpoint
       .replace(/\{[^}]+\}/g, "{param}")
+      .replace(/<[^>]+>/g, "{param}")
       .replace(/\$\{\w+\}/g, "{param}")
       .replace(/:([a-zA-Z_]\w*)/g, "{param}");
     
