@@ -115,6 +115,7 @@ export function extractStringValue(
 
   if (node?.type === "template_string") {
     const parts: string[] = [];
+    const inferredQueryParams = new Set<string>();
 
     for (const child of node.children || []) {
       if (child?.type === "string_fragment") {
@@ -131,8 +132,15 @@ export function extractStringValue(
         const exprText = getNodeText(exprNode, content).trim();
         // Skip query string builders (commonly appended at end)
         if (/^(query|params|searchParams|queryString)$/i.test(exprText)) continue;
-        // Skip ternary expressions likely building optional query strings
-        if (exprNode.type === "ternary_expression") continue;
+        // Infer optional query params from ternary builders like:
+        // category ? `?category=${category}` : ''
+        // status ? `&status=${status}` : ''
+        if (exprNode.type === "ternary_expression") {
+          for (const name of extractQueryParamNamesFromText(exprText)) {
+            inferredQueryParams.add(name);
+          }
+          continue;
+        }
 
         // Stable placeholder for simple identifiers
         if (exprNode.type === "identifier") {
@@ -146,6 +154,11 @@ export function extractStringValue(
 
     const fullUrl = stripUrlOrigin(parts.join(""));
     const queryParams = extractQueryParamsFromUrl(fullUrl);
+    for (const name of inferredQueryParams) {
+      if (!queryParams.some((p) => p.name === name)) {
+        queryParams.push({ name, type: "string", required: false });
+      }
+    }
     let endpoint = fullUrl.split("?")[0].replace(/\/$/, "");
     if (!endpoint || endpoint === "/") return null;
     return { endpoint, queryParams };
@@ -171,6 +184,18 @@ function extractQueryParamsFromUrl(url: string): QueryParam[] {
   }
 
   return params;
+}
+
+function extractQueryParamNamesFromText(text: string): string[] {
+  const names = new Set<string>();
+  const re = /[?&]([a-zA-Z_][a-zA-Z0-9_]*)\s*=/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = re.exec(text)) !== null) {
+    names.add(match[1]);
+  }
+
+  return Array.from(names);
 }
 
 /**

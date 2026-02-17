@@ -9,6 +9,7 @@
 
 import type { ProjectContext, ApiContractContext, ApiRouteDefinition } from "../../context/projectContext.js";
 import * as fsSync from "fs";
+import * as path from "path";
 import { getParser } from "../../tools/validation/parser.js";
 
 // ============================================================================
@@ -34,6 +35,51 @@ export interface ApiContractIssue {
   endpoint?: string;
   suggestion: string;
   confidence?: number;
+}
+
+interface FrontendServiceUsageCache {
+  sourceFilesByRoot: Map<string, string[]>;
+  fileContents: Map<string, string>;
+  serviceUsage: Map<string, boolean>;
+}
+
+function validatePotentialDoubleApiPrefix(
+  frontendFile: string,
+  frontendEndpoint: string,
+  line: number,
+  cache: Map<string, boolean>,
+): ApiContractIssue | null {
+  const normalizedEndpoint = normalizePathForComparison(frontendEndpoint);
+  if (!normalizedEndpoint.startsWith("api/")) return null;
+
+  let apiBaseHasPrefix = cache.get(frontendFile);
+  if (apiBaseHasPrefix === undefined) {
+    apiBaseHasPrefix = false;
+    try {
+      if (fsSync.existsSync(frontendFile)) {
+        const content = fsSync.readFileSync(frontendFile, "utf-8");
+        apiBaseHasPrefix =
+          /(?:API_BASE_URL|baseURL|baseUrl)\s*[:=][^\n]*\/api(?:['"`]|\/|\b)/i.test(content) ||
+          /VITE_API_URL[^\n]*\/api(?:['"`]|\/|\b)/i.test(content);
+      }
+    } catch {
+      apiBaseHasPrefix = false;
+    }
+    cache.set(frontendFile, apiBaseHasPrefix);
+  }
+
+  if (!apiBaseHasPrefix) return null;
+
+  return {
+    type: "apiPathMismatch",
+    severity: "high",
+    message: `Potential double '/api' prefix: endpoint '${frontendEndpoint}' may resolve to '/api/api/...' because API base URL already includes '/api'`,
+    file: frontendFile,
+    line,
+    endpoint: frontendEndpoint,
+    suggestion: `Remove '/api' prefix from '${frontendEndpoint}' or use a base URL without '/api'`,
+    confidence: 80,
+  };
 }
 
 export interface ApiContractValidationResult {
@@ -91,20 +137,29 @@ export function validateApiContractsFromContext(
   // Validate unmatched frontend services
   issues.push(...validateUnmatchedFrontend(apiContract));
 
+  // Validate unmatched backend routes (endpoints implemented in backend but not used by frontend)
+  issues.push(...validateUnmatchedBackend(apiContract));
+
+  // Validate backend handler implementations (missing responses, unused locals,
+  // unknown Prisma models, and hallucinations on unmatched routes).
+  issues.push(...validateBackendHandlerImplementations(apiContract));
+
+  const dedupedIssues = dedupeIssues(issues);
+
   // Calculate summary
   const summary = {
-    totalIssues: issues.length,
-    critical: issues.filter((i) => i.severity === "critical").length,
-    high: issues.filter((i) => i.severity === "high").length,
-    medium: issues.filter((i) => i.severity === "medium").length,
-    low: issues.filter((i) => i.severity === "low").length,
+    totalIssues: dedupedIssues.length,
+    critical: dedupedIssues.filter((i) => i.severity === "critical").length,
+    high: dedupedIssues.filter((i) => i.severity === "high").length,
+    medium: dedupedIssues.filter((i) => i.severity === "medium").length,
+    low: dedupedIssues.filter((i) => i.severity === "low").length,
     matchedEndpoints: apiContract.endpointMappings.size,
     matchedTypes: apiContract.typeMappings.size,
     unmatchedFrontend: apiContract.unmatchedFrontend.length,
     unmatchedBackend: apiContract.unmatchedBackend.length,
   };
 
-  return { issues, summary };
+  return { issues: dedupedIssues, summary };
 }
 
 // ============================================================================
@@ -113,6 +168,12 @@ export function validateApiContractsFromContext(
 
 function validateEndpoints(apiContract: ApiContractContext): ApiContractIssue[] {
   const issues: ApiContractIssue[] = [];
+  const apiBasePrefixCache = new Map<string, boolean>();
+  const frontendServiceUsageCache: FrontendServiceUsageCache = {
+    sourceFilesByRoot: new Map(),
+    fileContents: new Map(),
+    serviceUsage: new Map(),
+  };
 
   for (const [endpoint, mapping] of apiContract.endpointMappings) {
     // Check HTTP method match
@@ -163,16 +224,261 @@ function validateEndpoints(apiContract: ApiContractContext): ApiContractIssue[] 
     );
     issues.push(...pathIssues);
 
+    const doubleApiPrefixIssue = validatePotentialDoubleApiPrefix(
+      mapping.frontend.file,
+      mapping.frontend.endpoint,
+      mapping.frontend.line,
+      apiBasePrefixCache,
+    );
+    if (doubleApiPrefixIssue) {
+      issues.push(doubleApiPrefixIssue);
+    }
+
     // Validate request/response body types
     const bodyIssues = validateRequestResponseTypes(
       mapping,
       apiContract,
       endpoint,
+      frontendServiceUsageCache,
     );
     issues.push(...bodyIssues);
   }
 
   return issues;
+}
+
+function validateUnmatchedBackend(apiContract: ApiContractContext): ApiContractIssue[] {
+  const issues: ApiContractIssue[] = [];
+
+  if (apiContract.unmatchedBackend.length === 0) return issues;
+
+  const frontendRoots = new Set<string>();
+  for (const service of apiContract.frontendServices) {
+    const normalized = removeApiPrefix(normalizePathForComparison(service.endpoint));
+    const root = normalized.split("/")[0];
+    if (root) frontendRoots.add(root);
+  }
+
+  for (const route of apiContract.unmatchedBackend) {
+    if (shouldIgnoreEndpoint(route.path)) continue;
+
+    const normalizedRoutePath = normalizePathForComparison(route.path);
+
+    if (isLikelyUnregisteredExpressRoute(route, normalizedRoutePath)) {
+      issues.push({
+        type: "apiEndpointNotFound",
+        severity: "high",
+        message: `Potential unregistered backend route: '${route.method} ${route.path}' appears to be defined in a router file but is not mounted under the API prefix`,
+        file: route.file,
+        line: route.line,
+        endpoint: route.path,
+        suggestion: `Mount the router containing '${route.method} ${route.path}' in the backend entrypoint (e.g., app.use('/api/...', router)) or remove the dead route`,
+        confidence: 85,
+      });
+    }
+
+    const normalizedRoute = removeApiPrefix(normalizedRoutePath);
+    const routeRoot = normalizedRoute.split("/")[0];
+    if (!routeRoot) continue;
+
+    // Only flag within API domains the frontend already appears to use,
+    // reducing noise from internal/admin domains.
+    if (frontendRoots.size > 0 && !frontendRoots.has(routeRoot)) {
+      continue;
+    }
+
+    // If frontend already references this path (even with a different method),
+    // that relationship is surfaced as a method mismatch on the frontend side.
+    if (hasFrontendPathMatch(route, apiContract.frontendServices)) {
+      continue;
+    }
+
+    // Skip routes that appear to be method mismatches or near-matches already
+    // represented from the frontend side.
+    const nearFrontend = findSimilarFrontendService(route, apiContract.frontendServices);
+    if (nearFrontend) continue;
+
+    issues.push({
+      type: "apiEndpointNotFound",
+      severity: "medium",
+      message: `Backend endpoint '${route.method} ${route.path}' has no matching frontend service`,
+      file: route.file,
+      line: route.line,
+      endpoint: route.path,
+      suggestion: `Add a frontend service for '${route.method} ${route.path}' or remove unused backend route`,
+      confidence: 85,
+    });
+  }
+
+  return issues;
+}
+
+function findSimilarFrontendService(
+  route: ApiRouteDefinition,
+  frontendServices: Array<{ method: string; endpoint: string }>,
+): { method: string; endpoint: string } | undefined {
+  const normalizedRoute = normalizePathForComparison(route.path);
+  const routeNoPrefix = removeApiPrefix(normalizedRoute);
+
+  return frontendServices.find((service) => {
+    if (service.method.toUpperCase() !== route.method.toUpperCase()) {
+      return false;
+    }
+
+    const normalizedService = normalizePathForComparison(service.endpoint);
+    const serviceNoPrefix = removeApiPrefix(normalizedService);
+
+    return (
+      pathsMatchStrict(normalizedService, normalizedRoute) ||
+      pathsMatchStrict(serviceNoPrefix, routeNoPrefix)
+    );
+  });
+}
+
+function isLikelyUnregisteredExpressRoute(
+  route: ApiRouteDefinition,
+  normalizedRoutePath: string,
+): boolean {
+  if (!route?.file || !normalizedRoutePath) return false;
+  const isRouterFile = /[\\/]routes[\\/]/.test(route.file);
+  if (!isRouterFile) return false;
+
+  // In this codebase, mounted API routes are expected to be extracted as '/api/...'.
+  // Paths still rooted at '/...' from a routes module usually indicate an unmounted router.
+  return !normalizedRoutePath.startsWith("api/");
+}
+
+function validateBackendHandlerImplementations(apiContract: ApiContractContext): ApiContractIssue[] {
+  const issues: ApiContractIssue[] = [];
+  if (apiContract.backendRoutes.length === 0) return issues;
+
+  const routeFileCache = new Map<string, { content: string; tree: any }>();
+  const analyzedHandlers = new Set<string>();
+  const mappedBackendRouteKeys = new Set<string>();
+
+  for (const mapping of apiContract.endpointMappings.values()) {
+    const backendMethod = mapping?.backend?.method;
+    const backendPath = mapping?.backend?.path;
+    if (!backendMethod || !backendPath) continue;
+    mappedBackendRouteKeys.add(buildBackendRouteKey(backendMethod, backendPath));
+  }
+
+  for (const route of apiContract.backendRoutes) {
+    if (!route?.file || !fsSync.existsSync(route.file)) continue;
+
+    let cached = routeFileCache.get(route.file);
+    if (!cached) {
+      try {
+        const content = fsSync.readFileSync(route.file, "utf-8");
+        const tree = getParser("typescript").parse(content);
+        cached = { content, tree };
+        routeFileCache.set(route.file, cached);
+      } catch {
+        continue;
+      }
+    }
+
+    if (!cached?.tree?.rootNode) continue;
+
+    const backendHandler = resolveExpressBackendHandler(
+      cached.tree.rootNode,
+      cached.content,
+      route.file,
+      route.method,
+      route.path,
+      route.handler,
+    );
+    if (!backendHandler?.node) continue;
+
+    const handlerKey = `${backendHandler.filePath}:${backendHandler.node.startIndex}:${backendHandler.node.endIndex}`;
+    if (analyzedHandlers.has(handlerKey)) continue;
+    analyzedHandlers.add(handlerKey);
+
+    const endpointLabel = `${route.method.toUpperCase()} ${route.path}`;
+
+    issues.push(
+      ...detectMissingBackendResponse(
+        backendHandler.node,
+        backendHandler.content,
+        backendHandler.filePath,
+        endpointLabel,
+        route.line,
+      ),
+    );
+
+    issues.push(
+      ...detectUnusedLocalVariables(
+        backendHandler.node,
+        backendHandler.content,
+        backendHandler.filePath,
+        endpointLabel,
+        route.line,
+      ),
+    );
+
+    issues.push(
+      ...detectUnknownPrismaModelQueries(
+        backendHandler.node,
+        backendHandler.content,
+        backendHandler.filePath,
+        apiContract.backendModels,
+        endpointLabel,
+        route.line,
+      ),
+    );
+
+    const routeKey = buildBackendRouteKey(route.method, route.path);
+    if (!mappedBackendRouteKeys.has(routeKey)) {
+      issues.push(
+        ...detectBackendPropertyHallucinations(
+          backendHandler.node,
+          backendHandler.content,
+          backendHandler.filePath,
+          apiContract.backendModels,
+          endpointLabel,
+          route.line,
+        ),
+      );
+    }
+  }
+
+  return issues;
+}
+
+function buildBackendRouteKey(method: string, routePath: string): string {
+  return `${method.toUpperCase()} ${normalizePathForComparison(routePath)}`;
+}
+
+function dedupeIssues(issues: ApiContractIssue[]): ApiContractIssue[] {
+  const seen = new Set<string>();
+  const deduped: ApiContractIssue[] = [];
+
+  for (const issue of issues) {
+    const key = `${issue.type}|${issue.file}|${issue.line}|${issue.message}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(issue);
+  }
+
+  return deduped;
+}
+
+function hasFrontendPathMatch(
+  route: ApiRouteDefinition,
+  frontendServices: Array<{ endpoint: string }>,
+): boolean {
+  const normalizedRoute = normalizePathForComparison(route.path);
+  const routeNoPrefix = removeApiPrefix(normalizedRoute);
+
+  return frontendServices.some((service) => {
+    const normalizedService = normalizePathForComparison(service.endpoint);
+    const serviceNoPrefix = removeApiPrefix(normalizedService);
+
+    return (
+      pathsMatchStrict(normalizedService, normalizedRoute) ||
+      pathsMatchStrict(serviceNoPrefix, routeNoPrefix)
+    );
+  });
 }
 
 function inferMethodFromFunctionName(functionName: string): string | undefined {
@@ -298,6 +604,7 @@ function validateRequestResponseTypes(
   mapping: any,
   apiContract: ApiContractContext,
   endpoint: string,
+  frontendServiceUsageCache: FrontendServiceUsageCache,
 ): ApiContractIssue[] {
   const issues: ApiContractIssue[] = [];
 
@@ -397,18 +704,31 @@ function validateRequestResponseTypes(
 
   // Validate inline request/response field usage when types/models are missing.
   // This catches common vibecoding errors like `data.username` when backend returns `name`.
-  issues.push(...validateInlineRequestResponseFields(mapping, endpoint));
+  issues.push(
+    ...validateInlineRequestResponseFields(
+      mapping,
+      endpoint,
+      apiContract,
+      frontendServiceUsageCache,
+    ),
+  );
 
   return issues;
 }
 
-function validateInlineRequestResponseFields(mapping: any, endpoint: string): ApiContractIssue[] {
+function validateInlineRequestResponseFields(
+  mapping: any,
+  endpoint: string,
+  apiContract: ApiContractContext,
+  frontendServiceUsageCache: FrontendServiceUsageCache,
+): ApiContractIssue[] {
   const issues: ApiContractIssue[] = [];
 
   const frontendFile = mapping?.frontend?.file;
   const backendFile = mapping?.backend?.file;
   const method = mapping?.backend?.method || mapping?.frontend?.method;
   const backendPath = mapping?.backend?.path;
+  const backendHandlerName = mapping?.backend?.handler;
 
   if (!frontendFile || !backendFile || !method || !backendPath) return issues;
   if (!fsSync.existsSync(frontendFile) || !fsSync.existsSync(backendFile)) return issues;
@@ -433,17 +753,50 @@ function validateInlineRequestResponseFields(mapping: any, endpoint: string): Ap
   }
 
   const frontendFnName: string | undefined = mapping?.frontend?.name;
-  const feFnNode = frontendFnName ? findFunctionLikeByName(feTree.rootNode, feContent, frontendFnName) : null;
+  const feFnNode = frontendFnName
+    ? findFunctionLikeByName(feTree.rootNode, feContent, frontendFnName, mapping?.frontend?.line)
+    : null;
+  const shouldValidateFrontendFieldMismatches = shouldValidateInlineFrontendFieldMismatches(
+    mapping,
+    feTree.rootNode,
+    feFnNode,
+    feContent,
+    apiContract,
+    frontendServiceUsageCache,
+  );
 
   const feResponseFields = feFnNode ? extractResponseFieldsUsed(feFnNode, feContent) : new Set<string>();
   const feRequestFields = feFnNode ? extractRequestBodyFieldsUsed(feFnNode, feContent) : new Set<string>();
+  const feRequestTypeFields = feFnNode
+    ? inferRequestBodyFieldsFromTypedParams(feFnNode, feContent, apiContract.frontendTypes)
+    : new Set<string>();
+  for (const field of feRequestTypeFields) {
+    feRequestFields.add(field);
+  }
+  const feRequestBodyHasSpread = feFnNode ? requestBodyHasSpreadLiteral(feFnNode, feContent) : false;
 
-  const beRouteNode = findExpressRouteHandler(beTree.rootNode, beContent, method, backendPath);
-  const beResponseFields = beRouteNode ? extractBackendResponseFields(beRouteNode, beContent) : new Set<string>();
-  const beRequestFields = beRouteNode ? extractBackendRequestFields(beRouteNode, beContent) : new Set<string>();
+  const backendHandler = resolveExpressBackendHandler(
+    beTree.rootNode,
+    beContent,
+    backendFile,
+    method,
+    backendPath,
+    backendHandlerName,
+  );
+  const beResponseFields = backendHandler
+    ? extractBackendResponseFields(backendHandler.node, backendHandler.content)
+    : new Set<string>();
+  const beRequestFields = backendHandler
+    ? extractBackendRequestFields(backendHandler.node, backendHandler.content)
+    : new Set<string>();
+  const feQueryFields = new Set<string>((mapping?.frontend?.queryParams || []).map((p: any) => p.name));
+  const beDeclaredQueryFields = new Set<string>((mapping?.backend?.queryParams || []).map((p: any) => p.name));
+  const beHandlerQueryFields = backendHandler
+    ? extractBackendQueryFields(backendHandler.node, backendHandler.content)
+    : new Set<string>();
 
   // Response field mismatches
-  if (feResponseFields.size > 0 && beResponseFields.size > 0) {
+  if (shouldValidateFrontendFieldMismatches && feResponseFields.size > 0 && beResponseFields.size > 0) {
     for (const field of feResponseFields) {
       if (!beResponseFields.has(field)) {
         issues.push({
@@ -461,38 +814,337 @@ function validateInlineRequestResponseFields(mapping: any, endpoint: string): Ap
   }
 
   // Request body extra fields
-  if (feRequestFields.size > 0 && beRequestFields.size > 0) {
-    for (const field of feRequestFields) {
-      if (!beRequestFields.has(field)) {
+  if (shouldValidateFrontendFieldMismatches && beRequestFields.size > 0) {
+    if (feRequestFields.size > 0) {
+      for (const field of feRequestFields) {
+        if (!beRequestFields.has(field)) {
+          issues.push({
+            type: "apiExtraField",
+            severity: "medium",
+            message: `Request field mismatch: frontend sends '${field}', but backend handler for ${method.toUpperCase()} ${backendPath} does not read/expect it`,
+            file: frontendFile,
+            line: mapping.frontend.line,
+            endpoint,
+            suggestion: `Remove '${field}' from request payload or update backend to accept it`,
+            confidence: 75,
+          });
+        }
+      }
+    }
+
+    // Only infer missing backend-read fields when the frontend payload shape is explicit.
+    // Object spreads (e.g. { ...data, extra: 1 }) often hide fields that static extraction
+    // cannot reliably enumerate, which would create noisy false positives.
+    if (!feRequestBodyHasSpread && feRequestFields.size > 0) {
+      for (const backendField of beRequestFields) {
+        if (!feRequestFields.has(backendField)) {
+          issues.push({
+            type: "apiMissingRequiredField",
+            severity: "high",
+            message: `Request field mismatch: backend handler for ${method.toUpperCase()} ${backendPath} reads/expects '${backendField}', but frontend payload does not include it`,
+            file: frontendFile,
+            line: mapping.frontend.line,
+            endpoint,
+            suggestion: `Include '${backendField}' in frontend request payload or update backend handler expectations`,
+            confidence: 78,
+          });
+        }
+      }
+    }
+  }
+
+  // Express route extraction does not always include query params in route metadata.
+  // If frontend declares query params and backend handler clearly reads req.query
+  // fields, validate them here to catch mismatches like extra frontend status filters.
+  if (
+    shouldValidateFrontendFieldMismatches &&
+    feQueryFields.size > 0 &&
+    beDeclaredQueryFields.size === 0 &&
+    beHandlerQueryFields.size > 0
+  ) {
+    for (const frontendQuery of feQueryFields) {
+      if (!beHandlerQueryFields.has(frontendQuery)) {
         issues.push({
           type: "apiExtraField",
           severity: "medium",
-          message: `Request field mismatch: frontend sends '${field}', but backend handler for ${method.toUpperCase()} ${backendPath} does not read/expect it`,
+          message: `Query parameter mismatch: frontend sends '${frontendQuery}', but backend handler for ${method.toUpperCase()} ${backendPath} does not read/expect it`,
           file: frontendFile,
           line: mapping.frontend.line,
           endpoint,
-          suggestion: `Remove '${field}' from request payload or update backend to accept it`,
-          confidence: 75,
+          suggestion: `Remove query parameter '${frontendQuery}' from frontend request or update backend handler to support it`,
+          confidence: 80,
         });
       }
     }
   }
 
+  if (backendHandler) {
+    issues.push(
+      ...detectBackendPropertyHallucinations(
+        backendHandler.node,
+        backendHandler.content,
+        backendHandler.filePath,
+        apiContract.backendModels,
+        endpoint,
+        mapping?.backend?.line,
+      ),
+    );
+  }
+
   return issues;
 }
 
-function findFunctionLikeByName(root: any, content: string, name: string): any | null {
-  let found: any | null = null;
+function detectBackendPropertyHallucinations(
+  handlerNode: any,
+  content: string,
+  handlerFilePath: string,
+  backendModels: Array<{ name: string; fields: Array<{ name: string }> }>,
+  endpoint: string,
+  fallbackLine?: number,
+): ApiContractIssue[] {
+  const issues: ApiContractIssue[] = [];
+  if (!handlerNode || backendModels.length === 0) return issues;
+
+  const knownModelFieldSets = new Map<string, Set<string>>();
+  for (const model of backendModels) {
+    knownModelFieldSets.set(
+      normalizeName(model.name),
+      new Set(model.fields.map((field) => normalizeName(field.name))),
+    );
+  }
+
+  const variableToModel = new Map<
+    string,
+    { modelName: string; modelFields: Set<string>; isCollection: boolean }
+  >();
+  const prismaMethods = new Set([
+    "findunique",
+    "findfirst",
+    "findmany",
+    "create",
+    "update",
+    "upsert",
+    "delete",
+  ]);
+  const arrayMethodNames = new Set([
+    "map",
+    "forEach",
+    "some",
+    "every",
+    "filter",
+    "reduce",
+    "find",
+    "flatMap",
+    "sort",
+    "slice",
+    "concat",
+    "includes",
+    "indexOf",
+    "lastIndexOf",
+    "at",
+    "entries",
+    "values",
+    "keys",
+    "length",
+  ]);
+
+  const registerModelVariables = (node: any) => {
+    if (!node) return;
+    if (node.type === "variable_declarator") {
+      const nameNode = node.childForFieldName?.("name");
+      const valueNode = node.childForFieldName?.("value");
+      if (nameNode?.type === "identifier" && valueNode) {
+        const variableName = content.slice(nameNode.startIndex, nameNode.endIndex);
+        const callNode = unwrapAwaitExpression(valueNode);
+        if (callNode?.type === "call_expression") {
+          const fnNode = callNode.childForFieldName?.("function");
+          const prismaRef = extractPrismaModelReference(fnNode, content);
+          if (prismaRef && prismaMethods.has(prismaRef.method.toLowerCase())) {
+            const modelFields = knownModelFieldSets.get(normalizeName(prismaRef.model));
+            if (modelFields) {
+              variableToModel.set(variableName, {
+                modelName: prismaRef.model,
+                modelFields,
+                isCollection: prismaRef.method.toLowerCase() === "findmany",
+              });
+            }
+          }
+        }
+      }
+    }
+
+    for (const child of node.children || []) registerModelVariables(child);
+  };
+
+  registerModelVariables(handlerNode);
+  const extractFirstCallbackParamName = (callbackNode: any): string | null => {
+    if (!callbackNode) return null;
+    const paramsNode =
+      callbackNode.childForFieldName?.("parameters") ||
+      callbackNode.childForFieldName?.("parameter");
+    if (!paramsNode) return null;
+
+    if (paramsNode.type === "identifier") {
+      const paramName = content.slice(paramsNode.startIndex, paramsNode.endIndex);
+      return paramName || null;
+    }
+
+    for (const param of paramsNode.namedChildren || paramsNode.children || []) {
+      if (param?.type === "identifier") {
+        const identifierName = content.slice(param.startIndex, param.endIndex);
+        if (identifierName) return identifierName;
+      }
+
+      const nameNode =
+        param.childForFieldName?.("pattern") ||
+        param.childForFieldName?.("name") ||
+        (param.namedChildren
+          ? param.namedChildren.find((c: any) => c.type === "identifier")
+          : null);
+      if (!nameNode || nameNode.type !== "identifier") continue;
+
+      const paramName = content.slice(nameNode.startIndex, nameNode.endIndex);
+      if (paramName) return paramName;
+    }
+
+    return null;
+  };
+
+  const registerCollectionElementAliases = (node: any) => {
+    if (!node) return;
+
+    if (node.type === "call_expression") {
+      const fnNode = node.childForFieldName?.("function");
+      const argsNode = node.childForFieldName?.("arguments");
+
+      if (fnNode?.type === "member_expression" && argsNode) {
+        const objectNode = fnNode.childForFieldName?.("object");
+        const propertyNode = fnNode.childForFieldName?.("property");
+
+        if (objectNode?.type === "identifier" && propertyNode?.type === "property_identifier") {
+          const collectionName = content.slice(objectNode.startIndex, objectNode.endIndex);
+          const iterateMethod = content.slice(propertyNode.startIndex, propertyNode.endIndex);
+          const modelRef = variableToModel.get(collectionName);
+
+          if (modelRef?.isCollection && arrayMethodNames.has(iterateMethod)) {
+            const callbackNode = (argsNode.namedChildren || []).find(
+              (child: any) => child.type === "arrow_function" || child.type === "function",
+            );
+            const callbackParam = extractFirstCallbackParamName(callbackNode);
+            if (callbackParam && !variableToModel.has(callbackParam)) {
+              variableToModel.set(callbackParam, {
+                modelName: modelRef.modelName,
+                modelFields: modelRef.modelFields,
+                isCollection: false,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    for (const child of node.children || []) registerCollectionElementAliases(child);
+  };
+
+  registerCollectionElementAliases(handlerNode);
+  if (variableToModel.size === 0) return issues;
+
+  const seen = new Set<string>();
+  const scanPropertyAccess = (node: any) => {
+    if (!node) return;
+
+    if (node.type === "member_expression") {
+      const objectNode = node.childForFieldName?.("object");
+      const propertyNode = node.childForFieldName?.("property");
+      if (objectNode?.type === "identifier" && propertyNode?.type === "property_identifier") {
+        const variableName = content.slice(objectNode.startIndex, objectNode.endIndex);
+        const modelRef = variableToModel.get(variableName);
+        if (modelRef) {
+          const propertyName = content.slice(propertyNode.startIndex, propertyNode.endIndex);
+
+          if (modelRef.isCollection && arrayMethodNames.has(propertyName)) {
+            // `findMany()` returns arrays, so collection methods/properties are valid.
+            for (const child of node.children || []) scanPropertyAccess(child);
+            return;
+          }
+
+          const normalizedProperty = normalizeName(propertyName);
+          if (!modelRef.modelFields.has(normalizedProperty)) {
+            const issueLine =
+              typeof node?.startPosition?.row === "number"
+                ? node.startPosition.row + 1
+                : fallbackLine || 1;
+            const key = `${variableName}.${propertyName}`;
+            if (!seen.has(key)) {
+              seen.add(key);
+              issues.push({
+                type: "apiContractMismatch",
+                severity: "high",
+                message: `Potential backend property hallucination: '${variableName}.${propertyName}' is accessed in handler but '${propertyName}' is not defined on model '${modelRef.modelName}'`,
+                file: handlerFilePath,
+                line: issueLine,
+                endpoint,
+                suggestion: `Use a valid '${modelRef.modelName}' property or update the model schema to include '${propertyName}'`,
+                confidence: 80,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    for (const child of node.children || []) scanPropertyAccess(child);
+  };
+
+  scanPropertyAccess(handlerNode);
+  return issues;
+}
+
+function unwrapAwaitExpression(node: any): any {
+  if (!node) return null;
+  if (node.type !== "await_expression") return node;
+  return (
+    node.childForFieldName?.("argument") ||
+    node.childForFieldName?.("expression") ||
+    (node.namedChildren ? node.namedChildren[0] : null)
+  );
+}
+
+function extractPrismaModelReference(
+  functionNode: any,
+  content: string,
+): { model: string; method: string } | null {
+  if (!functionNode || functionNode.type !== "member_expression") return null;
+
+  const methodNode = functionNode.childForFieldName?.("property");
+  const objectNode = functionNode.childForFieldName?.("object");
+  if (!methodNode || !objectNode || objectNode.type !== "member_expression") return null;
+
+  const prismaRootNode = objectNode.childForFieldName?.("object");
+  const modelNode = objectNode.childForFieldName?.("property");
+  if (!prismaRootNode || !modelNode) return null;
+
+  const prismaRoot = content.slice(prismaRootNode.startIndex, prismaRootNode.endIndex);
+  if (prismaRoot !== "prisma") return null;
+
+  const model = content.slice(modelNode.startIndex, modelNode.endIndex);
+  const method = content.slice(methodNode.startIndex, methodNode.endIndex);
+  if (!model || !method) return null;
+
+  return { model, method };
+}
+
+function findFunctionLikeByName(root: any, content: string, name: string, preferredLine?: number): any | null {
+  const candidates: any[] = [];
   const target = name.trim();
 
   const visit = (node: any) => {
-    if (!node || found) return;
+    if (!node) return;
 
     if (node.type === "function_declaration") {
       const nameNode = node.childForFieldName?.("name");
       if (nameNode && content.slice(nameNode.startIndex, nameNode.endIndex) === target) {
-        found = node;
-        return;
+        candidates.push(node);
       }
     }
 
@@ -502,8 +1154,7 @@ function findFunctionLikeByName(root: any, content: string, name: string): any |
       const valueNode = node.childForFieldName?.("value");
       const nodeName = nameNode ? content.slice(nameNode.startIndex, nameNode.endIndex) : "";
       if (nodeName === target && (valueNode?.type === "arrow_function" || valueNode?.type === "function")) {
-        found = valueNode;
-        return;
+        candidates.push(valueNode);
       }
     }
 
@@ -517,8 +1168,7 @@ function findFunctionLikeByName(root: any, content: string, name: string): any |
           .replace(/^['"`]/, "")
           .replace(/['"`]$/, "");
         if (keyText === target) {
-          found = valueNode;
-          return;
+          candidates.push(valueNode);
         }
       }
     }
@@ -532,8 +1182,7 @@ function findFunctionLikeByName(root: any, content: string, name: string): any |
           .replace(/^['"`]/, "")
           .replace(/['"`]$/, "");
         if (nodeName === target) {
-          found = node;
-          return;
+          candidates.push(node);
         }
       }
     }
@@ -542,7 +1191,356 @@ function findFunctionLikeByName(root: any, content: string, name: string): any |
   };
 
   visit(root);
-  return found;
+  if (candidates.length === 0) return null;
+
+  if (typeof preferredLine !== "number" || Number.isNaN(preferredLine)) {
+    return candidates[0];
+  }
+
+  let best = candidates[0];
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const candidate of candidates) {
+    const start = candidate?.startPosition?.row;
+    const end = candidate?.endPosition?.row;
+    if (typeof start !== "number") continue;
+
+    const startLine = start + 1;
+    const endLine = typeof end === "number" ? end + 1 : startLine;
+
+    if (preferredLine >= startLine && preferredLine <= endLine) {
+      return candidate;
+    }
+
+    const distance = Math.abs(startLine - preferredLine);
+    if (distance < bestScore) {
+      bestScore = distance;
+      best = candidate;
+    }
+  }
+
+  return best;
+}
+
+function shouldValidateInlineFrontendFieldMismatches(
+  mapping: any,
+  frontendTreeRoot: any,
+  frontendFnNode: any,
+  frontendContent: string,
+  apiContract: ApiContractContext,
+  frontendServiceUsageCache: FrontendServiceUsageCache,
+): boolean {
+  const frontendFile: string | undefined = mapping?.frontend?.file;
+  if (!frontendFile) return true;
+
+  const expectedMethodName = mapping?.frontend?.name?.trim();
+
+  let serviceReference = frontendFnNode
+    ? extractFrontendServiceReference(frontendFnNode, frontendContent)
+    : null;
+  if (serviceReference && expectedMethodName) {
+    const extractedMethodName = serviceReference.split(".").slice(-1)[0];
+    if (extractedMethodName !== expectedMethodName) {
+      serviceReference = null;
+    }
+  }
+  if (!serviceReference) {
+    serviceReference = findFrontendServiceReferenceByName(
+      frontendTreeRoot,
+      frontendContent,
+      mapping?.frontend?.name,
+      mapping?.frontend?.line,
+    );
+  }
+  if (!serviceReference) return true;
+
+  const isUsed = isFrontendServiceReferenceUsed(
+    serviceReference,
+    frontendFile,
+    apiContract,
+    frontendServiceUsageCache,
+  );
+
+  return isUsed;
+}
+
+function extractFrontendServiceReference(frontendFnNode: any, frontendContent: string): string | null {
+  let pairNode = frontendFnNode;
+  while (pairNode && pairNode.type !== "pair") {
+    pairNode = pairNode.parent;
+  }
+  if (!pairNode || pairNode.type !== "pair") return null;
+
+  const keyNode = pairNode.childForFieldName?.("key");
+  if (!keyNode) return null;
+
+  const methodName = frontendContent
+    .slice(keyNode.startIndex, keyNode.endIndex)
+    .replace(/^['"`]/, "")
+    .replace(/['"`]$/, "");
+  if (!methodName) return null;
+
+  const objectName = extractServiceObjectNameFromPair(pairNode, frontendContent);
+  if (!objectName) return null;
+
+  return `${objectName}.${methodName}`;
+}
+
+function findFrontendServiceReferenceByName(
+  frontendTreeRoot: any,
+  frontendContent: string,
+  methodName: string | undefined,
+  preferredLine?: number,
+): string | null {
+  const target = methodName?.trim();
+  if (!target || !frontendTreeRoot) return null;
+
+  const candidates: Array<{ reference: string; line: number }> = [];
+
+  const visit = (node: any) => {
+    if (!node) return;
+
+    if (node.type === "pair") {
+      const keyNode = node.childForFieldName?.("key");
+      if (keyNode) {
+        const keyText = frontendContent
+          .slice(keyNode.startIndex, keyNode.endIndex)
+          .replace(/^['"`]/, "")
+          .replace(/['"`]$/, "");
+
+        if (keyText === target) {
+          const objectName = extractServiceObjectNameFromPair(node, frontendContent);
+          if (objectName) {
+            const line =
+              typeof keyNode?.startPosition?.row === "number"
+                ? keyNode.startPosition.row + 1
+                : 1;
+            candidates.push({ reference: `${objectName}.${target}`, line });
+          }
+        }
+      }
+    }
+
+    for (const child of node.children || []) visit(child);
+  };
+
+  visit(frontendTreeRoot);
+  if (candidates.length === 0) return null;
+  if (typeof preferredLine !== "number" || Number.isNaN(preferredLine)) {
+    return candidates[0].reference;
+  }
+
+  let best = candidates[0];
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const candidate of candidates) {
+    const distance = Math.abs(candidate.line - preferredLine);
+    if (distance < bestDistance) {
+      best = candidate;
+      bestDistance = distance;
+    }
+  }
+
+  return best.reference;
+}
+
+function extractServiceObjectNameFromPair(pairNode: any, frontendContent: string): string | null {
+  let current = pairNode?.parent;
+  while (current) {
+    if (current.type === "variable_declarator") {
+      const nameNode = current.childForFieldName?.("name");
+      if (nameNode?.type !== "identifier") return null;
+
+      const objectName = frontendContent.slice(nameNode.startIndex, nameNode.endIndex);
+      return objectName || null;
+    }
+    current = current.parent;
+  }
+
+  return null;
+}
+
+function isFrontendServiceReferenceUsed(
+  serviceReference: string,
+  frontendFile: string,
+  apiContract: ApiContractContext,
+  frontendServiceUsageCache: FrontendServiceUsageCache,
+): boolean {
+  const usageCacheKey = `${frontendFile}|${serviceReference}`;
+  const cachedUsage = frontendServiceUsageCache.serviceUsage.get(usageCacheKey);
+  if (typeof cachedUsage === "boolean") return cachedUsage;
+
+  const [serviceObject, serviceMethod] = serviceReference.split(".");
+  if (!serviceObject || !serviceMethod) {
+    frontendServiceUsageCache.serviceUsage.set(usageCacheKey, true);
+    return true;
+  }
+
+  const frontendRoot = resolveFrontendSourceRoot(apiContract, frontendFile);
+  if (!frontendRoot) {
+    frontendServiceUsageCache.serviceUsage.set(usageCacheKey, true);
+    return true;
+  }
+
+  const sourceFiles = getFrontendSourceFiles(frontendRoot, frontendServiceUsageCache);
+  if (sourceFiles.length === 0) {
+    frontendServiceUsageCache.serviceUsage.set(usageCacheKey, true);
+    return true;
+  }
+
+  const directMemberCallPattern = new RegExp(
+    `\\b${escapeRegexLiteral(serviceObject)}\\s*\\.\\s*${escapeRegexLiteral(serviceMethod)}\\s*\\(`,
+  );
+  const anyMemberCallPattern = new RegExp(
+    `\\b${escapeRegexLiteral(serviceObject)}\\s*\\.\\s*[A-Za-z_$][\\w$]*\\s*\\(`,
+  );
+
+  let methodUsed = false;
+  let objectUsedByAnyMethod = false;
+  for (const filePath of sourceFiles) {
+    const sourceContent = readCachedFileContent(filePath, frontendServiceUsageCache);
+    if (!sourceContent) continue;
+
+    if (anyMemberCallPattern.test(sourceContent)) {
+      objectUsedByAnyMethod = true;
+    }
+
+    if (directMemberCallPattern.test(sourceContent)) {
+      methodUsed = true;
+      break;
+    }
+
+    const aliases = extractDestructuredMethodAliases(sourceContent, serviceObject, serviceMethod);
+    if (
+      aliases.some((alias) => {
+        const aliasCallPattern = new RegExp(`\\b${escapeRegexLiteral(alias)}\\s*\\(`);
+        return aliasCallPattern.test(sourceContent);
+      })
+    ) {
+      methodUsed = true;
+      break;
+    }
+  }
+
+  // Conservative rule:
+  // - If this exact method is used, validate it.
+  // - If the service object is used but this method is not, skip noisy inline mismatch checks.
+  // - If the whole service object appears unused, keep validation (could still be an intended public API contract).
+  const shouldValidate = methodUsed || !objectUsedByAnyMethod;
+
+  frontendServiceUsageCache.serviceUsage.set(usageCacheKey, shouldValidate);
+  return shouldValidate;
+}
+
+function extractDestructuredMethodAliases(
+  sourceContent: string,
+  serviceObject: string,
+  serviceMethod: string,
+): string[] {
+  const aliases = new Set<string>();
+  const destructurePattern = new RegExp(
+    `\\{([^}]*)\\}\\s*=\\s*${escapeRegexLiteral(serviceObject)}\\b`,
+    "g",
+  );
+
+  let match: RegExpExecArray | null;
+  while ((match = destructurePattern.exec(sourceContent))) {
+    const entries = match[1].split(",");
+    for (const entryRaw of entries) {
+      const entry = entryRaw.trim();
+      if (!entry) continue;
+
+      if (entry === serviceMethod) {
+        aliases.add(serviceMethod);
+        continue;
+      }
+
+      const aliasMatch = entry.match(
+        new RegExp(`^${escapeRegexLiteral(serviceMethod)}\\s*:\\s*([A-Za-z_$][\\w$]*)$`),
+      );
+      if (aliasMatch) {
+        aliases.add(aliasMatch[1]);
+      }
+    }
+  }
+
+  return Array.from(aliases);
+}
+
+function resolveFrontendSourceRoot(apiContract: ApiContractContext, frontendFile: string): string | null {
+  const configuredRoot = apiContract?.projectStructure?.frontend?.path;
+  if (configuredRoot && fsSync.existsSync(configuredRoot)) {
+    return configuredRoot;
+  }
+
+  if (!frontendFile) return null;
+
+  const normalizedFilePath = frontendFile.replace(/\\/g, "/");
+  const marker = "/src/";
+  const markerIndex = normalizedFilePath.lastIndexOf(marker);
+  if (markerIndex >= 0) {
+    return normalizedFilePath.slice(0, markerIndex + marker.length - 1);
+  }
+
+  return path.dirname(frontendFile);
+}
+
+function getFrontendSourceFiles(
+  frontendRoot: string,
+  frontendServiceUsageCache: FrontendServiceUsageCache,
+): string[] {
+  const resolvedRoot = path.resolve(frontendRoot);
+  const cached = frontendServiceUsageCache.sourceFilesByRoot.get(resolvedRoot);
+  if (cached) return cached;
+
+  const files: string[] = [];
+  const visitDir = (dirPath: string) => {
+    let entries: fsSync.Dirent[] = [];
+    try {
+      entries = fsSync.readdirSync(dirPath, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+
+      const fullPath = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        visitDir(fullPath);
+        continue;
+      }
+
+      if (!entry.isFile()) continue;
+      if (/\.(ts|tsx|js|jsx)$/.test(entry.name)) {
+        files.push(fullPath);
+      }
+    }
+  };
+
+  visitDir(resolvedRoot);
+  frontendServiceUsageCache.sourceFilesByRoot.set(resolvedRoot, files);
+  return files;
+}
+
+function readCachedFileContent(
+  filePath: string,
+  frontendServiceUsageCache: FrontendServiceUsageCache,
+): string {
+  const cached = frontendServiceUsageCache.fileContents.get(filePath);
+  if (typeof cached === "string") return cached;
+
+  try {
+    const content = fsSync.readFileSync(filePath, "utf-8");
+    frontendServiceUsageCache.fileContents.set(filePath, content);
+    return content;
+  } catch {
+    frontendServiceUsageCache.fileContents.set(filePath, "");
+    return "";
+  }
+}
+
+function escapeRegexLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function extractResponseFieldsUsed(functionNode: any, content: string): Set<string> {
@@ -582,6 +1580,230 @@ function extractResponseFieldsUsed(functionNode: any, content: string): Set<stri
   return fields;
 }
 
+function inferRequestBodyFieldsFromTypedParams(
+  functionNode: any,
+  content: string,
+  frontendTypes: Array<{ name: string; fields: Array<{ name: string }> }>,
+): Set<string> {
+  const inferred = new Set<string>();
+  if (!functionNode || frontendTypes.length === 0) return inferred;
+
+  const bodyVars = extractRequestBodyVariableNames(functionNode, content);
+  if (bodyVars.size === 0) return inferred;
+
+  const paramsNode = functionNode.childForFieldName?.("parameters");
+  if (!paramsNode) return inferred;
+
+  for (const param of paramsNode.children || []) {
+    const nameNode =
+      param.childForFieldName?.("pattern") ||
+      param.childForFieldName?.("name") ||
+      (param.namedChildren
+        ? param.namedChildren.find((c: any) => c.type === "identifier")
+        : null);
+    if (!nameNode) continue;
+
+    const paramName = content.slice(nameNode.startIndex, nameNode.endIndex);
+    if (!bodyVars.has(paramName)) continue;
+
+    const typeNode =
+      param.childForFieldName?.("type") ||
+      (param.namedChildren
+        ? param.namedChildren.find((c: any) => c.type === "type_annotation")
+        : null);
+    if (!typeNode) continue;
+
+    const typeText = content.slice(typeNode.startIndex, typeNode.endIndex);
+    const typeFields = resolveNamedTypeFieldNames(typeText, frontendTypes);
+    for (const field of typeFields) {
+      inferred.add(field);
+    }
+  }
+
+  return inferred;
+}
+
+function extractRequestBodyVariableNames(functionNode: any, content: string): Set<string> {
+  const bodyVars = new Set<string>();
+
+  const collectSpreadIdentifiers = (objectNode: any) => {
+    if (!objectNode || objectNode.type !== "object") return;
+    for (const child of objectNode.children || []) {
+      if (child.type !== "spread_element") continue;
+      const argNode =
+        child.childForFieldName?.("argument") ||
+        (child.namedChildren ? child.namedChildren[0] : null);
+      if (argNode?.type !== "identifier") continue;
+      const spreadVar = content.slice(argNode.startIndex, argNode.endIndex);
+      if (spreadVar) bodyVars.add(spreadVar);
+    }
+  };
+
+  const visit = (node: any) => {
+    if (!node) return;
+
+    if (node.type === "call_expression") {
+      const args = node.childForFieldName?.("arguments");
+      if (args) {
+        for (const arg of args.children || []) {
+          if (arg.type !== "object") continue;
+
+          for (const pair of arg.children || []) {
+            if (pair.type !== "pair") continue;
+            const keyNode = pair.childForFieldName?.("key");
+            const valNode = pair.childForFieldName?.("value");
+            if (!keyNode || !valNode) continue;
+
+            const keyText = content
+              .slice(keyNode.startIndex, keyNode.endIndex)
+              .replace(/^['"`]/, "")
+              .replace(/['"`]$/, "");
+            if (keyText !== "body") continue;
+
+            if (valNode.type === "identifier") {
+              const id = content.slice(valNode.startIndex, valNode.endIndex);
+              if (id) bodyVars.add(id);
+              continue;
+            }
+
+            if (valNode.type === "object") {
+              collectSpreadIdentifiers(valNode);
+            }
+
+            const jsonArg = extractJsonStringifyArgument(valNode, content);
+            if (!jsonArg) continue;
+
+            if (jsonArg.type === "identifier") {
+              const id = content.slice(jsonArg.startIndex, jsonArg.endIndex);
+              if (id) bodyVars.add(id);
+            } else if (jsonArg.type === "object") {
+              collectSpreadIdentifiers(jsonArg);
+            }
+          }
+        }
+      }
+    }
+
+    for (const child of node.children || []) visit(child);
+  };
+
+  visit(functionNode);
+  return bodyVars;
+}
+
+function resolveNamedTypeFieldNames(
+  typeText: string,
+  frontendTypes: Array<{ name: string; fields: Array<{ name: string }> }>,
+): Set<string> {
+  const cleaned = typeText.replace(/^\s*:\s*/, "").trim();
+  if (!cleaned) return new Set<string>();
+
+  const lookupTypeFields = (rawTypeName: string): Set<string> => {
+    const typeName = rawTypeName.split(".").pop() || rawTypeName;
+    const target = frontendTypes.find(
+      (typeDef) => normalizeName(typeDef.name) === normalizeName(typeName),
+    );
+    return new Set((target?.fields || []).map((field) => field.name));
+  };
+
+  const unwrapArray = (text: string): string => text.replace(/\[\]$/, "").trim();
+  const baseText = unwrapArray(cleaned);
+
+  const passthroughWrapper = baseText.match(/^(?:Partial|Required|Readonly|NonNullable|Promise|Array)<\s*([^>]+)\s*>$/);
+  if (passthroughWrapper) {
+    return resolveNamedTypeFieldNames(passthroughWrapper[1], frontendTypes);
+  }
+
+  const omitMatch = baseText.match(/^Omit<\s*([^,>]+)\s*,\s*(.+)\s*>$/);
+  if (omitMatch) {
+    const fields = resolveNamedTypeFieldNames(omitMatch[1], frontendTypes);
+    const omitted = new Set<string>();
+    const keyRegex = /['"`]([A-Za-z_][A-Za-z0-9_]*)['"`]/g;
+    let match: RegExpExecArray | null;
+    while ((match = keyRegex.exec(omitMatch[2])) !== null) {
+      omitted.add(match[1]);
+      omitted.add(normalizeName(match[1]));
+    }
+
+    return new Set(
+      Array.from(fields).filter(
+        (field) => !omitted.has(field) && !omitted.has(normalizeName(field)),
+      ),
+    );
+  }
+
+  const pickMatch = baseText.match(/^Pick<\s*([^,>]+)\s*,\s*(.+)\s*>$/);
+  if (pickMatch) {
+    const fields = resolveNamedTypeFieldNames(pickMatch[1], frontendTypes);
+    const picked = new Set<string>();
+    const keyRegex = /['"`]([A-Za-z_][A-Za-z0-9_]*)['"`]/g;
+    let match: RegExpExecArray | null;
+    while ((match = keyRegex.exec(pickMatch[2])) !== null) {
+      picked.add(match[1]);
+      picked.add(normalizeName(match[1]));
+    }
+
+    return new Set(
+      Array.from(fields).filter(
+        (field) => picked.has(field) || picked.has(normalizeName(field)),
+      ),
+    );
+  }
+
+  return lookupTypeFields(baseText);
+}
+
+function requestBodyHasSpreadLiteral(functionNode: any, content: string): boolean {
+  let hasSpread = false;
+
+  const objectHasSpread = (node: any): boolean => {
+    if (!node || node.type !== "object") return false;
+    return (node.children || []).some((child: any) => child.type === "spread_element");
+  };
+
+  const visit = (node: any) => {
+    if (!node || hasSpread) return;
+
+    if (node.type === "call_expression") {
+      const args = node.childForFieldName?.("arguments");
+      if (args) {
+        for (const arg of args.children || []) {
+          if (arg.type !== "object") continue;
+
+          for (const pair of arg.children || []) {
+            if (pair.type !== "pair") continue;
+            const keyNode = pair.childForFieldName?.("key");
+            const valNode = pair.childForFieldName?.("value");
+            if (!keyNode || !valNode) continue;
+
+            const keyText = content
+              .slice(keyNode.startIndex, keyNode.endIndex)
+              .replace(/^['"`]/, "")
+              .replace(/['"`]$/, "");
+            if (keyText !== "body") continue;
+
+            if (objectHasSpread(valNode)) {
+              hasSpread = true;
+              return;
+            }
+
+            const jsonArg = extractJsonStringifyArgument(valNode, content);
+            if (objectHasSpread(jsonArg)) {
+              hasSpread = true;
+              return;
+            }
+          }
+        }
+      }
+    }
+
+    for (const child of node.children || []) visit(child);
+  };
+
+  visit(functionNode);
+  return hasSpread;
+}
+
 function isAwaitedJsonCall(node: any, content: string): boolean {
   const awaited =
     node.type === "await_expression"
@@ -602,29 +1824,79 @@ function isAwaitedJsonCall(node: any, content: string): boolean {
 
 function extractRequestBodyFieldsUsed(functionNode: any, content: string): Set<string> {
   const fields = new Set<string>();
-
-  // Find request body identifier used in `body: JSON.stringify(x)`.
   const bodyVars = new Set<string>();
+
+  const addObjectLiteralFields = (objectNode: any) => {
+    for (const child of objectNode.children || []) {
+      if (child.type === "pair") {
+        const keyNode = child.childForFieldName?.("key");
+        if (!keyNode) continue;
+        const raw = content.slice(keyNode.startIndex, keyNode.endIndex);
+        const cleaned = raw.replace(/^['"`]/, "").replace(/['"`]$/, "");
+        if (cleaned) fields.add(cleaned);
+        continue;
+      }
+
+      if (
+        child.type === "shorthand_property_identifier" ||
+        child.type === "shorthand_property_identifier_pattern"
+      ) {
+        const keyText = content.slice(child.startIndex, child.endIndex);
+        if (keyText) fields.add(keyText);
+        continue;
+      }
+
+      if (child.type === "spread_element") {
+        const argNode =
+          child.childForFieldName?.("argument") ||
+          (child.namedChildren ? child.namedChildren[0] : null);
+        if (argNode?.type === "identifier") {
+          const spreadVar = content.slice(argNode.startIndex, argNode.endIndex);
+          if (spreadVar) bodyVars.add(spreadVar);
+        }
+      }
+    }
+  };
 
   const visit = (node: any) => {
     if (!node) return;
     if (node.type === "call_expression") {
-      const fn = node.childForFieldName?.("function");
       const args = node.childForFieldName?.("arguments");
-      if (fn?.type === "identifier" && content.slice(fn.startIndex, fn.endIndex) === "fetch" && args) {
-        // Find an object arg that contains `body:`
-        for (const child of args.children || []) {
-          if (child.type !== "object") continue;
-          for (const pair of child.children || []) {
+      if (args) {
+        for (const arg of args.children || []) {
+          if (arg.type !== "object") continue;
+          for (const pair of arg.children || []) {
             if (pair.type !== "pair") continue;
             const keyNode = pair.childForFieldName?.("key");
             const valNode = pair.childForFieldName?.("value");
             if (!keyNode || !valNode) continue;
-            const keyText = content.slice(keyNode.startIndex, keyNode.endIndex);
+
+            const keyText = content
+              .slice(keyNode.startIndex, keyNode.endIndex)
+              .replace(/^['"`]/, "")
+              .replace(/['"`]$/, "");
             if (keyText !== "body") continue;
 
-            const id = extractJsonStringifyIdentifier(valNode, content);
-            if (id) bodyVars.add(id);
+            if (valNode.type === "object") {
+              addObjectLiteralFields(valNode);
+              continue;
+            }
+
+            if (valNode.type === "identifier") {
+              const id = content.slice(valNode.startIndex, valNode.endIndex);
+              if (id) bodyVars.add(id);
+              continue;
+            }
+
+            const jsonArg = extractJsonStringifyArgument(valNode, content);
+            if (!jsonArg) continue;
+
+            if (jsonArg.type === "identifier") {
+              const id = content.slice(jsonArg.startIndex, jsonArg.endIndex);
+              if (id) bodyVars.add(id);
+            } else if (jsonArg.type === "object") {
+              addObjectLiteralFields(jsonArg);
+            }
           }
         }
       }
@@ -693,8 +1965,8 @@ function extractKeysFromInlineObjectTypeNode(typeNode: any, content: string): st
   return keys;
 }
 
-function extractJsonStringifyIdentifier(node: any, content: string): string | null {
-  // JSON.stringify(userData)
+function extractJsonStringifyArgument(node: any, content: string): any | null {
+  // JSON.stringify(userData) or JSON.stringify({ ... })
   if (node?.type !== "call_expression") return null;
   const fn = node.childForFieldName?.("function");
   if (!fn || fn.type !== "member_expression") return null;
@@ -707,9 +1979,9 @@ function extractJsonStringifyIdentifier(node: any, content: string): string | nu
 
   const args = node.childForFieldName?.("arguments");
   if (!args) return null;
-  const firstArg = (args.children || []).find((c: any) => c.type === "identifier");
+  const firstArg = (args.namedChildren || [])[0];
   if (!firstArg) return null;
-  return content.slice(firstArg.startIndex, firstArg.endIndex);
+  return firstArg;
 }
 
 function extractKeysFromInlineObjectType(typeText: string): string[] {
@@ -729,10 +2001,266 @@ function extractKeysFromInlineObjectType(typeText: string): string[] {
   return keys;
 }
 
+function resolveExpressBackendHandler(
+  routeTreeRoot: any,
+  routeFileContent: string,
+  routeFilePath: string,
+  method: string,
+  backendPath: string,
+  preferredHandlerName?: string,
+): { node: any; content: string; filePath: string } | null {
+  if (preferredHandlerName) {
+    const localFn = findFunctionLikeByName(routeTreeRoot, routeFileContent, preferredHandlerName);
+    if (localFn) {
+      return { node: localFn, content: routeFileContent, filePath: routeFilePath };
+    }
+
+    const importedFile = resolveImportedHandlerFile(
+      routeFilePath,
+      routeFileContent,
+      preferredHandlerName,
+    );
+    if (importedFile && fsSync.existsSync(importedFile)) {
+      try {
+        const importedContent = fsSync.readFileSync(importedFile, "utf-8");
+        const importedTree = getParser("typescript").parse(importedContent);
+        if (!importedTree) {
+          // Fall through to path-based resolution below.
+          throw new Error("Failed to parse imported handler file");
+        }
+        const importedFn = findFunctionLikeByName(
+          importedTree.rootNode,
+          importedContent,
+          preferredHandlerName,
+        );
+        if (importedFn) {
+          return {
+            node: importedFn,
+            content: importedContent,
+            filePath: importedFile,
+          };
+        }
+      } catch {
+        // Fall through to path-based resolution below.
+      }
+    }
+  }
+
+  const inlineHandler = findExpressRouteHandler(
+    routeTreeRoot,
+    routeFileContent,
+    method,
+    backendPath,
+  );
+  if (inlineHandler) {
+    return { node: inlineHandler, content: routeFileContent, filePath: routeFilePath };
+  }
+
+  const namedHandler = findExpressRouteHandlerIdentifier(
+    routeTreeRoot,
+    routeFileContent,
+    method,
+    backendPath,
+  );
+  if (!namedHandler) return null;
+
+  const handlerFile = resolveImportedHandlerFile(routeFilePath, routeFileContent, namedHandler);
+  if (!handlerFile || !fsSync.existsSync(handlerFile)) return null;
+
+  let handlerContent = "";
+  try {
+    handlerContent = fsSync.readFileSync(handlerFile, "utf-8");
+  } catch {
+    return null;
+  }
+
+  let handlerTree: any;
+  try {
+    handlerTree = getParser("typescript").parse(handlerContent);
+  } catch {
+    return null;
+  }
+
+  const handlerNode = findFunctionLikeByName(handlerTree.rootNode, handlerContent, namedHandler);
+  if (!handlerNode) return null;
+
+  return {
+    node: handlerNode,
+    content: handlerContent,
+    filePath: handlerFile,
+  };
+}
+
+function findExpressRouteHandlerIdentifier(
+  root: any,
+  content: string,
+  method: string,
+  backendPath: string,
+): string | null {
+  let found: string | null = null;
+  const targetMethod = method.toLowerCase();
+
+  const visit = (node: any) => {
+    if (!node || found) return;
+    if (node.type === "call_expression") {
+      const fn = node.childForFieldName?.("function");
+      const args = node.childForFieldName?.("arguments");
+      if (fn?.type === "member_expression" && args) {
+        const obj = fn.childForFieldName?.("object");
+        const prop = fn.childForFieldName?.("property");
+        const propText = prop
+          ? content.slice(prop.startIndex, prop.endIndex).toLowerCase()
+          : "";
+        if (propText === targetMethod && obj?.type === "identifier") {
+          const firstArg = (args.children || []).find(
+            (c: any) => c.type === "string" || c.type === "template_string",
+          );
+          if (firstArg && firstArg.type === "string") {
+            const raw = content
+              .slice(firstArg.startIndex, firstArg.endIndex)
+              .trim()
+              .replace(/^['"`]/, "")
+              .replace(/['"`]$/, "");
+            if (isRoutePathMatchForHandler(raw, backendPath)) {
+              const inlineFnArg = (args.children || []).find(
+                (c: any) => c.type === "arrow_function" || c.type === "function",
+              );
+              if (inlineFnArg) {
+                return;
+              }
+
+              const identifierArgs = (args.children || []).filter(
+                (c: any) => c.type === "identifier",
+              );
+              if (identifierArgs.length > 0) {
+                const handlerNode = identifierArgs[identifierArgs.length - 1];
+                found = content.slice(handlerNode.startIndex, handlerNode.endIndex);
+                return;
+              }
+            }
+          }
+        }
+      }
+    }
+    for (const child of node.children || []) visit(child);
+  };
+
+  visit(root);
+  return found;
+}
+
+function resolveImportedHandlerFile(
+  routeFilePath: string,
+  routeFileContent: string,
+  handlerName: string,
+): string | null {
+  const namedImportRegex = /import\s*{([\s\S]*?)}\s*from\s*['"]([^'"]+)['"]/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = namedImportRegex.exec(routeFileContent))) {
+    const importedList = match[1]
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    for (const imported of importedList) {
+      const [original, alias] = imported
+        .split(/\s+as\s+/i)
+        .map((part) => part.trim());
+      const localName = alias || original;
+      if (localName === handlerName) {
+        const resolved = resolveImportTarget(routeFilePath, match[2]);
+        if (resolved) return resolved;
+      }
+    }
+  }
+
+  const defaultImportRegex = /import\s+([A-Za-z_][A-Za-z0-9_]*)\s+from\s*['"]([^'"]+)['"]/g;
+  while ((match = defaultImportRegex.exec(routeFileContent))) {
+    if (match[1] === handlerName) {
+      const resolved = resolveImportTarget(routeFilePath, match[2]);
+      if (resolved) return resolved;
+    }
+  }
+
+  const requireNamedRegex = /const\s*{([^}]+)}\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)/g;
+  while ((match = requireNamedRegex.exec(routeFileContent))) {
+    const importedList = match[1]
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    for (const imported of importedList) {
+      if (imported === handlerName) {
+        const resolved = resolveImportTarget(routeFilePath, match[2]);
+        if (resolved) return resolved;
+      }
+    }
+  }
+
+  return null;
+}
+
+function resolveImportTarget(routeFilePath: string, importPath: string): string | null {
+  if (!importPath.startsWith(".")) return null;
+
+  const baseDir = path.dirname(routeFilePath);
+  const rawTarget = path.resolve(baseDir, importPath);
+  const hasExtension = /\.[a-zA-Z0-9]+$/.test(rawTarget);
+  const extensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+
+  const candidates: string[] = [];
+  if (hasExtension) {
+    candidates.push(rawTarget);
+  } else {
+    candidates.push(rawTarget);
+    for (const ext of extensions) {
+      candidates.push(`${rawTarget}${ext}`);
+      candidates.push(path.join(rawTarget, `index${ext}`));
+    }
+  }
+
+  for (const candidate of candidates) {
+    try {
+      if (fsSync.existsSync(candidate) && fsSync.statSync(candidate).isFile()) {
+        return candidate;
+      }
+    } catch {
+      // Continue checking candidates
+    }
+  }
+
+  return null;
+}
+
+function isRoutePathMatchForHandler(routePath: string, targetBackendPath: string): boolean {
+  const normalizedRoutePath = normalizePathForComparison(routePath);
+  const normalizedTargetPath = normalizePathForComparison(targetBackendPath);
+
+  if (normalizedRoutePath === normalizedTargetPath) {
+    return true;
+  }
+
+  // Route files often register local router paths that are suffixes of mounted paths
+  // (e.g., '/:id' in file vs '/api/users/:id' in extracted full route path).
+  if (normalizedTargetPath.endsWith(`/${normalizedRoutePath}`)) {
+    return true;
+  }
+
+  const routeNoPrefix = removeApiPrefix(normalizedRoutePath);
+  const targetNoPrefix = removeApiPrefix(normalizedTargetPath);
+
+  if (routeNoPrefix === targetNoPrefix) {
+    return true;
+  }
+  if (routeNoPrefix && targetNoPrefix.endsWith(`/${routeNoPrefix}`)) {
+    return true;
+  }
+
+  return false;
+}
+
 function findExpressRouteHandler(root: any, content: string, method: string, backendPath: string): any | null {
   let found: any | null = null;
   const targetMethod = method.toLowerCase();
-  const targetPath = normalizePathForComparison(backendPath);
 
   const visit = (node: any) => {
     if (!node || found) return;
@@ -747,7 +2275,7 @@ function findExpressRouteHandler(root: any, content: string, method: string, bac
           const firstArg = (args.children || []).find((c: any) => c.type === "string" || c.type === "template_string");
           if (firstArg && firstArg.type === "string") {
             const raw = content.slice(firstArg.startIndex, firstArg.endIndex).trim().replace(/^['"`]/, "").replace(/['"`]$/, "");
-            if (normalizePathForComparison(raw) === targetPath) {
+            if (isRoutePathMatchForHandler(raw, backendPath)) {
               // Find the first function-like arg after the path
               const fnArg = (args.children || []).find((c: any) => c.type === "arrow_function" || c.type === "function");
               if (fnArg) {
@@ -764,6 +2292,259 @@ function findExpressRouteHandler(root: any, content: string, method: string, bac
 
   visit(root);
   return found;
+}
+
+function detectMissingBackendResponse(
+  handlerFnNode: any,
+  content: string,
+  handlerFilePath: string,
+  endpoint: string,
+  fallbackLine?: number,
+): ApiContractIssue[] {
+  const issues: ApiContractIssue[] = [];
+  if (!handlerFnNode) return issues;
+
+  const responseMethods = new Set([
+    "json",
+    "send",
+    "end",
+    "sendstatus",
+    "redirect",
+    "render",
+    "download",
+  ]);
+
+  let hasResponse = false;
+  let delegatesToNext = false;
+
+  const visit = (node: any) => {
+    if (!node || hasResponse) return;
+
+    if (node.type === "call_expression") {
+      const fnNode = node.childForFieldName?.("function");
+
+      if (fnNode?.type === "identifier") {
+        const fnText = content.slice(fnNode.startIndex, fnNode.endIndex);
+        if (fnText === "next") {
+          delegatesToNext = true;
+        }
+      }
+
+      if (fnNode?.type === "member_expression") {
+        const objectNode = fnNode.childForFieldName?.("object");
+        const propertyNode = fnNode.childForFieldName?.("property");
+        const propertyText = propertyNode
+          ? content.slice(propertyNode.startIndex, propertyNode.endIndex).toLowerCase()
+          : "";
+
+        if (responseMethods.has(propertyText)) {
+          if (objectNode?.type === "identifier") {
+            const objectText = content.slice(objectNode.startIndex, objectNode.endIndex);
+            if (objectText === "res") {
+              hasResponse = true;
+              return;
+            }
+          }
+
+          if (objectNode?.type === "call_expression") {
+            const nestedFn = objectNode.childForFieldName?.("function");
+            if (nestedFn?.type === "member_expression") {
+              const nestedObj = nestedFn.childForFieldName?.("object");
+              const nestedProp = nestedFn.childForFieldName?.("property");
+              const nestedObjText = nestedObj
+                ? content.slice(nestedObj.startIndex, nestedObj.endIndex)
+                : "";
+              const nestedPropText = nestedProp
+                ? content.slice(nestedProp.startIndex, nestedProp.endIndex).toLowerCase()
+                : "";
+              if (nestedObjText === "res" && nestedPropText === "status") {
+                hasResponse = true;
+                return;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    for (const child of node.children || []) visit(child);
+  };
+
+  visit(handlerFnNode);
+
+  if (!hasResponse && !delegatesToNext) {
+    const issueLine =
+      typeof handlerFnNode?.startPosition?.row === "number"
+        ? handlerFnNode.startPosition.row + 1
+        : fallbackLine || 1;
+    issues.push({
+      type: "apiContractMismatch",
+      severity: "high",
+      message: `Potential missing response: backend handler for ${endpoint} does not send a response (e.g., res.json/res.send)`,
+      file: handlerFilePath,
+      line: issueLine,
+      endpoint,
+      suggestion: "Ensure every execution path sends a response or delegates to middleware with next(err)",
+      confidence: 75,
+    });
+  }
+
+  return issues;
+}
+
+function detectUnusedLocalVariables(
+  handlerFnNode: any,
+  content: string,
+  handlerFilePath: string,
+  endpoint: string,
+  fallbackLine?: number,
+): ApiContractIssue[] {
+  const issues: ApiContractIssue[] = [];
+  if (!handlerFnNode) return issues;
+
+  const declarations = new Map<string, number[]>();
+  const identifierCounts = new Map<string, number>();
+
+  const collectDeclarations = (node: any) => {
+    if (!node) return;
+
+    if (node.type === "variable_declarator") {
+      const nameNode = node.childForFieldName?.("name");
+      if (nameNode?.type === "identifier") {
+        const variableName = content.slice(nameNode.startIndex, nameNode.endIndex);
+        if (variableName && !variableName.startsWith("_")) {
+          const declarationLine =
+            typeof nameNode?.startPosition?.row === "number"
+              ? nameNode.startPosition.row + 1
+              : fallbackLine || 1;
+          const lines = declarations.get(variableName) || [];
+          lines.push(declarationLine);
+          declarations.set(variableName, lines);
+        }
+      }
+    }
+
+    for (const child of node.children || []) collectDeclarations(child);
+  };
+
+  const collectIdentifierUsage = (node: any) => {
+    if (!node) return;
+
+    if (
+      node.type === "identifier" ||
+      node.type === "shorthand_property_identifier" ||
+      node.type === "shorthand_property_identifier_pattern"
+    ) {
+      const identifier = content.slice(node.startIndex, node.endIndex);
+      identifierCounts.set(identifier, (identifierCounts.get(identifier) || 0) + 1);
+    }
+
+    for (const child of node.children || []) collectIdentifierUsage(child);
+  };
+
+  collectDeclarations(handlerFnNode);
+  if (declarations.size === 0) return issues;
+
+  collectIdentifierUsage(handlerFnNode);
+
+  const seen = new Set<string>();
+  for (const [variableName, declarationLines] of declarations) {
+    const totalIdentifierHits = identifierCounts.get(variableName) || 0;
+    const declarationCount = declarationLines.length;
+
+    if (totalIdentifierHits > declarationCount) continue;
+
+    for (const declarationLine of declarationLines) {
+      const key = `${variableName}:${declarationLine}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      issues.push({
+        type: "apiContractMismatch",
+        severity: "medium",
+        message: `Unused local variable: '${variableName}' is declared in backend handler for ${endpoint} but never used`,
+        file: handlerFilePath,
+        line: declarationLine,
+        endpoint,
+        suggestion: `Remove unused variable '${variableName}' or use it in handler logic`,
+        confidence: 78,
+      });
+    }
+  }
+
+  return issues;
+}
+
+function detectUnknownPrismaModelQueries(
+  handlerFnNode: any,
+  content: string,
+  handlerFilePath: string,
+  backendModels: Array<{ name: string; fields: Array<{ name: string }> }>,
+  endpoint: string,
+  fallbackLine?: number,
+): ApiContractIssue[] {
+  const issues: ApiContractIssue[] = [];
+  if (!handlerFnNode) return issues;
+
+  const knownModelNames = new Set<string>(
+    backendModels.map((model) => normalizeName(model.name)),
+  );
+  const prismaQueryMethods = new Set([
+    "findunique",
+    "finduniquethrow",
+    "findfirst",
+    "findfirstthrow",
+    "findmany",
+    "create",
+    "createmany",
+    "update",
+    "upsert",
+    "delete",
+    "deletemany",
+    "updatemany",
+    "count",
+    "aggregate",
+    "groupby",
+  ]);
+  const seen = new Set<string>();
+
+  const visit = (node: any) => {
+    if (!node) return;
+
+    if (node.type === "call_expression") {
+      const fnNode = node.childForFieldName?.("function");
+      const prismaRef = extractPrismaModelReference(fnNode, content);
+      if (prismaRef) {
+        const methodName = prismaRef.method.toLowerCase();
+        const modelName = normalizeName(prismaRef.model);
+        if (prismaQueryMethods.has(methodName) && !knownModelNames.has(modelName)) {
+          const issueLine =
+            typeof node?.startPosition?.row === "number"
+              ? node.startPosition.row + 1
+              : fallbackLine || 1;
+          const key = `${modelName}:${methodName}:${issueLine}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            issues.push({
+              type: "apiContractMismatch",
+              severity: "high",
+              message: `Potential backend query hallucination: prisma.${prismaRef.model}.${prismaRef.method} is called in handler but model '${prismaRef.model}' is not defined in backend schema/models`,
+              file: handlerFilePath,
+              line: issueLine,
+              endpoint,
+              suggestion: `Use a valid Prisma model name or add model '${prismaRef.model}' to backend schema`,
+              confidence: 85,
+            });
+          }
+        }
+      }
+    }
+
+    for (const child of node.children || []) visit(child);
+  };
+
+  visit(handlerFnNode);
+  return issues;
 }
 
 function extractBackendResponseFields(handlerFnNode: any, content: string): Set<string> {
@@ -804,6 +2585,88 @@ function extractBackendResponseFields(handlerFnNode: any, content: string): Set<
     }
     for (const child of node.children || []) visit(child);
   };
+  visit(handlerFnNode);
+  return fields;
+}
+
+function extractBackendQueryFields(handlerFnNode: any, content: string): Set<string> {
+  const fields = new Set<string>();
+  const queryVars = new Set<string>();
+
+  const collectPatternIdentifiers = (patternNode: any) => {
+    const patternText = content.slice(patternNode.startIndex, patternNode.endIndex);
+    const re = /\b([A-Za-z_][A-Za-z0-9_]*)\b/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(patternText))) {
+      fields.add(m[1]);
+    }
+  };
+
+  const visit = (node: any) => {
+    if (!node) return;
+
+    if (node.type === "variable_declarator") {
+      const nameNode = node.childForFieldName?.("name");
+      const valueNode = node.childForFieldName?.("value");
+
+      // const { category } = req.query
+      if (nameNode?.type === "object_pattern" && valueNode?.type === "member_expression") {
+        const obj = valueNode.childForFieldName?.("object");
+        const prop = valueNode.childForFieldName?.("property");
+        const objText = obj ? content.slice(obj.startIndex, obj.endIndex) : "";
+        const propText = prop ? content.slice(prop.startIndex, prop.endIndex) : "";
+        if (objText === "req" && propText === "query") {
+          collectPatternIdentifiers(nameNode);
+        }
+      }
+
+      // const query = req.query
+      if (nameNode?.type === "identifier" && valueNode?.type === "member_expression") {
+        const obj = valueNode.childForFieldName?.("object");
+        const prop = valueNode.childForFieldName?.("property");
+        const objText = obj ? content.slice(obj.startIndex, obj.endIndex) : "";
+        const propText = prop ? content.slice(prop.startIndex, prop.endIndex) : "";
+        if (objText === "req" && propText === "query") {
+          const varName = content.slice(nameNode.startIndex, nameNode.endIndex);
+          if (varName) queryVars.add(varName);
+        }
+      }
+
+      // const { category } = query
+      if (nameNode?.type === "object_pattern" && valueNode?.type === "identifier") {
+        const valueText = content.slice(valueNode.startIndex, valueNode.endIndex);
+        if (queryVars.has(valueText)) {
+          collectPatternIdentifiers(nameNode);
+        }
+      }
+    }
+
+    // req.query.status
+    if (node.type === "member_expression") {
+      const objectNode = node.childForFieldName?.("object");
+      const propertyNode = node.childForFieldName?.("property");
+      if (propertyNode?.type === "property_identifier" && objectNode?.type === "member_expression") {
+        const innerObj = objectNode.childForFieldName?.("object");
+        const innerProp = objectNode.childForFieldName?.("property");
+        const innerObjText = innerObj ? content.slice(innerObj.startIndex, innerObj.endIndex) : "";
+        const innerPropText = innerProp ? content.slice(innerProp.startIndex, innerProp.endIndex) : "";
+        if (innerObjText === "req" && innerPropText === "query") {
+          fields.add(content.slice(propertyNode.startIndex, propertyNode.endIndex));
+        }
+      }
+
+      // query.status (where query = req.query)
+      if (objectNode?.type === "identifier" && propertyNode?.type === "property_identifier") {
+        const objText = content.slice(objectNode.startIndex, objectNode.endIndex);
+        if (queryVars.has(objText)) {
+          fields.add(content.slice(propertyNode.startIndex, propertyNode.endIndex));
+        }
+      }
+    }
+
+    for (const child of node.children || []) visit(child);
+  };
+
   visit(handlerFnNode);
   return fields;
 }
@@ -865,6 +2728,8 @@ function validateQueryParameters(
 
   const frontendParams = mapping.frontend.queryParams || [];
   const backendParams = mapping.backend.queryParams || [];
+  const method = (mapping?.backend?.method || mapping?.frontend?.method || "REQUEST").toUpperCase();
+  const backendPath = mapping?.backend?.path || mapping?.frontend?.endpoint || endpoint;
 
   // Check for missing required query params in frontend
   for (const backendParam of backendParams) {
@@ -894,21 +2759,38 @@ function validateQueryParameters(
       (p: { name: string }) => p.name === frontendParam.name,
     );
 
-    if (backendParam) {
-      const result = areTypesCompatible(frontendParam.type, backendParam.type);
-
-      if (!result.compatible || result.severity) {
+    if (!backendParam) {
+      // Only flag extra frontend query params when backend explicitly defines
+      // at least one query parameter for this endpoint; this avoids noisy
+      // false positives on routes where backend query extraction is unavailable.
+      if (backendParams.length > 0) {
         issues.push({
-          type: "apiTypeMismatch",
-          severity: (result.severity as "high" | "medium" | "low") || "medium",
-          message: result.reason || `Query parameter '${frontendParam.name}' type mismatch: frontend uses '${frontendParam.type}', backend expects '${backendParam.type}'`,
+          type: "apiExtraField",
+          severity: "medium",
+          message: `Query parameter mismatch: frontend sends '${frontendParam.name}', but backend handler for ${method} ${backendPath} does not read/expect it`,
           file: mapping.frontend.file,
           line: mapping.frontend.line,
           endpoint,
-          suggestion: result.suggestion || `Ensure query parameter '${frontendParam.name}' types are compatible`,
-          confidence: 85,
+          suggestion: `Remove query parameter '${frontendParam.name}' from frontend request or update backend handler to support it`,
+          confidence: 80,
         });
       }
+      continue;
+    }
+
+    const result = areTypesCompatible(frontendParam.type, backendParam.type);
+
+    if (!result.compatible || result.severity) {
+      issues.push({
+        type: "apiTypeMismatch",
+        severity: (result.severity as "high" | "medium" | "low") || "medium",
+        message: result.reason || `Query parameter '${frontendParam.name}' type mismatch: frontend uses '${frontendParam.type}', backend expects '${backendParam.type}'`,
+        file: mapping.frontend.file,
+        line: mapping.frontend.line,
+        endpoint,
+        suggestion: result.suggestion || `Ensure query parameter '${frontendParam.name}' types are compatible`,
+        confidence: 85,
+      });
     }
   }
 
@@ -1014,9 +2896,14 @@ function validateUnmatchedFrontend(apiContract: ApiContractContext): ApiContract
     const similarRoute = findSimilarRoute(service, apiContract.backendRoutes);
     
     if (similarRoute) {
+      const servicePathNormalized = normalizePathForComparison(service.endpoint);
+      const routePathNormalized = normalizePathForComparison(similarRoute.path);
+      const samePathIgnoringPrefix =
+        pathsMatchStrict(servicePathNormalized, routePathNormalized) ||
+        pathsMatchStrict(removeApiPrefix(servicePathNormalized), removeApiPrefix(routePathNormalized));
+
       // Check if it's a method mismatch
-      if (similarRoute.path === service.endpoint || 
-          normalizePath(similarRoute.path) === normalizePath(service.endpoint)) {
+      if (samePathIgnoringPrefix) {
         issues.push({
           type: "apiMethodMismatch",
           severity: "critical",
@@ -1241,6 +3128,34 @@ function pathsMatch(path1: string, path2: string): boolean {
     const seg2 = segments2[i];
 
     if (isPathParam(seg1) || isPathParam(seg2)) continue;
+    if (seg1 !== seg2) return false;
+  }
+
+  return true;
+}
+
+function pathsMatchStrict(path1: string, path2: string): boolean {
+  const normalized1 = normalizePathForComparison(path1);
+  const normalized2 = normalizePathForComparison(path2);
+
+  if (normalized1 === normalized2) return true;
+
+  const segments1 = normalized1.split("/");
+  const segments2 = normalized2.split("/");
+  if (segments1.length !== segments2.length) return false;
+
+  for (let i = 0; i < segments1.length; i++) {
+    const seg1 = segments1[i];
+    const seg2 = segments2[i];
+
+    const seg1IsParam = isPathParam(seg1);
+    const seg2IsParam = isPathParam(seg2);
+
+    // Param-vs-literal usually indicates different endpoints
+    // (e.g., /shopping/{id} vs /shopping/bulk-add).
+    if (seg1IsParam !== seg2IsParam) return false;
+
+    if (seg1IsParam && seg2IsParam) continue;
     if (seg1 !== seg2) return false;
   }
 

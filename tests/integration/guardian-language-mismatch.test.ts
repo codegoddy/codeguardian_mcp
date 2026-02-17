@@ -20,6 +20,19 @@ async function writeFile(filePath: string, content: string): Promise<void> {
     await fs.writeFile(filePath, content, "utf8");
 }
 
+async function cleanupTempDir(root: string): Promise<void> {
+    const maxAttempts = 5;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            await fs.rm(root, { recursive: true, force: true });
+            return;
+        } catch {
+            if (attempt === maxAttempts) return;
+            await new Promise((resolve) => setTimeout(resolve, 75));
+        }
+    }
+}
+
 describe("guardian language mismatch", () => {
     it(
         "validates TSX file changes even when guardian language is typescript (covers resolveContextLanguage)",
@@ -112,7 +125,7 @@ export function Dashboard() {
                         // ignore cleanup errors
                     }
                 }
-                await fs.rm(root, { recursive: true, force: true });
+                await cleanupTempDir(root);
             }
         },
         60_000,
@@ -187,7 +200,7 @@ export function Dashboard() {
                         // ignore cleanup errors
                     }
                 }
-                await fs.rm(root, { recursive: true, force: true });
+                await cleanupTempDir(root);
             }
         },
         60_000,

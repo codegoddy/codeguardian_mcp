@@ -106,6 +106,34 @@ describe("API Contract Guardian - Service Extraction", () => {
       }
     });
 
+    it("should extract query params from conditional template segments", async () => {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+      const os = await import("os");
+
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "api-contract-query-conditional-"));
+      const tmpFile = path.join(tmpDir, "api.ts");
+      await fs.writeFile(
+        tmpFile,
+        `
+        export const pantryApi = {
+          getAll: (category?: string, status?: string) =>
+            fetchApi(\`/pantry\${category ? \`?category=\${category}\` : ''}\${status ? \`&status=\${status}\` : ''}\`),
+        };
+        `,
+      );
+
+      try {
+        const services = await extractServicesFromFileAST(tmpFile);
+        expect(services).toHaveLength(1);
+        expect(services[0].endpoint).toBe("/pantry");
+        const paramNames = (services[0].queryParams || []).map((p) => p.name).sort();
+        expect(paramNames).toEqual(["category", "status"]);
+      } finally {
+        await fs.rm(tmpDir, { recursive: true });
+      }
+    });
+
     it("should handle template strings with path parameters", async () => {
       const fs = await import("fs/promises");
       const path = await import("path");
@@ -178,6 +206,413 @@ describe("API Contract Guardian - Service Extraction", () => {
         await fs.rm(tmpDir, { recursive: true });
       }
     });
+
+    it("should resolve imported Express controller handlers for request field mismatch detection", async () => {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+      const os = await import("os");
+
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "api-contract-imported-handler-"));
+      const frontendDir = path.join(tmpDir, "frontend");
+      const backendDir = path.join(tmpDir, "backend");
+      await fs.mkdir(frontendDir);
+      await fs.mkdir(backendDir, { recursive: true });
+
+      const feFile = path.join(frontendDir, "api.ts");
+      const beRoutesFile = path.join(backendDir, "routes.ts");
+      const beControllerFile = path.join(backendDir, "pantryController.ts");
+
+      await fs.writeFile(
+        beRoutesFile,
+        `
+        import { Router } from 'express';
+        import { consumePantryItem } from './pantryController';
+
+        const router = Router();
+        router.patch('/:id/consume', consumePantryItem);
+        export default router;
+        `,
+      );
+
+      await fs.writeFile(
+        beControllerFile,
+        `
+        export const consumePantryItem = (req: any, res: any) => {
+          const { amount } = req.body;
+          return res.json({ success: true, amount });
+        };
+        `,
+      );
+
+      await fs.writeFile(
+        feFile,
+        `
+        const API_BASE_URL = 'http://localhost:3001/api';
+
+        async function fetchApi(endpoint: string, options?: RequestInit) {
+          return fetch(\`${"${API_BASE_URL}"}${"${endpoint}"}\`, options);
+        }
+
+        export async function consumePantryItem(id: string, amount: number) {
+          return fetchApi(\`/pantry/${"${id}"}/consume\`, {
+            method: 'PATCH',
+            body: JSON.stringify({ quantity: amount, consumedBy: 'user-123' }),
+          });
+        }
+        `,
+      );
+
+      const ctx: ProjectContext = {
+        projectPath: tmpDir,
+        language: "typescript",
+        buildTime: new Date().toISOString(),
+        totalFiles: 0,
+        files: new Map(),
+        symbolIndex: new Map(),
+        dependencies: [],
+        importGraph: new Map(),
+        reverseImportGraph: new Map(),
+        keywordIndex: new Map(),
+        externalDependencies: new Set(),
+        entryPoints: [],
+        frameworks: [],
+        apiContract: {
+          projectStructure: { relationship: "separate" },
+          frontendServices: [
+            {
+              name: "consumePantryItem",
+              method: "PATCH",
+              endpoint: "/pantry/{id}/consume",
+              file: feFile,
+              line: 8,
+            },
+          ],
+          frontendTypes: [],
+          backendRoutes: [
+            {
+              method: "PATCH",
+              path: "/api/pantry/:id/consume",
+              handler: "consumePantryItem",
+              file: beRoutesFile,
+              line: 5,
+            },
+          ],
+          backendModels: [],
+          endpointMappings: new Map([
+            [
+              "PATCH /pantry/{id}/consume",
+              {
+                frontend: {
+                  name: "consumePantryItem",
+                  method: "PATCH",
+                  endpoint: "/pantry/{id}/consume",
+                  file: feFile,
+                  line: 8,
+                },
+                backend: {
+                  method: "PATCH",
+                  path: "/api/pantry/:id/consume",
+                  handler: "consumePantryItem",
+                  file: beRoutesFile,
+                  line: 5,
+                },
+                score: 100,
+              },
+            ],
+          ]),
+          typeMappings: new Map(),
+          unmatchedFrontend: [],
+          unmatchedBackend: [],
+          lastUpdated: new Date().toISOString(),
+        },
+      };
+
+      try {
+        const result = validateApiContractsFromContext(ctx);
+
+        expect(
+          result.issues.some(
+            (issue) =>
+              issue.type === "apiExtraField" && issue.message.includes("quantity"),
+          ),
+        ).toBe(true);
+        expect(
+          result.issues.some(
+            (issue) =>
+              issue.type === "apiExtraField" && issue.message.includes("consumedBy"),
+          ),
+        ).toBe(true);
+        expect(
+          result.issues.some(
+            (issue) =>
+              issue.type === "apiMissingRequiredField" && issue.message.includes("'amount'"),
+          ),
+        ).toBe(true);
+      } finally {
+        await fs.rm(tmpDir, { recursive: true });
+      }
+    });
+
+    it("should detect potential double /api prefix when base URL already includes /api", async () => {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+      const os = await import("os");
+
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "api-contract-double-api-"));
+      const frontendDir = path.join(tmpDir, "frontend");
+      const backendDir = path.join(tmpDir, "backend");
+      await fs.mkdir(frontendDir);
+      await fs.mkdir(backendDir);
+
+      const feFile = path.join(frontendDir, "api.ts");
+      const beFile = path.join(backendDir, "routes.ts");
+
+      await fs.writeFile(
+        feFile,
+        `
+        const API_BASE_URL = 'http://localhost:3001/api';
+        export async function getStats() {
+          return fetch(\`${"${API_BASE_URL}"}/api/pantry/stats\`);
+        }
+        `,
+      );
+      await fs.writeFile(beFile, "export const routes = [];\n");
+
+      const ctx: ProjectContext = {
+        projectPath: tmpDir,
+        language: "typescript",
+        buildTime: new Date().toISOString(),
+        totalFiles: 0,
+        files: new Map(),
+        symbolIndex: new Map(),
+        dependencies: [],
+        importGraph: new Map(),
+        reverseImportGraph: new Map(),
+        keywordIndex: new Map(),
+        externalDependencies: new Set(),
+        entryPoints: [],
+        frameworks: [],
+        apiContract: {
+          projectStructure: { relationship: "separate" },
+          frontendServices: [],
+          frontendTypes: [],
+          backendRoutes: [],
+          backendModels: [],
+          endpointMappings: new Map([
+            [
+              "GET /api/pantry/stats",
+              {
+                frontend: {
+                  name: "getStats",
+                  method: "GET",
+                  endpoint: "/api/pantry/stats",
+                  file: feFile,
+                  line: 3,
+                },
+                backend: {
+                  method: "GET",
+                  path: "/api/pantry/stats",
+                  handler: "getStats",
+                  file: beFile,
+                  line: 1,
+                },
+                score: 100,
+              },
+            ],
+          ]),
+          typeMappings: new Map(),
+          unmatchedFrontend: [],
+          unmatchedBackend: [],
+          lastUpdated: new Date().toISOString(),
+        },
+      };
+
+      try {
+        const result = validateApiContractsFromContext(ctx);
+        expect(
+          result.issues.some(
+            (issue) =>
+              issue.type === "apiPathMismatch" && issue.message.includes("double '/api' prefix"),
+          ),
+        ).toBe(true);
+      } finally {
+        await fs.rm(tmpDir, { recursive: true });
+      }
+    });
+
+    it("should report unmatched backend endpoints without duplicating method-mismatch paths", () => {
+      const mockContext: ProjectContext = {
+        projectPath: "/test",
+        language: "typescript",
+        buildTime: new Date().toISOString(),
+        totalFiles: 0,
+        files: new Map(),
+        symbolIndex: new Map(),
+        dependencies: [],
+        importGraph: new Map(),
+        reverseImportGraph: new Map(),
+        keywordIndex: new Map(),
+        externalDependencies: new Set(),
+        entryPoints: [],
+        frameworks: [],
+        apiContract: {
+          projectStructure: { relationship: "separate" },
+          frontendServices: [
+            {
+              name: "toggle",
+              method: "POST",
+              endpoint: "/shopping/{id}/toggle",
+              file: "/test/frontend/api.ts",
+              line: 10,
+            },
+            {
+              name: "getAll",
+              method: "GET",
+              endpoint: "/shopping",
+              file: "/test/frontend/api.ts",
+              line: 5,
+            },
+          ],
+          frontendTypes: [],
+          backendRoutes: [
+            {
+              method: "PATCH",
+              path: "/api/shopping/:id/toggle",
+              handler: "toggle",
+              file: "/test/backend/routes.ts",
+              line: 20,
+            },
+            {
+              method: "POST",
+              path: "/api/shopping/bulk-add",
+              handler: "bulkAdd",
+              file: "/test/backend/routes.ts",
+              line: 23,
+            },
+          ],
+          backendModels: [],
+          endpointMappings: new Map(),
+          typeMappings: new Map(),
+          unmatchedFrontend: [
+            {
+              name: "toggle",
+              method: "POST",
+              endpoint: "/shopping/{id}/toggle",
+              file: "/test/frontend/api.ts",
+              line: 10,
+            },
+          ],
+          unmatchedBackend: [
+            {
+              method: "PATCH",
+              path: "/api/shopping/:id/toggle",
+              handler: "toggle",
+              file: "/test/backend/routes.ts",
+              line: 20,
+            },
+            {
+              method: "POST",
+              path: "/api/shopping/bulk-add",
+              handler: "bulkAdd",
+              file: "/test/backend/routes.ts",
+              line: 23,
+            },
+          ],
+          lastUpdated: new Date().toISOString(),
+        },
+      };
+
+      const result = validateApiContractsFromContext(mockContext);
+
+      // Method mismatch should be reported from unmatched frontend logic
+      expect(
+        result.issues.some(
+          (issue) =>
+            issue.type === "apiMethodMismatch" && issue.message.includes("/shopping/{id}/toggle"),
+        ),
+      ).toBe(true);
+
+      // Backend-only endpoint should be reported
+      expect(
+        result.issues.some(
+          (issue) =>
+            issue.type === "apiEndpointNotFound" && issue.message.includes("/api/shopping/bulk-add"),
+        ),
+      ).toBe(true);
+
+      // But the toggle route should not be duplicated as backend-only since the path is already referenced by frontend
+      expect(
+        result.issues.some(
+          (issue) =>
+            issue.type === "apiEndpointNotFound" && issue.message.includes("/api/shopping/:id/toggle"),
+        ),
+      ).toBe(false);
+    });
+
+    it("should detect likely unregistered backend routes defined outside API mounts", () => {
+      const mockContext: ProjectContext = {
+        projectPath: "/test",
+        language: "typescript",
+        buildTime: new Date().toISOString(),
+        totalFiles: 0,
+        files: new Map(),
+        symbolIndex: new Map(),
+        dependencies: [],
+        importGraph: new Map(),
+        reverseImportGraph: new Map(),
+        keywordIndex: new Map(),
+        externalDependencies: new Set(),
+        entryPoints: [],
+        frameworks: [],
+        apiContract: {
+          projectStructure: { relationship: "separate" },
+          frontendServices: [
+            {
+              name: "getPantry",
+              method: "GET",
+              endpoint: "/pantry",
+              file: "/test/frontend/api.ts",
+              line: 5,
+            },
+          ],
+          frontendTypes: [],
+          backendRoutes: [
+            {
+              method: "GET",
+              path: "/analytics",
+              handler: "getAnalytics",
+              file: "/test/backend/src/routes/analytics.ts",
+              line: 7,
+            },
+          ],
+          backendModels: [],
+          endpointMappings: new Map(),
+          typeMappings: new Map(),
+          unmatchedFrontend: [],
+          unmatchedBackend: [
+            {
+              method: "GET",
+              path: "/analytics",
+              handler: "getAnalytics",
+              file: "/test/backend/src/routes/analytics.ts",
+              line: 7,
+            },
+          ],
+          lastUpdated: new Date().toISOString(),
+        },
+      };
+
+      const result = validateApiContractsFromContext(mockContext);
+
+      expect(
+        result.issues.some(
+          (issue) =>
+            issue.type === "apiEndpointNotFound" &&
+            issue.message.includes("Potential unregistered backend route") &&
+            issue.message.includes("GET /analytics"),
+        ),
+      ).toBe(true);
+    });
   });
 });
 
@@ -201,6 +636,7 @@ describe("API Contract Guardian - Validation", () => {
         keywordIndex: new Map(),
         externalDependencies: new Set(),
         entryPoints: [],
+        frameworks: [],
       };
 
       const result = validateApiContractsFromContext(mockContext);
@@ -223,6 +659,7 @@ describe("API Contract Guardian - Validation", () => {
         keywordIndex: new Map(),
         externalDependencies: new Set(),
         entryPoints: [],
+        frameworks: [],
         apiContract: {
           projectStructure: {
             relationship: "separate",
@@ -309,6 +746,7 @@ describe("API Contract Guardian - Validation", () => {
         keywordIndex: new Map(),
         externalDependencies: new Set(),
         entryPoints: [],
+        frameworks: [],
         apiContract: {
           projectStructure: {
             relationship: "separate",
@@ -445,6 +883,7 @@ describe("API Contract Guardian - Validation", () => {
         keywordIndex: new Map(),
         externalDependencies: new Set(),
         entryPoints: [],
+        frameworks: [],
         apiContract: {
           projectStructure: {
             relationship: "separate",
@@ -501,6 +940,682 @@ describe("API Contract Guardian - Validation", () => {
         await fs.rm(tmpDir, { recursive: true });
       }
     });
+
+    it("should skip inline field mismatches for unused frontend service methods", async () => {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+      const os = await import("os");
+
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "api-contract-unused-service-"));
+      const frontendDir = path.join(tmpDir, "frontend");
+      const backendDir = path.join(tmpDir, "backend");
+      await fs.mkdir(frontendDir);
+      await fs.mkdir(backendDir);
+
+      const feFile = path.join(frontendDir, "api.ts");
+      const feHooksFile = path.join(frontendDir, "useApi.ts");
+      const beFile = path.join(backendDir, "server.ts");
+
+      await fs.writeFile(
+        feFile,
+        `
+        type PantryPayload = {
+          id: string;
+          dateAdded: string;
+          name: string;
+          checked: boolean;
+        };
+
+        async function fetchApi(endpoint: string, options?: RequestInit) {
+          return fetch(endpoint, options);
+        }
+
+        export const pantryApi = {
+          create: (data: Omit<PantryPayload, 'id' | 'dateAdded'>) =>
+            fetchApi('/pantry', {
+              method: 'POST',
+              body: JSON.stringify(data),
+            }),
+
+          update: (id: string, data: Partial<PantryPayload>) =>
+            fetchApi(\`/pantry/\${id}\`, {
+              method: 'PUT',
+              body: JSON.stringify(data),
+            }),
+        };
+        `,
+      );
+
+      await fs.writeFile(
+        feHooksFile,
+        `
+        import { pantryApi } from './api';
+
+        export async function addItem() {
+          return pantryApi.create({ name: 'Rice', checked: true });
+        }
+        `,
+      );
+
+      await fs.writeFile(
+        beFile,
+        `
+        import express from 'express';
+        const app = express();
+
+        const createPantry = (req, res) => {
+          const { name } = req.body;
+          res.json({ name });
+        };
+
+        const updatePantry = (req, res) => {
+          const { name } = req.body;
+          res.json({ name });
+        };
+
+        app.post('/api/pantry', createPantry);
+        app.put('/api/pantry/:id', updatePantry);
+        `,
+      );
+
+      const ctx: ProjectContext = {
+        projectPath: tmpDir,
+        language: "typescript",
+        buildTime: new Date().toISOString(),
+        totalFiles: 0,
+        files: new Map(),
+        symbolIndex: new Map(),
+        dependencies: [],
+        importGraph: new Map(),
+        reverseImportGraph: new Map(),
+        keywordIndex: new Map(),
+        externalDependencies: new Set(),
+        entryPoints: [],
+        frameworks: [],
+        apiContract: {
+          projectStructure: {
+            relationship: "separate",
+            frontend: {
+              path: frontendDir,
+              framework: "react",
+              apiPattern: "rest",
+              httpClient: "fetch",
+            },
+            backend: {
+              path: backendDir,
+              framework: "express",
+              apiPattern: "rest",
+              apiPrefix: "/api",
+            },
+          },
+          frontendServices: [
+            {
+              name: "create",
+              method: "POST",
+              endpoint: "/api/pantry",
+              file: feFile,
+              line: 14,
+            },
+            {
+              name: "update",
+              method: "PUT",
+              endpoint: "/api/pantry/{id}",
+              file: feFile,
+              line: 21,
+            },
+          ],
+          frontendTypes: [
+            {
+              name: "PantryPayload",
+              fields: [
+                { name: "id", type: "string", required: true },
+                { name: "dateAdded", type: "string", required: true },
+                { name: "name", type: "string", required: true },
+                { name: "checked", type: "boolean", required: true },
+              ],
+              file: feFile,
+              line: 2,
+              kind: "type",
+            },
+          ],
+          backendRoutes: [
+            {
+              method: "POST",
+              path: "/api/pantry",
+              handler: "createPantry",
+              file: beFile,
+              line: 15,
+            },
+            {
+              method: "PUT",
+              path: "/api/pantry/:id",
+              handler: "updatePantry",
+              file: beFile,
+              line: 16,
+            },
+          ],
+          backendModels: [],
+          endpointMappings: new Map([
+            [
+              "POST /api/pantry",
+              {
+                frontend: {
+                  name: "create",
+                  method: "POST",
+                  endpoint: "/api/pantry",
+                  file: feFile,
+                  line: 14,
+                },
+                backend: {
+                  method: "POST",
+                  path: "/api/pantry",
+                  handler: "createPantry",
+                  file: beFile,
+                  line: 15,
+                },
+                score: 100,
+              },
+            ],
+            [
+              "PUT /api/pantry/{id}",
+              {
+                frontend: {
+                  name: "update",
+                  method: "PUT",
+                  endpoint: "/api/pantry/{id}",
+                  file: feFile,
+                  line: 21,
+                },
+                backend: {
+                  method: "PUT",
+                  path: "/api/pantry/:id",
+                  handler: "updatePantry",
+                  file: beFile,
+                  line: 16,
+                },
+                score: 100,
+              },
+            ],
+          ]),
+          typeMappings: new Map(),
+          unmatchedFrontend: [],
+          unmatchedBackend: [],
+          lastUpdated: new Date().toISOString(),
+        },
+      };
+
+      try {
+        const result = validateApiContractsFromContext(ctx);
+
+        // Used method should still be validated.
+        expect(
+          result.issues.some(
+            (i) => i.type === "apiExtraField" && i.message.includes("frontend sends 'checked'") && i.message.includes("POST /api/pantry"),
+          ),
+        ).toBe(true);
+
+        // Unused service method should not emit inline field mismatch noise.
+        const hasUnusedUpdateIdIssue = result.issues.some(
+          (i) => i.type === "apiExtraField" && i.message.includes("frontend sends 'id'") && i.message.includes("PUT /api/pantry/:id"),
+        );
+        const hasUnusedUpdateDateAddedIssue = result.issues.some(
+          (i) => i.type === "apiExtraField" && i.message.includes("frontend sends 'dateAdded'") && i.message.includes("PUT /api/pantry/:id"),
+        );
+
+        expect(hasUnusedUpdateIdIssue).toBe(false);
+        expect(hasUnusedUpdateDateAddedIssue).toBe(false);
+      } finally {
+        await fs.rm(tmpDir, { recursive: true });
+      }
+    });
+
+    it("should detect missing responses, unused locals, and unknown Prisma model queries in backend handlers", async () => {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+      const os = await import("os");
+
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "api-contract-handler-checks-"));
+      const frontendDir = path.join(tmpDir, "frontend");
+      const backendDir = path.join(tmpDir, "backend");
+      await fs.mkdir(frontendDir);
+      await fs.mkdir(backendDir);
+
+      const feFile = path.join(frontendDir, "api.ts");
+      const beRoutesFile = path.join(backendDir, "routes.ts");
+      const beControllerFile = path.join(backendDir, "analyticsController.ts");
+
+      await fs.writeFile(
+        feFile,
+        `
+        export async function getStats() {
+          return fetch('http://localhost:3000/api/analytics/stats');
+        }
+        `,
+      );
+
+      await fs.writeFile(
+        beRoutesFile,
+        `
+        import { Router } from 'express';
+        import { getStats } from './analyticsController';
+
+        const router = Router();
+        router.get('/stats', getStats);
+        export default router;
+        `,
+      );
+
+      await fs.writeFile(
+        beControllerFile,
+        `
+        declare const prisma: any;
+
+        export const getStats = async (req: any, res: any) => {
+          const unusedSummary = await prisma.recipe.findMany({});
+          await prisma.cookingHistory.findMany({ where: { userId: 'abc' } });
+          return { ok: true };
+        };
+        `,
+      );
+
+      const ctx: ProjectContext = {
+        projectPath: tmpDir,
+        language: "typescript",
+        buildTime: new Date().toISOString(),
+        totalFiles: 0,
+        files: new Map(),
+        symbolIndex: new Map(),
+        dependencies: [],
+        importGraph: new Map(),
+        reverseImportGraph: new Map(),
+        keywordIndex: new Map(),
+        externalDependencies: new Set(),
+        entryPoints: [],
+        frameworks: [],
+        apiContract: {
+          projectStructure: { relationship: "separate" },
+          frontendServices: [
+            {
+              name: "getStats",
+              method: "GET",
+              endpoint: "/analytics/stats",
+              file: feFile,
+              line: 2,
+            },
+          ],
+          frontendTypes: [],
+          backendRoutes: [
+            {
+              method: "GET",
+              path: "/api/analytics/stats",
+              handler: "getStats",
+              file: beRoutesFile,
+              line: 6,
+            },
+          ],
+          backendModels: [
+            {
+              name: "Recipe",
+              file: beControllerFile,
+              line: 1,
+              fields: [
+                { name: "id", type: "string", required: true },
+              ],
+            },
+          ],
+          endpointMappings: new Map([
+            [
+              "GET /analytics/stats",
+              {
+                frontend: {
+                  name: "getStats",
+                  method: "GET",
+                  endpoint: "/analytics/stats",
+                  file: feFile,
+                  line: 2,
+                },
+                backend: {
+                  method: "GET",
+                  path: "/api/analytics/stats",
+                  handler: "getStats",
+                  file: beRoutesFile,
+                  line: 6,
+                },
+                score: 100,
+              },
+            ],
+          ]),
+          typeMappings: new Map(),
+          unmatchedFrontend: [],
+          unmatchedBackend: [],
+          lastUpdated: new Date().toISOString(),
+        },
+      };
+
+      try {
+        const result = validateApiContractsFromContext(ctx);
+
+        expect(
+          result.issues.some(
+            (issue) =>
+              issue.type === "apiContractMismatch" &&
+              issue.message.includes("Potential missing response") &&
+              issue.message.includes("GET /api/analytics/stats"),
+          ),
+        ).toBe(true);
+
+        expect(
+          result.issues.some(
+            (issue) =>
+              issue.type === "apiContractMismatch" &&
+              issue.message.includes("Unused local variable") &&
+              issue.message.includes("unusedSummary"),
+          ),
+        ).toBe(true);
+
+        expect(
+          result.issues.some(
+            (issue) =>
+              issue.type === "apiContractMismatch" &&
+              issue.message.includes("prisma.cookingHistory.findMany"),
+          ),
+        ).toBe(true);
+      } finally {
+        await fs.rm(tmpDir, { recursive: true });
+      }
+    });
+
+    it("should not flag variables used via object shorthand in backend responses as unused", async () => {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+      const os = await import("os");
+
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "api-contract-shorthand-usage-"));
+      const frontendDir = path.join(tmpDir, "frontend");
+      const backendDir = path.join(tmpDir, "backend");
+      await fs.mkdir(frontendDir);
+      await fs.mkdir(backendDir);
+
+      const feFile = path.join(frontendDir, "api.ts");
+      const beRoutesFile = path.join(backendDir, "routes.ts");
+      const beControllerFile = path.join(backendDir, "recipeController.ts");
+
+      await fs.writeFile(
+        feFile,
+        `
+        export async function getRecipeMatch(id: string) {
+          return fetch(\`http://localhost:3000/api/recipes/${"${id}"}/match\`);
+        }
+        `,
+      );
+
+      await fs.writeFile(
+        beRoutesFile,
+        `
+        import { Router } from 'express';
+        import { getRecipeMatch } from './recipeController';
+
+        const router = Router();
+        router.get('/:id/match', getRecipeMatch);
+        export default router;
+        `,
+      );
+
+      await fs.writeFile(
+        beControllerFile,
+        `
+        export const getRecipeMatch = async (req: any, res: any) => {
+          const matchPercentage = 87;
+          return res.json({ matchPercentage });
+        };
+        `,
+      );
+
+      const ctx: ProjectContext = {
+        projectPath: tmpDir,
+        language: "typescript",
+        buildTime: new Date().toISOString(),
+        totalFiles: 0,
+        files: new Map(),
+        symbolIndex: new Map(),
+        dependencies: [],
+        importGraph: new Map(),
+        reverseImportGraph: new Map(),
+        keywordIndex: new Map(),
+        externalDependencies: new Set(),
+        entryPoints: [],
+        frameworks: [],
+        apiContract: {
+          projectStructure: { relationship: "separate" },
+          frontendServices: [
+            {
+              name: "getRecipeMatch",
+              method: "GET",
+              endpoint: "/recipes/{id}/match",
+              file: feFile,
+              line: 2,
+            },
+          ],
+          frontendTypes: [],
+          backendRoutes: [
+            {
+              method: "GET",
+              path: "/api/recipes/:id/match",
+              handler: "getRecipeMatch",
+              file: beRoutesFile,
+              line: 6,
+            },
+          ],
+          backendModels: [],
+          endpointMappings: new Map([
+            [
+              "GET /recipes/{id}/match",
+              {
+                frontend: {
+                  name: "getRecipeMatch",
+                  method: "GET",
+                  endpoint: "/recipes/{id}/match",
+                  file: feFile,
+                  line: 2,
+                },
+                backend: {
+                  method: "GET",
+                  path: "/api/recipes/:id/match",
+                  handler: "getRecipeMatch",
+                  file: beRoutesFile,
+                  line: 6,
+                },
+                score: 100,
+              },
+            ],
+          ]),
+          typeMappings: new Map(),
+          unmatchedFrontend: [],
+          unmatchedBackend: [],
+          lastUpdated: new Date().toISOString(),
+        },
+      };
+
+      try {
+        const result = validateApiContractsFromContext(ctx);
+
+        expect(
+          result.issues.some(
+            (issue) =>
+              issue.type === "apiContractMismatch" &&
+              issue.message.includes("Unused local variable") &&
+              issue.message.includes("matchPercentage"),
+          ),
+        ).toBe(false);
+      } finally {
+        await fs.rm(tmpDir, { recursive: true });
+      }
+    });
+
+    it("should detect Prisma-backed property hallucinations and ignore collection methods", async () => {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+      const os = await import("os");
+
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "api-contract-prisma-hallucination-"));
+      const frontendDir = path.join(tmpDir, "frontend");
+      const backendDir = path.join(tmpDir, "backend");
+      await fs.mkdir(frontendDir);
+      await fs.mkdir(backendDir);
+
+      const feFile = path.join(frontendDir, "api.ts");
+      const beRoutesFile = path.join(backendDir, "routes.ts");
+      const beControllerFile = path.join(backendDir, "recipeController.ts");
+
+      await fs.writeFile(
+        feFile,
+        `
+        export async function updateRecipe(id: string) {
+          return fetch(\`http://localhost:3000/api/recipes/${"${id}"}\`, { method: 'PUT' });
+        }
+        `,
+      );
+
+      await fs.writeFile(
+        beRoutesFile,
+        `
+        import { Router } from 'express';
+        import { updateRecipe } from './recipeController';
+
+        const router = Router();
+        router.put('/:id', updateRecipe);
+        export default router;
+        `,
+      );
+
+      await fs.writeFile(
+        beControllerFile,
+        `
+        declare const prisma: any;
+
+        export const updateRecipe = async (req: any, res: any) => {
+          const recipes = await prisma.recipe.findMany({});
+          // Valid array method access: should NOT be flagged
+          recipes.map((r: any) => r.name);
+          // Collection item alias should still be validated against Recipe model
+          recipes.forEach((recipeItem: any) => {
+            // @ts-ignore
+            console.log(recipeItem.socialMetrics?.likes);
+          });
+
+          const recipe = await prisma.recipe.findUnique({ where: { id: req.params.id } });
+          // Hallucinated property access: should be flagged
+          if (recipe.metadata?.lastUpdatedBy) {
+            console.log(recipe.metadata.lastUpdatedBy);
+          }
+
+          return res.json(recipe);
+        };
+        `,
+      );
+
+      const ctx: ProjectContext = {
+        projectPath: tmpDir,
+        language: "typescript",
+        buildTime: new Date().toISOString(),
+        totalFiles: 0,
+        files: new Map(),
+        symbolIndex: new Map(),
+        dependencies: [],
+        importGraph: new Map(),
+        reverseImportGraph: new Map(),
+        keywordIndex: new Map(),
+        externalDependencies: new Set(),
+        entryPoints: [],
+        frameworks: [],
+        apiContract: {
+          projectStructure: { relationship: "separate" },
+          frontendServices: [
+            {
+              name: "updateRecipe",
+              method: "PUT",
+              endpoint: "/recipes/{id}",
+              file: feFile,
+              line: 2,
+            },
+          ],
+          frontendTypes: [],
+          backendRoutes: [
+            {
+              method: "PUT",
+              path: "/api/recipes/:id",
+              handler: "updateRecipe",
+              file: beRoutesFile,
+              line: 6,
+            },
+          ],
+          backendModels: [
+            {
+              name: "Recipe",
+              file: beControllerFile,
+              line: 1,
+              fields: [
+                { name: "id", type: "string", required: true },
+                { name: "name", type: "string", required: true },
+              ],
+            },
+          ],
+          endpointMappings: new Map([
+            [
+              "PUT /recipes/{id}",
+              {
+                frontend: {
+                  name: "updateRecipe",
+                  method: "PUT",
+                  endpoint: "/recipes/{id}",
+                  file: feFile,
+                  line: 2,
+                },
+                backend: {
+                  method: "PUT",
+                  path: "/api/recipes/:id",
+                  handler: "updateRecipe",
+                  file: beRoutesFile,
+                  line: 6,
+                },
+                score: 100,
+              },
+            ],
+          ]),
+          typeMappings: new Map(),
+          unmatchedFrontend: [],
+          unmatchedBackend: [],
+          lastUpdated: new Date().toISOString(),
+        },
+      };
+
+      try {
+        const result = validateApiContractsFromContext(ctx);
+
+        expect(
+          result.issues.some(
+            (issue) =>
+              issue.type === "apiContractMismatch" && issue.message.includes("recipe.metadata"),
+          ),
+        ).toBe(true);
+
+        expect(
+          result.issues.some(
+            (issue) =>
+              issue.type === "apiContractMismatch" && issue.message.includes("recipeItem.socialMetrics"),
+          ),
+        ).toBe(true);
+
+        expect(
+          result.issues.some(
+            (issue) =>
+              issue.type === "apiContractMismatch" && issue.message.includes("recipes.map"),
+          ),
+        ).toBe(false);
+      } finally {
+        await fs.rm(tmpDir, { recursive: true });
+      }
+    });
   });
 });
 
@@ -525,6 +1640,7 @@ describe("API Contract Guardian - Integration", () => {
       keywordIndex: new Map(),
       externalDependencies: new Set(),
       entryPoints: [],
+      frameworks: [],
       apiContract: {
         projectStructure: {
           relationship: "separate",

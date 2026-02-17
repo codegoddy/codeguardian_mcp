@@ -25,14 +25,54 @@ const fileAlerts = new Map<string, ValidationAlert>();
 
 // Debounced alert persistence — avoid writing to disk on every single alert change
 let alertPersistTimer: ReturnType<typeof setTimeout> | null = null;
+
+function getActiveGuardianProjectPaths(): string[] {
+  return Array.from(activeGuardians.values())
+    .map((guardian) => guardian.getStatus().projectPath)
+    .filter((projectPath): projectPath is string => !!projectPath);
+}
+
 function scheduleAlertPersist(): void {
   if (alertPersistTimer) clearTimeout(alertPersistTimer);
   alertPersistTimer = setTimeout(() => {
-    guardianPersistence.saveAlerts(fileAlerts).catch((err) => {
+    const projectPaths = getActiveGuardianProjectPaths();
+
+    guardianPersistence.saveAlerts(fileAlerts, projectPaths).catch((err) => {
       logger.warn("Failed to persist alerts:", err);
     });
     alertPersistTimer = null;
   }, 2000);
+}
+
+function cancelScheduledAlertPersist(): void {
+  if (!alertPersistTimer) return;
+  clearTimeout(alertPersistTimer);
+  alertPersistTimer = null;
+}
+
+async function flushAlertPersistenceNow(): Promise<void> {
+  // If nothing is active and memory is empty, do not overwrite persisted alerts.
+  // This allows get_guardian_alerts to hydrate from disk after server/session restarts.
+  if (activeGuardians.size === 0 && fileAlerts.size === 0) {
+    return;
+  }
+
+  cancelScheduledAlertPersist();
+  await guardianPersistence.saveAlerts(fileAlerts, getActiveGuardianProjectPaths());
+}
+
+function collectAlertsWithIssues(alertMap: Map<string, ValidationAlert>): ValidationAlert[] {
+  const alerts: ValidationAlert[] = [];
+  for (const alert of alertMap.values()) {
+    if (Array.isArray(alert.issues) && alert.issues.length > 0) {
+      alerts.push(alert);
+    }
+  }
+  return alerts;
+}
+
+function isApiContractScanAlertKey(alertKey: string): boolean {
+  return alertKey === "API_CONTRACT_SCAN" || alertKey.startsWith("API_CONTRACT_SCAN:");
 }
 
 /**
@@ -44,6 +84,17 @@ function scheduleAlertPersist(): void {
  * a UI notification to hint the user/LLM that alerts are available.
  */
 function handleAlert(alert: ValidationAlert): void {
+  // Initial scan notifications can be useful UX hints but should not be tracked
+  // as pending issues when they carry zero findings.
+  if (alert.issues.length === 0 && alert.isInitialScan) {
+    fileAlerts.delete(alert.file);
+
+    pushValidationAlert(alert).catch((err) => {
+      logger.warn("Failed to send UI notification:", err);
+    });
+    return;
+  }
+
   // Update state for this file
   if (alert.issues.length === 0 && !alert.isInitialScan) {
     // Clear issues for this file
@@ -59,13 +110,21 @@ function handleAlert(alert: ValidationAlert): void {
     // Only log if we actually cleared something
     if (hadIssues || scrubbed) {
       logger.info(`Issues cleared for: ${alert.file}${scrubbed ? " (including initial scan issues)" : ""}`);
-      scheduleAlertPersist();
     }
+
+    // Always persist after a clear notification to keep file + tool view aligned.
+    scheduleAlertPersist();
   } else {
-    // If this is an API_CONTRACT_SCAN update, replace the old one entirely.
+    // If this is an API_CONTRACT_SCAN update (legacy or guardian-scoped),
+    // replace only that specific scan key.
     // This handles re-validation of service/route files updating the contract scan.
-    if (alert.file === "API_CONTRACT_SCAN") {
+    if (isApiContractScanAlertKey(alert.file)) {
       fileAlerts.set(alert.file, alert);
+      // Migration: once guardian-scoped keys are flowing, drop the old shared key
+      // so stale cross-guardian messages don't keep showing up.
+      if (alert.file !== "API_CONTRACT_SCAN") {
+        fileAlerts.delete("API_CONTRACT_SCAN");
+      }
       logger.info(`API Contract scan updated: ${alert.issues.length} issues`);
       scheduleAlertPersist();
       return;
@@ -94,9 +153,16 @@ function handleAlert(alert: ValidationAlert): void {
  */
 function scrubInitialScanIssuesForFile(cleanFile: string): boolean {
   let scrubbed = false;
-  const INITIAL_SCAN_KEYS = ["INITIAL_FILE_SCAN", "INITIAL_SCAN", "API_CONTRACT_SCAN"];
+  const INITIAL_SCAN_KEYS = [
+    "INITIAL_FILE_SCAN",
+    "INITIAL_SCAN",
+    // Legacy key support
+    "API_CONTRACT_SCAN",
+    // Guardian-scoped API contract scans
+    ...Array.from(fileAlerts.keys()).filter((key) => isApiContractScanAlertKey(key)),
+  ];
 
-  for (const key of INITIAL_SCAN_KEYS) {
+  for (const key of new Set(INITIAL_SCAN_KEYS)) {
     const scanAlert = fileAlerts.get(key);
     if (!scanAlert) continue;
 
@@ -213,15 +279,14 @@ Each Guardian watches its own path and language.`,
 
       activeGuardians.set(agent_name, guardian);
 
-      // Persist config so guardian survives server restarts (new LLM sessions)
-      guardianPersistence.saveGuardian({
+      // Persist config so guardian survives server restarts (new LLM sessions).
+      // Await to avoid races where tests/cleanup stop a guardian before persistence settles.
+      await guardianPersistence.saveGuardian({
         agentName: agent_name,
         projectPath: absolutePath,
         language,
         mode,
         startedAt: Date.now(),
-      }).catch(err => {
-        logger.warn("Failed to persist guardian config:", err);
       });
 
       const alertsFilePath = guardianPersistence.getLLMAlertsPath(absolutePath);
@@ -276,6 +341,9 @@ export const stopGuardianTool: ToolDefinition = {
   async handler(args: any) {
     const { agent_name } = args;
 
+    // Prevent delayed disk writes from firing while/after guardians are being stopped.
+    cancelScheduledAlertPersist();
+
     if (activeGuardians.size === 0) {
       return {
         content: [
@@ -310,9 +378,11 @@ export const stopGuardianTool: ToolDefinition = {
       activeGuardians.delete(agent_name);
 
       // Remove persisted config so it won't auto-restore
-      guardianPersistence.removeGuardianFull(agent_name, guardian.getStatus().projectPath).catch(err => {
+      try {
+        await guardianPersistence.removeGuardianFull(agent_name, guardian.getStatus().projectPath);
+      } catch (err) {
         logger.warn("Failed to remove persisted guardian config:", err);
-      });
+      }
 
       return {
         content: [
@@ -328,14 +398,19 @@ export const stopGuardianTool: ToolDefinition = {
     } else {
       // Stop all
       const count = activeGuardians.size;
+      const projectPaths = getActiveGuardianProjectPaths();
+      const removals: Promise<void>[] = [];
       for (const [name, guardian] of activeGuardians) {
         guardian.stop();
         // Remove persisted config
-        guardianPersistence.removeGuardianFull(name, guardian.getStatus().projectPath).catch(() => {});
+        removals.push(
+          guardianPersistence.removeGuardianFull(name, guardian.getStatus().projectPath).catch(() => {}),
+        );
       }
       activeGuardians.clear();
       fileAlerts.clear(); // Clear all tracked alerts
-      guardianPersistence.clearAlerts().catch(() => {});
+      await Promise.allSettled(removals);
+      await guardianPersistence.clearAlerts(projectPaths).catch(() => {});
       
       return {
         content: [
@@ -376,17 +451,43 @@ export const getGuardianAlertsTool: ToolDefinition = {
   async handler(args: any) {
     const { summaryOnly = false } = args;
 
-    // Get all active alerts
-    const alerts = Array.from(fileAlerts.values());
+    // Keep LLM tool output and codeguardian-alerts.json in sync at read time.
+    await flushAlertPersistenceNow().catch((err) => {
+      logger.warn("Failed to flush alerts before get_guardian_alerts:", err);
+    });
+
+    // Get all active alerts that contain actual issues.
+    let alerts = collectAlertsWithIssues(fileAlerts);
+
+    // If memory is empty (e.g., very early after restart), hydrate from persisted alerts.
+    if (alerts.length === 0) {
+      const persistedAlerts = await guardianPersistence.loadAlerts();
+      for (const [file, alert] of persistedAlerts.entries()) {
+        fileAlerts.set(file, alert as ValidationAlert);
+      }
+      alerts = collectAlertsWithIssues(fileAlerts);
+    }
 
     // Collect LLM-readable file paths from all active guardians
-    const alertsFilePaths: string[] = [];
+    const alertsFilePaths = new Set<string>();
     for (const guardian of activeGuardians.values()) {
       const status = guardian.getStatus();
       if (status.projectPath) {
-        alertsFilePaths.push(guardianPersistence.getLLMAlertsPath(status.projectPath));
+        alertsFilePaths.add(guardianPersistence.getLLMAlertsPath(status.projectPath));
       }
     }
+
+    // If no guardians are currently active, still provide paths for persisted guardians.
+    if (alertsFilePaths.size === 0) {
+      const persistedConfigs = await guardianPersistence.loadAllGuardians();
+      for (const config of persistedConfigs) {
+        if (config.projectPath) {
+          alertsFilePaths.add(guardianPersistence.getLLMAlertsPath(config.projectPath));
+        }
+      }
+    }
+
+    const alertsFilePathList = Array.from(alertsFilePaths);
 
     if (alerts.length === 0) {
       return {
@@ -397,7 +498,7 @@ export const getGuardianAlertsTool: ToolDefinition = {
               success: true,
               hasAlerts: false,
               message: "No active issues. All clear! (Alerts automatically clear when issues are fixed)",
-              alertsFiles: alertsFilePaths.length > 0 ? alertsFilePaths : undefined,
+              alertsFiles: alertsFilePathList.length > 0 ? alertsFilePathList : undefined,
             }),
           },
         ],
@@ -428,7 +529,7 @@ export const getGuardianAlertsTool: ToolDefinition = {
               totalIssues,
               bySeverity: severityCounts,
               affectedFiles: alerts.map(a => a.file),
-              alertsFiles: alertsFilePaths,
+              alertsFiles: alertsFilePathList,
               message: totalIssues > 50
                 ? `Large alert set (${totalIssues} issues across ${alerts.length} files). Full details available in the alertsFiles listed above. Use read_file to access them.`
                 : `${totalIssues} issues across ${alerts.length} files. Full details available in the alertsFiles listed above.`,
@@ -454,7 +555,7 @@ export const getGuardianAlertsTool: ToolDefinition = {
             bySeverity: severityCounts,
             alerts: alerts,
             llmSummary: llmMessages,
-            alertsFiles: alertsFilePaths,
+            alertsFiles: alertsFilePathList,
             hint: "Full alerts are also persisted at the codeguardian-alerts.json file(s) in the project root. Use your file-reading tool to access them across sessions.",
           }),
         },
@@ -474,6 +575,8 @@ export const getGuardianStatusTool: ToolDefinition = {
   },
 
   async handler() {
+    const pendingIssueAlerts = collectAlertsWithIssues(fileAlerts).length;
+
     if (activeGuardians.size === 0) {
       // Check if there are persisted configs that might be restoring
       const persistedConfigs = await guardianPersistence.loadAllGuardians();
@@ -487,6 +590,7 @@ export const getGuardianStatusTool: ToolDefinition = {
                 ? `No Guardians are active yet, but ${persistedConfigs.length} guardian(s) are being restored from a previous session. They should be ready shortly.`
                 : "No Guardians are active.",
               pendingRestore: persistedConfigs.length,
+              pendingAlerts: pendingIssueAlerts,
             }),
           },
         ],
@@ -503,8 +607,8 @@ export const getGuardianStatusTool: ToolDefinition = {
             active: true,
             count: activeGuardians.size,
             guardians: statuses,
-            pendingAlerts: fileAlerts.size,
-            hint: fileAlerts.size > 0
+            pendingAlerts: pendingIssueAlerts,
+            hint: pendingIssueAlerts > 0
               ? "There are pending alerts. Use get_guardian_alerts to review them."
               : "No pending alerts. All clear.",
           }),

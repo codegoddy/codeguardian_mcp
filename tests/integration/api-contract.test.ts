@@ -250,4 +250,184 @@ def delete_user(id):
     expect(result.summary.matchedEndpoints).toBeGreaterThanOrEqual(5);
     expect(result.issues.some((i) => i.type === "apiMethodMismatch")).toBe(false);
   });
+
+  it("should prefer write-intent same-path mismatch route and detect typed payload gaps", async () => {
+    await writeProjectFile(
+      tempDir,
+      "frontend/package.json",
+      JSON.stringify({
+        name: "frontend",
+        private: true,
+        dependencies: { react: "^18.0.0" },
+      }),
+    );
+
+    await writeProjectFile(
+      tempDir,
+      "frontend/src/types/index.ts",
+      `
+export interface PantryItem {
+  id: string;
+  name: string;
+  category: string;
+  quantity: number;
+  unit: string;
+  expirationDate: string;
+}
+`,
+    );
+
+    await writeProjectFile(
+      tempDir,
+      "frontend/src/services/api.ts",
+      `
+import type { PantryItem } from '../types';
+
+const API_BASE_URL = 'http://localhost:3001/api';
+
+async function fetchApi(endpoint: string, options?: RequestInit) {
+  return fetch(\`${"${API_BASE_URL}"}${"${endpoint}"}\`, options);
+}
+
+export const pantryApi = {
+  update: (id: string, data: Partial<PantryItem>) =>
+    fetchApi(\`/pantry/${"${id}"}\`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+};
+`,
+    );
+
+    await writeProjectFile(
+      tempDir,
+      "backend/package.json",
+      JSON.stringify({
+        name: "backend",
+        private: true,
+        dependencies: { express: "^4.18.0", "@prisma/client": "^5.0.0" },
+      }),
+    );
+
+    await writeProjectFile(
+      tempDir,
+      "backend/prisma/schema.prisma",
+      `
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model PantryItem {
+  id             String   @id @default(uuid())
+  name           String
+  category       String
+  quantity       Float
+  unit           String
+  expirationDate DateTime
+}
+`,
+    );
+
+    await writeProjectFile(
+      tempDir,
+      "backend/src/types/pantry.ts",
+      `
+export interface PantryItem {
+  id: string;
+  name: string;
+  category: string;
+  quantity: number;
+  unit: string;
+  expirationDate: Date;
+}
+`,
+    );
+
+    await writeProjectFile(
+      tempDir,
+      "backend/src/controllers/pantryController.ts",
+      `
+declare const prisma: any;
+
+export const getPantryItemById = async (req: any, res: any) => {
+  const item = await prisma.pantryItem.findUnique({ where: { id: req.params.id } });
+  return res.json(item);
+};
+
+export const updatePantryItem = async (req: any, res: any) => {
+  const { updatedBy } = req.body;
+  const existingItem = await prisma.pantryItem.findUnique({ where: { id: req.params.id } });
+
+  // @ts-ignore
+  if (existingItem?.isLocked) {
+    return res.status(403).json({ error: 'locked' });
+  }
+
+  if (!updatedBy) {
+    return res.status(400).json({ error: 'updatedBy field is required' });
+  }
+
+  return res.json(existingItem);
+};
+`,
+    );
+
+    await writeProjectFile(
+      tempDir,
+      "backend/src/routes/pantry.ts",
+      `
+import { Router } from 'express';
+import { getPantryItemById, updatePantryItem } from '../controllers/pantryController';
+
+const router = Router();
+router.get('/:id', getPantryItemById);
+router.put('/:id', updatePantryItem);
+
+export default router;
+`,
+    );
+
+    await writeProjectFile(
+      tempDir,
+      "backend/src/server.ts",
+      `
+import express from 'express';
+import pantryRoutes from './routes/pantry';
+
+const app = express();
+app.use(express.json());
+app.use('/api/pantry', pantryRoutes);
+`,
+    );
+
+    const result = await validateApiContracts(tempDir);
+
+    expect(
+      result.issues.some(
+        (issue) =>
+          issue.type === "apiMethodMismatch" &&
+          issue.message.includes("frontend uses POST") &&
+          issue.message.includes("backend expects PUT"),
+      ),
+    ).toBe(true);
+
+    expect(
+      result.issues.some(
+        (issue) =>
+          issue.type === "apiMissingRequiredField" && issue.message.includes("'updatedBy'"),
+      ),
+    ).toBe(true);
+
+    expect(
+      result.issues.some(
+        (issue) =>
+          issue.type === "apiContractMismatch" && issue.message.includes("existingItem.isLocked"),
+      ),
+    ).toBe(true);
+  });
 });

@@ -890,6 +890,12 @@ async function isContextStale(
 
     // Quick check 3: Check for new files in common directories
     const commonDirs = [
+      "frontend",
+      "client",
+      "web",
+      "backend",
+      "server",
+      "api",
       "src",
       "lib",
       "app",
@@ -1338,8 +1344,14 @@ function detectRootSourceDirs(projectPath: string, language: string): string[] {
   // Notably, many projects (and our tests) place shared helpers in ./utils.
   const commonDirs =
     language === "python"
-      ? ["app", "src", "server", "core", "api"]
+      ? ["backend", "app", "src", "server", "core", "api"]
       : [
+          "frontend",
+          "client",
+          "web",
+          "backend",
+          "server",
+          "api",
           "src",
           "app",
           "pages",

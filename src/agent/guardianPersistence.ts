@@ -215,7 +215,8 @@ class GuardianPersistence {
    * 2. `codeguardian-alerts.json` - LLM-readable file at project root(s)
    */
   async saveAlerts(
-    alerts: Map<string, PersistedAlert>
+    alerts: Map<string, PersistedAlert>,
+    projectPaths: string[] = []
   ): Promise<void> {
     try {
       await this.initialize();
@@ -225,7 +226,7 @@ class GuardianPersistence {
       logger.debug(`Saved ${alerts.size} alerts to disk`);
 
       // Also save LLM-readable alerts to project root(s)
-      await this.saveLLMReadableAlerts(alerts);
+      await this.saveLLMReadableAlerts(alerts, projectPaths);
     } catch (error) {
       logger.error("Failed to save alerts:", error);
     }
@@ -238,55 +239,83 @@ class GuardianPersistence {
    * (which often respect .gitignore) can access the alert data.
    */
   private async saveLLMReadableAlerts(
-    alerts: Map<string, PersistedAlert>
+    alerts: Map<string, PersistedAlert>,
+    explicitProjectPaths: string[] = []
   ): Promise<void> {
     try {
-      // Discover project paths from persisted guardian configs
-      const configs = await this.loadAllGuardians();
       const projectPaths = new Set<string>();
+      const guardianProjectByName = new Map<string, string>();
+
+      // Include explicit project paths first (passed by live guardians)
+      for (const explicitPath of explicitProjectPaths) {
+        if (explicitPath && explicitPath.trim()) {
+          projectPaths.add(path.resolve(explicitPath));
+        }
+      }
+
+      // Also discover project paths from persisted guardian configs
+      // (used for cross-session persistence/restore)
+      const configs = await this.loadAllGuardians();
       for (const config of configs) {
-        projectPaths.add(config.projectPath);
+        if (config.projectPath && config.projectPath.trim()) {
+          const resolvedPath = path.resolve(config.projectPath);
+          projectPaths.add(resolvedPath);
+          guardianProjectByName.set(config.agentName, resolvedPath);
+        }
       }
 
       if (projectPaths.size === 0) return;
 
-      // Build a structured alert report
-      const alertEntries = Array.from(alerts.values());
-      const groupedByFile: Record<string, PersistedAlert> = {};
-      for (const [file, alert] of alerts.entries()) {
-        groupedByFile[file] = alert;
-      }
-
-      // Count by severity
-      const severityCounts: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0, warning: 0 };
-      for (const alert of alertEntries) {
-        for (const issue of alert.issues) {
-          const sev = issue.severity || "low";
-          severityCounts[sev] = (severityCounts[sev] || 0) + 1;
-        }
-      }
-
-      const totalIssues = alertEntries.reduce((sum, a) => sum + a.issues.length, 0);
-
-      const llmAlerts = {
-        _meta: {
-          generatedBy: "CodeGuardian MCP - Guardian Agent",
-          generatedAt: new Date().toISOString(),
-          purpose: "LLM-readable guardian alerts. This file is placed outside .codeguardian/ so AI assistants can read it.",
-        },
-        summary: {
-          totalFiles: alerts.size,
-          totalIssues,
-          bySeverity: severityCounts,
-        },
-        alerts: groupedByFile,
-      };
-
-      const content = JSON.stringify(llmAlerts, null, 2);
-
       // Write to each project root
       for (const projectPath of projectPaths) {
         try {
+          // Scope API contract scan alerts to the owning guardian project.
+          // Other alert types keep current behavior (shared map) for backward compatibility.
+          const scopedAlerts = new Map<string, PersistedAlert>();
+          for (const [key, alert] of alerts.entries()) {
+            if (key.startsWith("API_CONTRACT_SCAN:")) {
+              const guardianName = key.slice("API_CONTRACT_SCAN:".length);
+              const ownerProjectPath = guardianProjectByName.get(guardianName);
+              if (ownerProjectPath && ownerProjectPath !== projectPath) {
+                continue;
+              }
+            }
+            scopedAlerts.set(key, alert);
+          }
+
+          const groupedByFile: Record<string, PersistedAlert> = {};
+          for (const [file, alert] of scopedAlerts.entries()) {
+            groupedByFile[file] = alert;
+          }
+
+          const severityCounts: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0, warning: 0 };
+          for (const alert of scopedAlerts.values()) {
+            for (const issue of alert.issues) {
+              const sev = issue.severity || "low";
+              severityCounts[sev] = (severityCounts[sev] || 0) + 1;
+            }
+          }
+
+          const totalIssues = Array.from(scopedAlerts.values()).reduce(
+            (sum, alert) => sum + alert.issues.length,
+            0,
+          );
+
+          const llmAlerts = {
+            _meta: {
+              generatedBy: "CodeGuardian MCP - Guardian Agent",
+              generatedAt: new Date().toISOString(),
+              purpose: "LLM-readable guardian alerts. This file is placed outside .codeguardian/ so AI assistants can read it.",
+            },
+            summary: {
+              totalFiles: scopedAlerts.size,
+              totalIssues,
+              bySeverity: severityCounts,
+            },
+            alerts: groupedByFile,
+          };
+
+          const content = JSON.stringify(llmAlerts, null, 2);
           const llmAlertsPath = path.join(projectPath, LLM_ALERTS_FILENAME);
           await fs.writeFile(llmAlertsPath, content, "utf-8");
           logger.debug(`LLM-readable alerts saved: ${llmAlertsPath}`);
@@ -331,20 +360,29 @@ class GuardianPersistence {
   /**
    * Clear persisted alerts (both internal cache and LLM-readable files)
    */
-  async clearAlerts(): Promise<void> {
+  async clearAlerts(projectPaths: string[] = []): Promise<void> {
     try {
       const filePath = path.join(this.guardiansDir, ALERTS_FILE);
       await fs.unlink(filePath).catch(() => {});
 
       // Also clean up LLM-readable alerts from project roots
+      const roots = new Set<string>();
+      for (const projectPath of projectPaths) {
+        if (projectPath && projectPath.trim()) {
+          roots.add(path.resolve(projectPath));
+        }
+      }
+
       const configs = await this.loadAllGuardians();
       for (const config of configs) {
-        try {
-          const llmAlertsPath = path.join(config.projectPath, LLM_ALERTS_FILENAME);
-          await fs.unlink(llmAlertsPath).catch(() => {});
-        } catch {
-          // Ignore
+        if (config.projectPath && config.projectPath.trim()) {
+          roots.add(path.resolve(config.projectPath));
         }
+      }
+
+      for (const root of roots) {
+        const llmAlertsPath = path.join(root, LLM_ALERTS_FILENAME);
+        await fs.unlink(llmAlertsPath).catch(() => {});
       }
     } catch (error) {
       // Ignore

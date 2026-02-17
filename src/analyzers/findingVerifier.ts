@@ -1236,28 +1236,52 @@ async function checkPackageInSubdirectoryManifest(
 async function verifyParameterCount(
   issue: ValidationIssue,
   ctx: VerificationContext,
-): Promise<{ isMismatch: boolean; expected?: number; actual?: number }> {
-  const match = issue.message.match(/expects (\d+) args, got (\d+)/);
-  if (!match) {
-    return { isMismatch: true };
-  }
+): Promise<{ isMismatch: boolean; expected?: string; actual?: number }> {
+  const rangeMatch = issue.message.match(/expects\s+([0-9]+(?:-[0-9]+)?)\s+args,\s+got\s+([0-9]+)/i);
+  const actual = rangeMatch ? parseInt(rangeMatch[2], 10) : undefined;
+  const expectedRange = rangeMatch?.[1];
 
-  const expected = parseInt(match[1], 10);
-  const actual = parseInt(match[2], 10);
+  if (rangeMatch && expectedRange && actual !== undefined) {
+    const [minStr, maxStr] = expectedRange.split("-");
+    const min = parseInt(minStr, 10);
+    const max = parseInt(maxStr ?? minStr, 10);
+
+    if (!Number.isNaN(min) && !Number.isNaN(max) && actual >= min && actual <= max) {
+      return { isMismatch: false, expected: expectedRange, actual };
+    }
+  }
 
   const symbolName = issue.message.match(/Function ['"]([^'"]+)['"]/)?.[1];
 
-  if (symbolName) {
+  if (symbolName && actual !== undefined) {
     const definitions = ctx.projectContext.symbolIndex.get(symbolName);
     if (definitions && definitions.length > 0) {
-      const def = definitions[0];
-      if (def.symbol.params?.some((p) => p.name.startsWith("..."))) {
-        return { isMismatch: false, expected, actual };
+      for (const def of definitions) {
+        const params = def.symbol.params || [];
+        const hasRestParam = params.some((p) => p.name.startsWith("..."));
+        const paramCount = def.symbol.paramCount ?? params.length;
+        const minParamCount = def.symbol.minParamCount ?? paramCount;
+
+        if (hasRestParam) {
+          if (actual >= minParamCount) {
+            return { isMismatch: false, expected: `${minParamCount}+`, actual };
+          }
+          continue;
+        }
+
+        if (actual >= minParamCount && actual <= paramCount) {
+          return {
+            isMismatch: false,
+            expected:
+              minParamCount === paramCount ? `${paramCount}` : `${minParamCount}-${paramCount}`,
+            actual,
+          };
+        }
       }
     }
   }
 
-  return { isMismatch: true, expected, actual };
+  return { isMismatch: true, expected: expectedRange, actual };
 }
 
 async function checkImportUsage(

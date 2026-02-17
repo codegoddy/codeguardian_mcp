@@ -24,10 +24,18 @@ describe("Finding Verifier Module", () => {
   // Mock ProjectContext for testing
   const createMockContext = (): ProjectContext => ({
     projectPath: "/test",
+    language: "typescript",
+    buildTime: new Date().toISOString(),
+    totalFiles: 10,
     files: new Map(),
     symbolIndex: new Map(),
-    totalFiles: 10,
-    language: "typescript",
+    dependencies: [],
+    importGraph: new Map(),
+    reverseImportGraph: new Map(),
+    keywordIndex: new Map(),
+    externalDependencies: new Set(),
+    entryPoints: [],
+    frameworks: [],
     symbolGraph: undefined,
   });
 
@@ -223,6 +231,72 @@ describe("Finding Verifier Module", () => {
 
       expect(result.confirmed).toHaveLength(1);
       expect(result.confirmed[0].status).toBe("confirmed");
+    });
+
+    it("should filter wrongParamCount when function has optional params", async () => {
+      const mockContext = createMockContext();
+      mockContext.symbolIndex.set("fetchApi", [
+        {
+          file: "api.ts",
+          symbol: {
+            name: "fetchApi",
+            kind: "function",
+            line: 10,
+            exported: false,
+            params: [{ name: "endpoint" }, { name: "options" }],
+            paramCount: 2,
+            minParamCount: 1,
+          },
+        },
+      ]);
+
+      const issue: ValidationIssue = {
+        type: "wrongParamCount",
+        severity: "high",
+        message: "Function 'fetchApi' expects 2 args, got 1",
+        line: 20,
+        file: "frontend/src/services/api.ts",
+        code: "fetchApi('/recipes')",
+        suggestion: "Expected params: endpoint, options",
+      };
+
+      const result = await verifyFindingsAutomatically(
+        [issue],
+        [],
+        mockContext,
+        "/test",
+        "typescript",
+      );
+
+      expect(result.falsePositives).toHaveLength(1);
+      expect(result.falsePositives[0].status).toBe("false_positive");
+      expect(result.confirmed).toHaveLength(0);
+    });
+
+    it("should treat in-range wrongParamCount messages as false positives", async () => {
+      const mockContext = createMockContext();
+
+      const issue: ValidationIssue = {
+        type: "wrongParamCount",
+        severity: "high",
+        message: "Function 'fetchApi' expects 1-2 args, got 1",
+        line: 20,
+        file: "frontend/src/services/api.ts",
+        code: "fetchApi('/recipes')",
+        suggestion: "Expected params: endpoint, options",
+      };
+
+      const result = await verifyFindingsAutomatically(
+        [issue],
+        [],
+        mockContext,
+        "/test",
+        "typescript",
+      );
+
+      expect(result.falsePositives).toHaveLength(1);
+      expect(result.falsePositives[0].status).toBe("false_positive");
+      expect(result.confirmed).toHaveLength(0);
     });
   });
 

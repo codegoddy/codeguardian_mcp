@@ -90,7 +90,8 @@ export class AutoValidator {
   private lastApiContractValidation: number = 0;
   private apiContractValidationTimer: NodeJS.Timeout | null = null;
   private pendingApiContractTriggerFile: string | null = null;
-  private static readonly API_CONTRACT_DEBOUNCE_MS = 30_000; // At most once per 30s
+  private apiContractValidationInFlight: boolean = false;
+  private static readonly API_CONTRACT_DEBOUNCE_MS = 500; // Match per-file watch debounce feel
   private activeValidationCount: number = 0;
   private validationQueue: Set<string> = new Set();
   private activeRefreshCount: number = 0;
@@ -614,7 +615,7 @@ export class AutoValidator {
 
       if (apiContractResult.issues.length > 0) {
         const apiContractAlert: ValidationAlert = {
-          file: "API_CONTRACT_SCAN",
+          file: this.getApiContractAlertKey(),
           issues: apiContractResult.issues.map((issue) => ({
             type: issue.type,
             severity: issue.severity,
@@ -916,6 +917,10 @@ export class AutoValidator {
     return lines.join("\n");
   }
 
+  private getApiContractAlertKey(): string {
+    return `API_CONTRACT_SCAN:${this.agentName}`;
+  }
+
   private isApiContractRelevantChange(filePath: string, fileLang: string, content: string): boolean {
     const normalized = filePath.toLowerCase();
     if (!/\.(py|ts|tsx|js|jsx)$/.test(normalized)) return false;
@@ -955,41 +960,52 @@ export class AutoValidator {
   private scheduleApiContractValidation(triggerFile: string): void {
     this.pendingApiContractTriggerFile = triggerFile;
 
-    const elapsed = Date.now() - this.lastApiContractValidation;
-    const remaining = AutoValidator.API_CONTRACT_DEBOUNCE_MS - elapsed;
+    if (this.apiContractValidationTimer) {
+      clearTimeout(this.apiContractValidationTimer);
+    }
 
-    if (remaining <= 0) {
-      if (this.apiContractValidationTimer) {
-        clearTimeout(this.apiContractValidationTimer);
-        this.apiContractValidationTimer = null;
-      }
-      this.runApiContractValidation(triggerFile).catch((err) => {
+    // Trailing debounce (short): behaves closer to per-file validations while
+    // still collapsing burst edits into a single full-contract scan.
+    this.apiContractValidationTimer = setTimeout(() => {
+      this.apiContractValidationTimer = null;
+      this.runQueuedApiContractValidation().catch((err) => {
         logger.error(`API contract validation failed:`, err);
       });
+    }, AutoValidator.API_CONTRACT_DEBOUNCE_MS);
+  }
+
+  private async runQueuedApiContractValidation(): Promise<void> {
+    if (this.apiContractValidationInFlight) {
       return;
     }
 
-    // Trailing debounce: ensure at least one validation runs after the cooldown
-    // window if changes keep happening.
-    if (!this.apiContractValidationTimer) {
-      logger.debug(`API contract validation throttled; scheduled in ${remaining}ms`);
-      this.apiContractValidationTimer = setTimeout(() => {
-        this.apiContractValidationTimer = null;
-        const pending = this.pendingApiContractTriggerFile || triggerFile;
-        this.runApiContractValidation(pending).catch((err) => {
-          logger.error(`API contract validation failed:`, err);
-        });
-      }, remaining);
+    const pending = this.pendingApiContractTriggerFile;
+    if (!pending) {
+      return;
+    }
+
+    this.pendingApiContractTriggerFile = null;
+    this.apiContractValidationInFlight = true;
+
+    try {
+      await this.runApiContractValidation(pending);
+    } finally {
+      this.apiContractValidationInFlight = false;
+
+      // If edits landed during the scan, run one more trailing scan.
+      if (this.pendingApiContractTriggerFile) {
+        this.scheduleApiContractValidation(this.pendingApiContractTriggerFile);
+      }
     }
   }
 
   private async runApiContractValidation(triggerFile: string): Promise<void> {
     this.lastApiContractValidation = Date.now();
-    logger.info(`API file changed, triggering contract validation: ${triggerFile}`);
+    logger.info(`API file changed, triggering contract validation [${this.agentName}]: ${triggerFile}`);
 
     const apiContractResult = await validateApiContracts(this.projectPath);
     const apiContractAlert: ValidationAlert = {
-      file: "API_CONTRACT_SCAN",
+      file: this.getApiContractAlertKey(),
       issues: apiContractResult.issues.map((issue) => ({
         type: issue.type,
         severity: issue.severity,

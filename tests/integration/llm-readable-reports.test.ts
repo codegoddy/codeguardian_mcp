@@ -304,6 +304,96 @@ describe("LLM-Readable Report Files", () => {
       // Cleanup
       await guardianPersistence.removeGuardianFull("ClearTestGuard", tempDir);
     });
+
+    it("should save codeguardian-alerts.json from explicit project paths without persisted configs", async () => {
+      // No saveGuardian() on purpose: simulate early start_guardian timing
+      // where alerts can be persisted before config discovery is available.
+      const alerts = new Map<string, any>();
+      alerts.set("src/api.ts", {
+        file: "src/api.ts",
+        issues: [{ type: "apiMethodMismatch", severity: "critical", message: "method mismatch" }],
+        timestamp: Date.now(),
+        llmMessage: "test",
+      });
+
+      await guardianPersistence.saveAlerts(alerts, [tempDir]);
+
+      const llmAlertsPath = path.join(tempDir, LLM_ALERTS_FILENAME);
+      const fileExists = await fs.access(llmAlertsPath).then(() => true).catch(() => false);
+      expect(fileExists).toBe(true);
+
+      const content = await fs.readFile(llmAlertsPath, "utf-8");
+      const parsed = JSON.parse(content);
+      expect(parsed.summary.totalIssues).toBe(1);
+      expect(parsed.alerts["src/api.ts"]).toBeDefined();
+    });
+
+    it("should scope guardian-specific API contract scans to the owning project root", async () => {
+      const otherProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "llm-alert-scope-test-"));
+
+      try {
+        await guardianPersistence.saveGuardian({
+          agentName: "FrontendGuard",
+          projectPath: tempDir,
+          language: "typescript",
+          mode: "auto",
+          startedAt: Date.now(),
+        });
+
+        await guardianPersistence.saveGuardian({
+          agentName: "BackendGuard",
+          projectPath: otherProjectDir,
+          language: "python",
+          mode: "auto",
+          startedAt: Date.now(),
+        });
+
+        const alerts = new Map<string, any>();
+        alerts.set("API_CONTRACT_SCAN:FrontendGuard", {
+          file: "API_CONTRACT_SCAN:FrontendGuard",
+          issues: [
+            {
+              type: "apiEndpointNotFound",
+              severity: "critical",
+              message: "frontend-only endpoint mismatch",
+            },
+          ],
+          timestamp: Date.now(),
+          llmMessage: "FrontendGuard: API Contract Validation",
+        });
+
+        alerts.set("API_CONTRACT_SCAN:BackendGuard", {
+          file: "API_CONTRACT_SCAN:BackendGuard",
+          issues: [
+            {
+              type: "apiEndpointNotFound",
+              severity: "critical",
+              message: "backend-only endpoint mismatch",
+            },
+          ],
+          timestamp: Date.now(),
+          llmMessage: "BackendGuard: API Contract Validation",
+        });
+
+        await guardianPersistence.saveAlerts(alerts, [tempDir, otherProjectDir]);
+
+        const frontendAlertsPath = path.join(tempDir, LLM_ALERTS_FILENAME);
+        const backendAlertsPath = path.join(otherProjectDir, LLM_ALERTS_FILENAME);
+
+        const frontendParsed = JSON.parse(await fs.readFile(frontendAlertsPath, "utf-8"));
+        const backendParsed = JSON.parse(await fs.readFile(backendAlertsPath, "utf-8"));
+
+        expect(frontendParsed.alerts["API_CONTRACT_SCAN:FrontendGuard"]).toBeDefined();
+        expect(frontendParsed.alerts["API_CONTRACT_SCAN:BackendGuard"]).toBeUndefined();
+
+        expect(backendParsed.alerts["API_CONTRACT_SCAN:BackendGuard"]).toBeDefined();
+        expect(backendParsed.alerts["API_CONTRACT_SCAN:FrontendGuard"]).toBeUndefined();
+      } finally {
+        await guardianPersistence.removeGuardianFull("FrontendGuard", tempDir);
+        await guardianPersistence.removeGuardianFull("BackendGuard", otherProjectDir);
+        await fs.rm(otherProjectDir, { recursive: true, force: true });
+      }
+    });
   });
 
   // ==========================================================================

@@ -123,9 +123,12 @@ app.listen(3000);
         );
         expect(hasHallucination).toBe(true);
 
-        const apiContractAlert = alerts.find((a) => a.file === "API_CONTRACT_SCAN");
+        const apiContractAlert = alerts.find(
+          (a) => typeof a.file === "string" && a.file.startsWith("API_CONTRACT_SCAN"),
+        );
         expect(apiContractAlert).toBeTruthy();
         expect(apiContractAlert.issues.length).toBeGreaterThan(0);
+        expect(apiContractAlert.llmMessage).toContain("WatchRegression: API Contract Validation");
 
       } finally {
         if (guardian) {
@@ -207,9 +210,12 @@ app.get("/api/other", (_req, res) => res.json({ ok: true }));
         // Validate directly to avoid watcher timing flake in CI
         await (guardian as any).validateFile(schemaPath);
 
-        const apiContractAlert = alerts.find((a) => a.file === "API_CONTRACT_SCAN");
+        const apiContractAlert = alerts.find(
+          (a) => typeof a.file === "string" && a.file.startsWith("API_CONTRACT_SCAN"),
+        );
         expect(apiContractAlert).toBeTruthy();
         expect(apiContractAlert.issues.length).toBeGreaterThan(0);
+        expect(apiContractAlert.llmMessage).toContain("SchemaTriggerRegression: API Contract Validation");
       } finally {
         if (guardian) {
           try {

@@ -1,0 +1,25 @@
+{
+  "issues": [
+    {
+      "type": "apiPathMismatch",
+      "severity": "high",
+      "message": "Endpoint path mismatch: frontend calls '/shopping/{id}/toggle', similar backend route is '/api/shopping/:id/toggle' (PATCH)",
+      "file": "/home/codegoddy/Desktop/codeguardian_mcp/report/frontend/src/services/api.ts",
+      "line": 154,
+      "endpoint": "/shopping/{id}/toggle",
+      "suggestion": "Update frontend path to '/api/shopping/:id/toggle' to match backend, or verify the endpoint URL is correct",
+      "confidence": 90
+    }
+  ],
+  "summary": {
+    "totalIssues": 1,
+    "critical": 0,
+    "high": 1,
+    "medium": 0,
+    "low": 0,
+    "matchedEndpoints": 23,
+    "matchedTypes": 4,
+    "unmatchedFrontend": 0,
+    "unmatchedBackend": 0
+  }
+}

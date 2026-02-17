@@ -985,31 +985,19 @@ function findMatchingRoute(
   routes: ApiRouteDefinition[],
 ): { route: ApiRouteDefinition; isMethodMismatch: boolean } | undefined {
   const normalizedEndpoint = normalizePath(service.endpoint);
+  const normalizedEndpointForMismatch = normalizePathForMethodMismatch(service.endpoint);
+  const frontendMethod = service.method.toUpperCase();
 
   // First try exact match (path + method)
   const exactMatch = routes.find((route) => {
     const normalizedRoute = normalizePath(route.path);
     return (
       normalizedRoute === normalizedEndpoint &&
-      route.method.toUpperCase() === service.method.toUpperCase()
+      route.method.toUpperCase() === frontendMethod
     );
   });
 
   if (exactMatch) return { route: exactMatch, isMethodMismatch: false };
-
-  // Check if there's a route with same path but DIFFERENT method
-  // This is a method mismatch we need to flag
-  const samePathDifferentMethod = routes.find((route) => {
-    const normalizedRoute = normalizePath(route.path);
-    return (
-      normalizedRoute === normalizedEndpoint &&
-      route.method.toUpperCase() !== service.method.toUpperCase()
-    );
-  });
-
-  if (samePathDifferentMethod) {
-    return { route: samePathDifferentMethod, isMethodMismatch: true };
-  }
 
   // Try fuzzy match (handle API prefix differences)
   const fuzzyMatch = routes.find((route) => {
@@ -1074,7 +1062,75 @@ function findMatchingRoute(
 
   if (prefixParamMatch) return { route: prefixParamMatch, isMethodMismatch: false };
 
+  // Check if there's a route with same path but DIFFERENT method.
+  // Run this AFTER same-method fuzzy/param matching so we don't misclassify
+  // equivalent routes that use different path-param syntaxes.
+  const samePathDifferentMethods = routes.filter((route) => {
+    const normalizedRoute = normalizePath(route.path);
+    const normalizedRouteForMismatch = normalizePathForMethodMismatch(route.path);
+    return (
+      (normalizedRoute === normalizedEndpoint ||
+        normalizedRouteForMismatch === normalizedEndpointForMismatch) &&
+      route.method.toUpperCase() !== frontendMethod
+    );
+  });
+
+  if (samePathDifferentMethods.length > 0) {
+    const preferredMismatchRoute = samePathDifferentMethods.reduce((best, candidate) => {
+      const bestScore = scoreMethodMismatchCandidate(frontendMethod, best.method);
+      const candidateScore = scoreMethodMismatchCandidate(frontendMethod, candidate.method);
+      return candidateScore > bestScore ? candidate : best;
+    });
+
+    return { route: preferredMismatchRoute, isMethodMismatch: true };
+  }
+
   return undefined;
+}
+
+function scoreMethodMismatchCandidate(frontendMethodRaw: string, backendMethodRaw: string): number {
+  const frontendMethod = frontendMethodRaw.toUpperCase();
+  const backendMethod = backendMethodRaw.toUpperCase();
+
+  if (frontendMethod === backendMethod) return 100;
+
+  const writeMethods = new Set(["POST", "PUT", "PATCH"]);
+  const readMethods = new Set(["GET", "HEAD"]);
+
+  if (frontendMethod === "POST") {
+    if (backendMethod === "PUT") return 95;
+    if (backendMethod === "PATCH") return 90;
+  }
+
+  if (frontendMethod === "PUT") {
+    if (backendMethod === "PATCH") return 95;
+    if (backendMethod === "POST") return 90;
+  }
+
+  if (frontendMethod === "PATCH") {
+    if (backendMethod === "PUT") return 95;
+    if (backendMethod === "POST") return 85;
+  }
+
+  if (frontendMethod === "GET" && backendMethod === "HEAD") return 95;
+  if (frontendMethod === "HEAD" && backendMethod === "GET") return 95;
+
+  if (writeMethods.has(frontendMethod) && writeMethods.has(backendMethod)) return 80;
+  if (frontendMethod === "DELETE" && writeMethods.has(backendMethod)) return 70;
+  if (writeMethods.has(frontendMethod) && backendMethod === "DELETE") return 70;
+  if (readMethods.has(frontendMethod) && readMethods.has(backendMethod)) return 60;
+  if (writeMethods.has(frontendMethod) && readMethods.has(backendMethod)) return 40;
+  if (readMethods.has(frontendMethod) && writeMethods.has(backendMethod)) return 35;
+
+  return 30;
+}
+
+function normalizePathForMethodMismatch(pathValue: string): string {
+  return removeApiPrefix(normalizePath(pathValue))
+    .replace(/\{[^}]+\}/g, "{param}")
+    .replace(/<[^>]+>/g, "{param}")
+    .replace(/\$\{\w+\}/g, "{param}")
+    .replace(/:([a-zA-Z_]\w*)/g, "{param}");
 }
 
 function calculateEndpointMatchScore(service: ApiServiceDefinition, route: ApiRouteDefinition): number {
