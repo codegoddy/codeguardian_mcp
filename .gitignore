@@ -160,11 +160,11 @@ cython_debug/
 
 # CodeGuardian Cache
 .codeguardian/
- 
+
 #Testing Reports
-#report/
-#report.json
-#report.md
+report/
+report.json
+report.md
 # API Contract test results
 api-contract-results.txt
 
