@@ -29,10 +29,16 @@ import type {
   ASTTypeReference,
 } from "./types.js";
 import { resolveImport } from "../../context/projectContext.js";
-import { extractSymbolsAST, collectLocalDefinitionsAST } from "./extractors/index.js";
+import {
+  extractSymbolsAST,
+  collectLocalDefinitionsAST,
+} from "./extractors/index.js";
 import { parseCodeCached } from "./parser.js";
 import { suggestSimilar, extractSimilarSymbols } from "./scoring.js";
-import { isPythonSymbolExported, getPythonPipNameForImport } from "./manifest.js";
+import {
+  isPythonSymbolExported,
+  getPythonPipNameForImport,
+} from "./manifest.js";
 import {
   isJSBuiltin,
   isPythonBuiltin,
@@ -82,11 +88,19 @@ function findPrismaSchemaPathSync(projectPath: string): string | null {
   // Fallback: scan for any prisma/schema.prisma under the project root
   // (best-effort; guarded by caching so it won't run repeatedly).
   try {
-    const matches = globSync(path.join(projectPath, "**/prisma/schema.prisma"), {
-      ignore: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.git/**"],
-      nodir: true,
-      absolute: true,
-    });
+    const matches = globSync(
+      path.join(projectPath, "**/prisma/schema.prisma"),
+      {
+        ignore: [
+          "**/node_modules/**",
+          "**/dist/**",
+          "**/build/**",
+          "**/.git/**",
+        ],
+        nodir: true,
+        absolute: true,
+      },
+    );
     if (!matches || matches.length === 0) return null;
     matches.sort((a, b) => a.split(path.sep).length - b.split(path.sep).length);
     return matches[0] || null;
@@ -159,7 +173,11 @@ export async function validateManifest(
   const issues: ValidationIssue[] = [];
 
   // Phase 1: Collect all unknown packages that need registry lookup
-  const unknownPackages: Array<{ imp: ASTImport; pkgName: string; scopedName: string }> = [];
+  const unknownPackages: Array<{
+    imp: ASTImport;
+    pkgName: string;
+    scopedName: string;
+  }> = [];
 
   for (const imp of imports) {
     if (!imp.isExternal) continue;
@@ -173,9 +191,8 @@ export async function validateManifest(
 
     // Check if package is in manifest
     if (!manifest.all.has(pkgName)) {
-      const scopedName =
-        imp.module.startsWith("@") ?
-          imp.module.split("/").slice(0, 2).join("/")
+      const scopedName = imp.module.startsWith("@")
+        ? imp.module.split("/").slice(0, 2).join("/")
         : pkgName;
 
       if (!manifest.all.has(scopedName)) {
@@ -193,7 +210,7 @@ export async function validateManifest(
   if (unknownPackages.length === 0) return issues;
 
   // Phase 2: Batch registry lookups — deduplicate and check in parallel
-  const uniquePkgNames = [...new Set(unknownPackages.map(u => u.pkgName))];
+  const uniquePkgNames = [...new Set(unknownPackages.map((u) => u.pkgName))];
   const REGISTRY_BATCH_SIZE = 10;
   const registryResults = new Map<string, boolean>();
 
@@ -203,7 +220,7 @@ export async function validateManifest(
       batch.map(async (pkgName) => ({
         pkgName,
         exists: await checkPackageRegistry(pkgName, language),
-      }))
+      })),
     );
     for (const { pkgName, exists } of results) {
       registryResults.set(pkgName, exists);
@@ -215,9 +232,10 @@ export async function validateManifest(
     const existsInRegistry = registryResults.get(pkgName) ?? false;
 
     if (existsInRegistry) {
-      const installCmd = language === "python"
-        ? `Run: pip install ${pkgName} (or add to requirements.txt)`
-        : `Run: npm install ${pkgName}`;
+      const installCmd =
+        language === "python"
+          ? `Run: pip install ${pkgName} (or add to requirements.txt)`
+          : `Run: npm install ${pkgName}`;
       issues.push({
         type: "missingDependency",
         severity: "low",
@@ -261,14 +279,14 @@ function getPackageName(importPath: string, language?: string): string {
     const parts = importPath.split("/");
     return parts.length >= 2 ? `${parts[0]}/${parts[1]}` : importPath;
   }
-  
+
   // For Python, handle dot notation for submodules: package.submodule -> package
   // This is critical because Python uses dots for submodules (e.g., fastapi.middleware.cors)
   // while JavaScript/TypeScript uses slashes (e.g., package/submodule)
   if (language === "python") {
     return importPath.split(".")[0];
   }
-  
+
   // Regular packages: package/path -> package
   return importPath.split("/")[0];
 }
@@ -543,7 +561,10 @@ export function validateSymbols(
   const validVariables = new Map<string, ProjectSymbol>();
 
   // Helper to get first matching symbol by scope
-  const getMatchingSymbol = (symbols: ProjectSymbol[] | undefined, objectName?: string): ProjectSymbol | undefined => {
+  const getMatchingSymbol = (
+    symbols: ProjectSymbol[] | undefined,
+    objectName?: string,
+  ): ProjectSymbol | undefined => {
     if (!symbols || symbols.length === 0) return undefined;
     if (symbols.length === 1) {
       // Single symbol - check if scope matches (if it has one)
@@ -582,9 +603,9 @@ export function validateSymbols(
     const projectSym = {
       name: sym.name,
       type:
-        sym.type === "interface" || sym.type === "type" ?
-          ("variable" as const)
-        : (sym.type as any),
+        sym.type === "interface" || sym.type === "type"
+          ? ("variable" as const)
+          : (sym.type as any),
       file: "(new code)",
       params: sym.params,
       paramCount: sym.paramCount,
@@ -689,6 +710,32 @@ export function validateSymbols(
       }
 
       for (const name of imp.names) {
+        const unresolvedRelativeModule =
+          !!context &&
+          !!filePath &&
+          filePath.trim().length > 0 &&
+          imp.module.startsWith(".") &&
+          !resolvedFile;
+
+        // Namespace imports (`import * as x from ...`) do not require
+        // an export literally named `*`. Only module existence matters.
+        if (name.imported === "*" && !unresolvedRelativeModule) {
+          if (name.local && name.local !== "*") {
+            const namespaceSym: ProjectSymbol = {
+              name: name.local,
+              type: "variable",
+              file: resolvedFile || imp.module,
+            };
+            validVariables.set(name.local, namespaceSym);
+            validFunctions.set(name.local, {
+              ...namespaceSym,
+              type: "function",
+            });
+            validClasses.set(name.local, { ...namespaceSym, type: "class" });
+          }
+          continue;
+        }
+
         // If we resolved the file, check its exports directly (Robust Check)
         if (resolvedFile && context) {
           const fileInfo = context.files.get(resolvedFile);
@@ -706,7 +753,9 @@ export function validateSymbols(
               // (sometimes exports are implicit in simple extractors)
               // For Python: ALL module-level names are importable (no export keyword)
               let symExport = fileInfo.symbols.find(
-                (s) => (language === "python" || s.exported) && s.name === name.imported,
+                (s) =>
+                  (language === "python" || s.exported) &&
+                  s.name === name.imported,
               );
 
               // For Python: check if the symbol is imported at module level in the target file.
@@ -715,12 +764,18 @@ export function validateSymbols(
               // works if cli_tokens.py has `from app.models.cli_token import CLIToken`).
               if (!symExport && language === "python") {
                 const isImportedInModule = fileInfo.imports.some(
-                  (modImp) => modImp.namedImports.includes(name.imported) ||
-                              modImp.defaultImport === name.imported,
+                  (modImp) =>
+                    modImp.namedImports.includes(name.imported) ||
+                    modImp.defaultImport === name.imported,
                 );
                 if (isImportedInModule) {
                   // Treat as found — symbol is a valid Python namespace member via re-import
-                  symExport = { name: name.imported, kind: "variable" as const, line: 0, exported: true };
+                  symExport = {
+                    name: name.imported,
+                    kind: "variable" as const,
+                    line: 0,
+                    exported: true,
+                  };
                 }
               }
 
@@ -731,9 +786,19 @@ export function validateSymbols(
                   const resolvedDir = resolvedFile.endsWith("__init__.py")
                     ? path.dirname(resolvedFile)
                     : path.dirname(resolvedFile);
-                  const subModPy = path.join(resolvedDir, `${name.imported}.py`);
-                  const subModInit = path.join(resolvedDir, name.imported, "__init__.py");
-                  if (context.files.has(subModPy) || context.files.has(subModInit)) {
+                  const subModPy = path.join(
+                    resolvedDir,
+                    `${name.imported}.py`,
+                  );
+                  const subModInit = path.join(
+                    resolvedDir,
+                    name.imported,
+                    "__init__.py",
+                  );
+                  if (
+                    context.files.has(subModPy) ||
+                    context.files.has(subModInit)
+                  ) {
                     // Valid sub-module import
                     continue;
                   }
@@ -864,19 +929,36 @@ export function validateSymbols(
         if (language === "python" && projectSym) {
           // First check if it's a sub-module file (sub-modules don't need __all__)
           if (context) {
-            const moduleDir = imp.module.replace(/^\.+/, "").replace(/\./g, "/");
+            const moduleDir = imp.module
+              .replace(/^\.+/, "")
+              .replace(/\./g, "/");
             const basePath = context.projectPath;
             let subModFound = false;
-            const subModPy = path.join(basePath, moduleDir, `${name.imported}.py`);
-            const subModInit = path.join(basePath, moduleDir, name.imported, "__init__.py");
+            const subModPy = path.join(
+              basePath,
+              moduleDir,
+              `${name.imported}.py`,
+            );
+            const subModInit = path.join(
+              basePath,
+              moduleDir,
+              name.imported,
+              "__init__.py",
+            );
             if (context.files.has(subModPy) || context.files.has(subModInit)) {
               subModFound = true;
             } else {
               // Full-stack fallback: walk up from file dir
               let tryDir = path.dirname(filePath);
               while (!subModFound && tryDir.length > basePath.length) {
-                if (context.files.has(path.join(tryDir, moduleDir, `${name.imported}.py`)) ||
-                    context.files.has(path.join(tryDir, moduleDir, name.imported, "__init__.py"))) {
+                if (
+                  context.files.has(
+                    path.join(tryDir, moduleDir, `${name.imported}.py`),
+                  ) ||
+                  context.files.has(
+                    path.join(tryDir, moduleDir, name.imported, "__init__.py"),
+                  )
+                ) {
                   subModFound = true;
                 }
                 tryDir = path.dirname(tryDir);
@@ -930,11 +1012,22 @@ export function validateSymbols(
           // For Python: check if the imported name is a sub-module file
           // e.g., "from app.api import auth" where app/api/auth.py exists
           if (language === "python" && context) {
-            const modulePath = imp.module.replace(/^\.+/, "").replace(/\./g, "/");
+            const modulePath = imp.module
+              .replace(/^\.+/, "")
+              .replace(/\./g, "/");
             const basePath = context.projectPath;
             let resolvedSubMod: string | null = null;
-            const subModulePy = path.join(basePath, modulePath, `${name.imported}.py`);
-            const subModuleInit = path.join(basePath, modulePath, name.imported, "__init__.py");
+            const subModulePy = path.join(
+              basePath,
+              modulePath,
+              `${name.imported}.py`,
+            );
+            const subModuleInit = path.join(
+              basePath,
+              modulePath,
+              name.imported,
+              "__init__.py",
+            );
             if (context.files.has(subModulePy)) {
               resolvedSubMod = subModulePy;
             } else if (context.files.has(subModuleInit)) {
@@ -943,8 +1036,17 @@ export function validateSymbols(
               // Full-stack fallback: walk up from file dir
               let tryDir = path.dirname(filePath);
               while (!resolvedSubMod && tryDir.length > basePath.length) {
-                const tryPy = path.join(tryDir, modulePath, `${name.imported}.py`);
-                const tryInit = path.join(tryDir, modulePath, name.imported, "__init__.py");
+                const tryPy = path.join(
+                  tryDir,
+                  modulePath,
+                  `${name.imported}.py`,
+                );
+                const tryInit = path.join(
+                  tryDir,
+                  modulePath,
+                  name.imported,
+                  "__init__.py",
+                );
                 if (context.files.has(tryPy)) {
                   resolvedSubMod = tryPy;
                 } else if (context.files.has(tryInit)) {
@@ -1040,7 +1142,10 @@ export function validateSymbols(
   // Lightweight literal-type inference for locally-defined variables in the new code.
   // Used to validate method calls on obvious built-in types (e.g., array literals) without
   // over-flagging methods on unknown values (e.g., results of createRoot()).
-  const localLiteralKinds = new Map<string, "array" | "object" | "string" | "json">();
+  const localLiteralKinds = new Map<
+    string,
+    "array" | "object" | "string" | "json"
+  >();
   if (language === "javascript" || language === "typescript") {
     try {
       const tree = parseCodeCached(newCode, language, {
@@ -1060,7 +1165,10 @@ export function validateSymbols(
           const fn = valueNode.childForFieldName("function");
           if (fn?.type === "member_expression") {
             const prop = fn.childForFieldName("property");
-            if (prop && newCode.slice(prop.startIndex, prop.endIndex) === "json") {
+            if (
+              prop &&
+              newCode.slice(prop.startIndex, prop.endIndex) === "json"
+            ) {
               return true;
             }
           }
@@ -1175,9 +1283,8 @@ export function validateSymbols(
         issues.push({
           type: "nonExistentFunction",
           severity: "critical",
-          message:
-            existsInProject ?
-              `Function '${used.name}' exists in your project but is not imported in this file`
+          message: existsInProject
+            ? `Function '${used.name}' exists in your project but is not imported in this file`
             : `Function '${used.name}' does not exist in project`,
           line: used.line,
           file: filePath,
@@ -1196,7 +1303,7 @@ export function validateSymbols(
 
         // Check if argument count is within valid range [min, max]
         const isValidArgCount = used.argCount >= min && used.argCount <= max;
-        
+
         if (!isValidArgCount && strictMode) {
           const { confidence, reasoning } = calculateConfidence({
             issueType: "wrongParamCount",
@@ -1206,10 +1313,7 @@ export function validateSymbols(
             strictMode,
           });
 
-          const expectedRange = 
-            min === max
-              ? `${max}`
-              : `${min}-${max}`;
+          const expectedRange = min === max ? `${max}` : `${min}-${max}`;
 
           issues.push({
             type: "wrongParamCount",
@@ -1218,9 +1322,8 @@ export function validateSymbols(
             line: used.line,
             file: filePath,
             code: used.code,
-            suggestion:
-              func.params ?
-                `Expected params: ${func.params.join(", ")}`
+            suggestion: func.params
+              ? `Expected params: ${func.params.join(", ")}`
               : `Check the function signature in ${func.file}`,
             confidence,
             reasoning,
@@ -1239,7 +1342,19 @@ export function validateSymbols(
       // - (expr as Type).property -> expr
       function extractRootObject(obj: string): string {
         if (!obj) return "";
-        
+        const trimmedObj = obj.trim();
+
+        // Template/string literal roots are expression values, not variable identifiers.
+        // Example: `${sop.code}-${sop.number}`.toLowerCase().includes(q)
+        // Returning a pseudo-root like `${sop` causes false undefinedVariable findings.
+        if (
+          trimmedObj.startsWith("`") ||
+          trimmedObj.startsWith('"') ||
+          trimmedObj.startsWith("'")
+        ) {
+          return "";
+        }
+
         // Handle parenthesized expressions at the start: (expr).prop -> extract from expr
         if (obj.startsWith("(")) {
           // Find the matching closing parenthesis
@@ -1265,14 +1380,18 @@ export function validateSymbols(
             // Not a type assertion — check if it's an arithmetic/logical/nullish expression
             // e.g., (i + 1), (value / 1000), (milestones || []), (budgetUsedPercentage || 0)
             // These are NOT object references — skip method validation entirely.
-            if (/[+\-*/%|&<>=!~^]/.test(innerExpr) || /\s\|\|\s/.test(innerExpr) || /\s\?\?\s/.test(innerExpr)) {
+            if (
+              /[+\-*/%|&<>=!~^]/.test(innerExpr) ||
+              /\s\|\|\s/.test(innerExpr) ||
+              /\s\?\?\s/.test(innerExpr)
+            ) {
               return ""; // Not a valid object reference
             }
             // Otherwise extract from the inner expression (e.g., (myObj).method())
             return extractRootObject(innerExpr);
           }
         }
-        
+
         // Split on delimiters and take the first part
         const root = obj
           .split("?.")[0]
@@ -1280,16 +1399,21 @@ export function validateSymbols(
           .split("[")[0]
           .split("(")[0]
           .trim();
-        
+
+        // Template interpolation fragments like `${foo` are not identifiers.
+        if (root.startsWith("${")) {
+          return "";
+        }
+
         // If the extracted root contains spaces or operators, it's an expression, not an identifier
         // e.g., "i + 1" from a failed parenthesized expression extraction
         if (/\s/.test(root) || /[+\-*/%|&<>=!~^]/.test(root)) {
           return ""; // Not a valid identifier
         }
-        
+
         return root;
       }
-      
+
       const rootObject = extractRootObject(used.object || "");
 
       // If we can't reliably identify a root identifier (e.g. `[1,2,3].map()`),
@@ -1304,19 +1428,28 @@ export function validateSymbols(
         const first = rootObject[0];
         if (!first || first.toUpperCase() === first) return "";
         const candidate = first.toUpperCase() + rootObject.slice(1);
-        return projectClasses.has(candidate) || hasContextClass(candidate) ? candidate : "";
+        return projectClasses.has(candidate) || hasContextClass(candidate)
+          ? candidate
+          : "";
       })();
 
       const scopesToMatch = new Set<string>(
-        [used.object, rootObject, inferredClassName].filter(Boolean) as string[],
+        [used.object, rootObject, inferredClassName].filter(
+          Boolean,
+        ) as string[],
       );
 
       // CRITICAL FIX: Skip ALL 'this'/'self'/'cls' method calls - we can't validate class scope
       // The 'this' keyword (JS/TS) and 'self'/'cls' (Python) are always in scope within a class context
       // TypeScript/ESLint/mypy handle class method validation, not CodeGuardian
-      if (used.object === "this" || used.object?.startsWith("this.") ||
-          used.object === "self" || used.object?.startsWith("self.") ||
-          used.object === "cls" || used.object?.startsWith("cls.")) {
+      if (
+        used.object === "this" ||
+        used.object?.startsWith("this.") ||
+        used.object === "self" ||
+        used.object?.startsWith("self.") ||
+        used.object === "cls" ||
+        used.object?.startsWith("cls.")
+      ) {
         continue; // Trust class scope - this is not a hallucination risk
       }
 
@@ -1449,21 +1582,23 @@ export function validateSymbols(
         // that `<model>` exists as a Prisma delegate derived from schema.prisma.
         // This catches hallucinations like `prisma.ghostItems.findMany()`.
         if (rootObject === "prisma" && typeof used.object === "string") {
-          const expr = used.object
-            .replace(/\s+/g, "")
-            .replace(/\?\./g, ".");
+          const expr = used.object.replace(/\s+/g, "").replace(/\?\./g, ".");
 
           // Only handle the delegate form. Client-level methods like `prisma.$transaction()`
           // have used.object === "prisma" and should not be checked here.
           const parts = expr.split(".").filter(Boolean);
-          const looksLikeDelegateCall = parts.length >= 2 && parts[0] === "prisma";
+          const looksLikeDelegateCall =
+            parts.length >= 2 && parts[0] === "prisma";
           if (looksLikeDelegateCall && context?.projectPath) {
             const delegate = parts[1];
             // Ignore $-prefixed Prisma client methods just in case the parser produced a chain.
             if (delegate && !delegate.startsWith("$")) {
               const delegates = loadPrismaDelegatesSync(context.projectPath);
               if (delegates.size > 0 && !delegates.has(delegate)) {
-                const suggestion = suggestSimilar(delegate, Array.from(delegates));
+                const suggestion = suggestSimilar(
+                  delegate,
+                  Array.from(delegates),
+                );
                 const similarSymbols = extractSimilarSymbols(suggestion);
                 const { confidence, reasoning } = calculateConfidence({
                   issueType: "undefinedVariable",
@@ -1513,9 +1648,18 @@ export function validateSymbols(
         // NOT for generic whitelisted objects (db, prisma, etc.) where `as any` may
         // be a legitimate workaround for missing type definitions.
         const STEALTH_HALLUCINATION_GLOBALS = new Set([
-          "window", "navigator", "document", "location", "history",
-          "localStorage", "sessionStorage", "console", "process",
-          "global", "globalThis", "Intl",
+          "window",
+          "navigator",
+          "document",
+          "location",
+          "history",
+          "localStorage",
+          "sessionStorage",
+          "console",
+          "process",
+          "global",
+          "globalThis",
+          "Intl",
         ]);
 
         if (STEALTH_HALLUCINATION_GLOBALS.has(rootObject)) {
@@ -1545,7 +1689,10 @@ export function validateSymbols(
           // Check for @ts-ignore or @ts-expect-error which indicates intentional bypass
           const codeLines = newCode.split("\n");
           const prevLine = codeLines[used.line - 2]; // line is 1-indexed
-          if (prevLine?.includes("@ts-ignore") || prevLine?.includes("@ts-expect-error")) {
+          if (
+            prevLine?.includes("@ts-ignore") ||
+            prevLine?.includes("@ts-expect-error")
+          ) {
             issues.push({
               type: "nonExistentMethod",
               severity: "high",
@@ -1558,26 +1705,51 @@ export function validateSymbols(
               reasoning: `Method call on '${used.object}' uses @ts-ignore to bypass type checking, which often indicates the method doesn't exist or has incorrect types.`,
             });
           }
-          
+
           // SPECIAL CASE: ORM Pattern Detection (Prisma, TypeORM, Sequelize, etc.)
           // These ORMs have dynamic model access patterns like:
           // - prisma.user.findMany() - 'user' is a model name
           // - prisma.pantryItem.create() - 'pantryItem' is a model name
           // We should validate that the METHOD (findMany, create, etc.) is a known ORM method
           // and flag hallucinated methods like hallucinateMissingFunction()
-          const ORM_OBJECTS = new Set(["prisma", "db", "entityManager", "repository", "queryBuilder"]);
+          const ORM_OBJECTS = new Set([
+            "prisma",
+            "db",
+            "entityManager",
+            "repository",
+            "queryBuilder",
+          ]);
           if (ORM_OBJECTS.has(rootObject)) {
             // Known Prisma methods
             const KNOWN_PRISMA_METHODS = new Set([
               // Model-level methods (called on prisma.model)
-              "findMany", "findUnique", "findFirst", "findFirstOrThrow", "findUniqueOrThrow",
-              "create", "createMany", "update", "updateMany", "upsert",
-              "delete", "deleteMany", "count", "aggregate", "groupBy",
+              "findMany",
+              "findUnique",
+              "findFirst",
+              "findFirstOrThrow",
+              "findUniqueOrThrow",
+              "create",
+              "createMany",
+              "update",
+              "updateMany",
+              "upsert",
+              "delete",
+              "deleteMany",
+              "count",
+              "aggregate",
+              "groupBy",
               // Client-level methods (called on prisma)
-              "$connect", "$disconnect", "$transaction", "$queryRaw", "$executeRaw",
-              "$use", "$on", "$extends", "$extends",
+              "$connect",
+              "$disconnect",
+              "$transaction",
+              "$queryRaw",
+              "$executeRaw",
+              "$use",
+              "$on",
+              "$extends",
+              "$extends",
             ]);
-            
+
             // Check if this is a model-level call (prisma.modelName.method())
             // or a client-level call (prisma.$method())
             if (used.object?.includes(".")) {
@@ -1587,7 +1759,10 @@ export function validateSymbols(
                 // Check for @ts-ignore or @ts-expect-error which indicates intentional bypass
                 const codeLines = newCode.split("\n");
                 const prevLine = codeLines[used.line - 2]; // line is 1-indexed
-                if (prevLine?.includes("@ts-ignore") || prevLine?.includes("@ts-expect-error")) {
+                if (
+                  prevLine?.includes("@ts-ignore") ||
+                  prevLine?.includes("@ts-expect-error")
+                ) {
                   issues.push({
                     type: "nonExistentMethod",
                     severity: "high",
@@ -1630,9 +1805,10 @@ export function validateSymbols(
         // Check if the object is a locally-defined variable (function params, assignments, loop vars, etc.)
         localDefinitions.has(rootObject!) ||
         // Python: Check if rootObject is the base of a dotted import (e.g., `import concurrent.futures` → `concurrent`)
-        (language === "python" && imports.some(imp =>
-          imp.names.some(n => n.local.startsWith(rootObject + "."))
-        )) ||
+        (language === "python" &&
+          imports.some((imp) =>
+            imp.names.some((n) => n.local.startsWith(rootObject + ".")),
+          )) ||
         // Always trust common short variable names in non-strict mode
         (!strictMode &&
           [
@@ -1749,7 +1925,9 @@ export function validateSymbols(
           ? imports.find(
               (i) =>
                 i.module === "react" &&
-                i.names.some((n) => n.local === objectName || n.local === used.object),
+                i.names.some(
+                  (n) => n.local === objectName || n.local === used.object,
+                ),
             )
           : undefined;
 
@@ -1786,7 +1964,10 @@ export function validateSymbols(
             continue;
           }
 
-          const suggestion = suggestSimilar(used.name, Array.from(REACT_NAMESPACE_METHODS));
+          const suggestion = suggestSimilar(
+            used.name,
+            Array.from(REACT_NAMESPACE_METHODS),
+          );
           issues.push({
             type: "nonExistentMethod",
             severity: "medium",
@@ -1794,7 +1975,9 @@ export function validateSymbols(
             line: used.line,
             file: filePath,
             code: used.code,
-            suggestion: suggestion || "Use a real React API (e.g., useState, useEffect, memo, forwardRef).",
+            suggestion:
+              suggestion ||
+              "Use a real React API (e.g., useState, useEffect, memo, forwardRef).",
             confidence: 86,
             reasoning: `The object '${objectName}' is imported from 'react'. React's public API is stable; '${used.name}' is not in a conservative allowlist of common React namespace methods/hooks.`,
           });
@@ -1805,7 +1988,9 @@ export function validateSymbols(
       if (!shouldCheck) {
         const objectName = rootObject || used.object;
         const imp = imports.find((i) =>
-          i.names.some((n) => n.local === objectName || n.local === used.object),
+          i.names.some(
+            (n) => n.local === objectName || n.local === used.object,
+          ),
         );
         if (imp) {
           if (missingPackages.has(imp.module)) {
@@ -1814,7 +1999,9 @@ export function validateSymbols(
             // For internal imports, check if we have CLASS info
             const objClass =
               projectClasses.get(objectName!) ||
-              (inferredClassName ? projectClasses.get(inferredClassName) : undefined);
+              (inferredClassName
+                ? projectClasses.get(inferredClassName)
+                : undefined);
             if (objClass || inferredClassName) {
               shouldCheck = true; // We have class info, so we can validate methods
             }
@@ -1850,9 +2037,14 @@ export function validateSymbols(
           // Use projectClasses (actual class definitions), not validClasses (which includes all imports)
           const objClass =
             projectClasses.get(objectName!) ||
-            (inferredClassName ? projectClasses.get(inferredClassName) : undefined);
+            (inferredClassName
+              ? projectClasses.get(inferredClassName)
+              : undefined);
 
-          if ((objClass || inferredClassName) && objClass?.file !== "(new code)") {
+          if (
+            (objClass || inferredClassName) &&
+            objClass?.file !== "(new code)"
+          ) {
             shouldCheck = true;
           }
 
@@ -1887,7 +2079,7 @@ export function validateSymbols(
       ];
       const methodSym = validMethods.get(used.name);
       const funcSym = validFunctions.get(used.name);
-      
+
       // Check ALL method symbols for a scope match, not just the single representative
       const methodMatches =
         methodSyms.some((s) => !s.scope || scopesToMatch.has(s.scope)) ||
@@ -1897,7 +2089,8 @@ export function validateSymbols(
       // validate `ApiService.stream()` — that's a name collision, not a real method.
       const funcMatches =
         funcSyms.some(
-          (s) => (!s.scope || scopesToMatch.has(s.scope)) && s.file !== "(new code)",
+          (s) =>
+            (!s.scope || scopesToMatch.has(s.scope)) && s.file !== "(new code)",
         ) ||
         (funcSym &&
           (!funcSym.scope || scopesToMatch.has(funcSym.scope)) &&
@@ -1908,30 +2101,260 @@ export function validateSymbols(
       // and won't appear in the project symbol table
       const FRAMEWORK_METHODS = new Set([
         // Pydantic BaseModel methods (v1 + v2)
-        "model_validate", "model_dump", "model_json_schema", "model_copy",
-        "model_validate_json", "model_dump_json", "model_fields_set",
-        "model_construct", "model_post_init", "model_rebuild",
-        "dict", "json", "parse_obj", "parse_raw", "parse_file",
-        "from_orm", "schema", "schema_json", "validate", "update_forward_refs",
-        "copy", "construct",
-        // SQLAlchemy Model/Query methods
-        "query", "filter", "filter_by", "all", "first", "one", "one_or_none",
-        "get", "count", "delete", "update", "order_by", "limit", "offset",
-        "join", "outerjoin", "group_by", "having", "distinct", "subquery",
-        "scalar", "scalars", "execute", "add", "flush", "commit", "rollback",
-        "refresh", "expire", "expunge", "merge", "close",
+        "model_validate",
+        "model_dump",
+        "model_json_schema",
+        "model_copy",
+        "model_validate_json",
+        "model_dump_json",
+        "model_fields_set",
+        "model_construct",
+        "model_post_init",
+        "model_rebuild",
+        "dict",
+        "json",
+        "parse_obj",
+        "parse_raw",
+        "parse_file",
+        "from_orm",
+        "schema",
+        "schema_json",
+        "validate",
+        "update_forward_refs",
+        "copy",
+        "construct",
+        // SQLAlchemy Model/Query methods (legacy 1.x style)
+        "query",
+        "filter",
+        "filter_by",
+        "all",
+        "first",
+        "one",
+        "one_or_none",
+        "get",
+        "count",
+        "delete",
+        "update",
+        "order_by",
+        "limit",
+        "offset",
+        "join",
+        "outerjoin",
+        "group_by",
+        "having",
+        "distinct",
+        "subquery",
+        "scalar",
+        "scalars",
+        "execute",
+        "add",
+        "flush",
+        "commit",
+        "rollback",
+        "refresh",
+        "expire",
+        "expunge",
+        "merge",
+        "close",
+        // SQLAlchemy 2.0 Core / Select / Result methods
+        // These are called on select(...) / session.execute(...) results and are
+        // extremely common in async FastAPI/SQLAlchemy 2.0 codebases.
+        "where",
+        "select_from",
+        "scalar_one_or_none",
+        "scalar_one",
+        "fetchall",
+        "fetchone",
+        "fetchmany",
+        "mappings",
+        "partitions",
+        "unique",
+        "tuples",
+        "columns",
+        "returning",
+        "with_for_update",
+        "correlate",
+        "correlate_except",
+        "execution_options",
+        "options",
+        "populate_existing",
+        "yield_per",
+        // SQLAlchemy event system (e.g., @event.listens_for(Model, 'after_insert'))
+        "listens_for",
+        "listen",
+        "remove",
         // SQLAlchemy Column expression methods (called on Model.column attributes)
-        "desc", "asc", "in_", "notin_", "not_in", "isnot", "is_", "is_not",
-        "like", "ilike", "not_like", "not_ilike", "contains", "startswith", "endswith",
-        "between", "any_", "has", "label", "cast", "op", "collate",
-        "nullsfirst", "nullslast", "regexp_match", "regexp_replace",
-        "concat", "distinct", "nulls_first", "nulls_last",
+        "desc",
+        "asc",
+        "in_",
+        "notin_",
+        "not_in",
+        "isnot",
+        "is_",
+        "is_not",
+        "like",
+        "ilike",
+        "not_like",
+        "not_ilike",
+        "contains",
+        "startswith",
+        "endswith",
+        "between",
+        "any_",
+        "has",
+        "label",
+        "cast",
+        "op",
+        "collate",
+        "nullsfirst",
+        "nullslast",
+        "regexp_match",
+        "regexp_replace",
+        "concat",
+        "nulls_first",
+        "nulls_last",
         // Django ORM methods
-        "objects", "create", "get_or_create", "update_or_create",
-        "bulk_create", "bulk_update", "values", "values_list",
-        "annotate", "aggregate", "exists", "exclude", "select_related",
-        "prefetch_related", "defer", "only", "using", "raw",
-        "save", "full_clean", "clean", "clean_fields",
+        "objects",
+        "create",
+        "get_or_create",
+        "update_or_create",
+        "bulk_create",
+        "bulk_update",
+        "values",
+        "values_list",
+        "annotate",
+        "aggregate",
+        "exists",
+        "exclude",
+        "select_related",
+        "prefetch_related",
+        "defer",
+        "only",
+        "using",
+        "raw",
+        "save",
+        "full_clean",
+        "clean",
+        "clean_fields",
+        // Python stdlib – datetime / date / time
+        // These are classmethods or instance methods on datetime/date/timedelta objects.
+        // They are imported directly (from datetime import datetime) and their
+        // type is not in the project symbol table, so the method check fires falsely.
+        "now",
+        "utcnow",
+        "today",
+        "fromisoformat",
+        "fromtimestamp",
+        "utcfromtimestamp",
+        "fromordinal",
+        "combine",
+        "strptime",
+        "strftime",
+        "isoformat",
+        "timetuple",
+        "toordinal",
+        "weekday",
+        "isoweekday",
+        "isocalendar",
+        "ctime",
+        "timestamp",
+        "utctimetuple",
+        "astimezone",
+        "dst",
+        "tzname",
+        "utcoffset",
+        // Python stdlib – timedelta
+        "total_seconds",
+        // Python stdlib – pathlib.Path / os.path operations
+        "resolve",
+        "absolute",
+        "expanduser",
+        "iterdir",
+        "glob",
+        "rglob",
+        "mkdir",
+        "rmdir",
+        "unlink",
+        "rename",
+        "stat",
+        "lstat",
+        "open",
+        "read_text",
+        "write_text",
+        "read_bytes",
+        "write_bytes",
+        "is_file",
+        "is_dir",
+        "is_symlink",
+        "exists",
+        "samefile",
+        "with_name",
+        "with_suffix",
+        "with_stem",
+        "relative_to",
+        // Python stdlib – itertools / functools
+        "group", // itertools.groupby group object
+        "chain",
+        // Jinja2 Template rendering
+        "render",
+        "render_async",
+        "generate",
+        "stream",
+        "make_module",
+        "get_template",
+        "select_template",
+        "get_or_select_template",
+        // Prometheus / metrics clients (prometheus-client, opentelemetry-sdk)
+        "inc",
+        "dec",
+        "observe",
+        "set_to_current_time",
+        "labels",
+        "remove",
+        // OpenTelemetry instrumentation methods
+        "instrument",
+        "uninstrument",
+        "start_span",
+        "use_span",
+        "set_attribute",
+        "add_event",
+        "record_exception",
+        "set_status",
+        // Cloudinary / file storage SDK methods
+        "upload",
+        "destroy",
+        "rename",
+        "explicit",
+        "generate_url",
+        "add_tag",
+        "remove_tag",
+        "replace_tag",
+        "remove_all_tags",
+        // NATS / message broker methods
+        "connect",
+        "subscribe",
+        "publish",
+        "unsubscribe",
+        "drain",
+        "flush",
+        // Alembic migration helpers
+        "op",
+        "batch_alter_table",
+        "add_column",
+        "drop_column",
+        "create_table",
+        "drop_table",
+        "create_index",
+        "drop_index",
+        "alter_column",
+        "bulk_insert",
+        // Authlib / OAuth methods
+        "authorize_redirect",
+        "authorize_access_token",
+        "parse_id_token",
+        "userinfo",
+        "revoke_token",
+        "introspect_token",
       ]);
 
       if (FRAMEWORK_METHODS.has(used.name)) continue;
@@ -1944,25 +2367,80 @@ export function validateSymbols(
       if (language === "python") {
         const PYTHON_DYNAMIC_METHODS = new Set([
           // HTTP client methods (httpx, requests, aiohttp, etc.)
-          "post", "put", "patch", "request", "head", "options",
+          "post",
+          "put",
+          "patch",
+          "request",
+          "head",
+          "options",
           // Python string methods called on model attribute chains (e.g., user.email.split())
-          "split", "strip", "lstrip", "rstrip", "lower", "upper",
-          "replace", "encode", "decode", "format", "capitalize",
+          "split",
+          "strip",
+          "lstrip",
+          "rstrip",
+          "lower",
+          "upper",
+          "replace",
+          "encode",
+          "decode",
+          "format",
+          "capitalize",
           // Storage/external client methods (Supabase, S3, GCS, etc.)
-          "from_", "upload", "download", "create_signed_url", "get_public_url",
-          "get_bucket", "create_bucket", "remove", "list",
+          "from_",
+          "upload",
+          "download",
+          "create_signed_url",
+          "get_public_url",
+          "get_bucket",
+          "create_bucket",
+          "remove",
+          "list",
           // Redis client methods
-          "setex", "setnx", "getex", "hset", "hget", "hdel", "hgetall",
-          "lpush", "rpush", "lpop", "rpop", "lrange", "sadd", "srem", "smembers",
-          "zadd", "zrem", "zrange", "zrangebyscore", "expire", "ttl", "pttl",
-          "publish", "subscribe", "unsubscribe", "pipeline",
+          "setex",
+          "setnx",
+          "getex",
+          "hset",
+          "hget",
+          "hdel",
+          "hgetall",
+          "lpush",
+          "rpush",
+          "lpop",
+          "rpop",
+          "lrange",
+          "sadd",
+          "srem",
+          "smembers",
+          "zadd",
+          "zrem",
+          "zrange",
+          "zrangebyscore",
+          "expire",
+          "ttl",
+          "pttl",
+          "publish",
+          "subscribe",
+          "unsubscribe",
+          "pipeline",
           // Webhook/integration client methods
-          "create_webhook", "delete_webhook", "grant_access", "revoke_access",
-          "get_commit_details", "get_commits", "get_branches",
+          "create_webhook",
+          "delete_webhook",
+          "grant_access",
+          "revoke_access",
+          "get_commit_details",
+          "get_commits",
+          "get_branches",
           // Task/job object attribute access
-          "func", "args", "kwargs", "result", "status",
+          "func",
+          "args",
+          "kwargs",
+          "result",
+          "status",
           // Celery task methods
-          "delay", "apply_async", "retry", "revoke",
+          "delay",
+          "apply_async",
+          "retry",
+          "revoke",
         ]);
         if (PYTHON_DYNAMIC_METHODS.has(used.name)) continue;
       }
@@ -2008,7 +2486,8 @@ export function validateSymbols(
         if (localDefinitions.has(used.name)) continue;
 
         // Skip if it exists as a variable or function (dynamic class assignment)
-        if (validVariables.has(used.name) || validFunctions.has(used.name)) continue;
+        if (validVariables.has(used.name) || validFunctions.has(used.name))
+          continue;
 
         // Built-in check (Tier 1.5)
         if (
@@ -2052,9 +2531,8 @@ export function validateSymbols(
         issues.push({
           type: "nonExistentClass",
           severity: "critical",
-          message:
-            existsInProject ?
-              `Class '${used.name}' exists in your project but is not imported in this file`
+          message: existsInProject
+            ? `Class '${used.name}' exists in your project but is not imported in this file`
             : `Class '${used.name}' does not exist in project`,
           line: used.line,
           file: filePath,
@@ -2067,9 +2545,14 @@ export function validateSymbols(
     } else if (used.type === "reference") {
       // CRITICAL FIX: Skip property access on 'this'/'self'/'cls' (e.g., this.ws, self.data, cls._client)
       // These are class properties and should not be validated as standalone variables
-      if (used.object === "this" || used.object?.startsWith("this.") ||
-          used.object === "self" || used.object?.startsWith("self.") ||
-          used.object === "cls" || used.object?.startsWith("cls.")) {
+      if (
+        used.object === "this" ||
+        used.object?.startsWith("this.") ||
+        used.object === "self" ||
+        used.object?.startsWith("self.") ||
+        used.object === "cls" ||
+        used.object?.startsWith("cls.")
+      ) {
         continue; // Trust class scope - properties are validated by TypeScript/mypy
       }
 
@@ -2160,9 +2643,8 @@ export function validateSymbols(
         issues.push({
           type: "undefinedVariable",
           severity: "critical",
-          message:
-            existsInProject ?
-              `Variable '${used.name}' exists in your project but is not imported in this file`
+          message: existsInProject
+            ? `Variable '${used.name}' exists in your project but is not imported in this file`
             : `Variable '${used.name}' is not defined or imported`,
           line: used.line,
           file: filePath,
@@ -2195,8 +2677,14 @@ export function validateSymbols(
   let currentModuleAllExports: Set<string> | null = null;
   if (language === "python" && filePath && pythonExports.size > 0) {
     const basePath = context?.projectPath || "";
-    const relPath = filePath.startsWith(basePath) ? filePath.slice(basePath.length + 1) : filePath;
-    const pyModPath = relPath.replace(/__init__\.py$/, "").replace(/\.py$/, "").replace(/\//g, ".").replace(/\.$/, "");
+    const relPath = filePath.startsWith(basePath)
+      ? filePath.slice(basePath.length + 1)
+      : filePath;
+    const pyModPath = relPath
+      .replace(/__init__\.py$/, "")
+      .replace(/\.py$/, "")
+      .replace(/\//g, ".")
+      .replace(/\.$/, "");
     currentModuleAllExports = pythonExports.get(pyModPath) || null;
   }
 
@@ -2229,7 +2717,8 @@ export function validateSymbols(
       if (isInitPy) continue;
 
       // Skip if the import is listed in the module's __all__ (it's a re-export)
-      if (currentModuleAllExports && currentModuleAllExports.has(name.local)) continue;
+      if (currentModuleAllExports && currentModuleAllExports.has(name.local))
+        continue;
 
       if (!usedNames.has(name.local)) {
         // Python fallback: Check if any non-import line in the code contains the symbol name
@@ -2243,8 +2732,11 @@ export function validateSymbols(
               if (idx + 1 === imp.line) return false; // Skip the import line itself
               const trimmed = line.trim();
               if (trimmed.startsWith("#")) return false; // Skip comments
-              if (trimmed.startsWith("import ") || trimmed.startsWith("from ")) return false; // Skip other imports
-              return new RegExp(`\\b${name.local.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(line);
+              if (trimmed.startsWith("import ") || trimmed.startsWith("from "))
+                return false; // Skip other imports
+              return new RegExp(
+                `\\b${name.local.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
+              ).test(line);
             });
             if (appearsElsewhere) continue; // Used in code, skip the unused import warning
           }
@@ -2277,19 +2769,20 @@ export function validateSymbols(
   // Check if something imported with "import type" is used as a value
   for (const imp of imports) {
     if (!imp.isTypeOnly) continue; // Only check type-only imports
-    
+
     for (const name of imp.names) {
       // Check if this type-imported symbol is used as a value (not just in type positions)
-      const usages = usedSymbols.filter(u => u.name === name.local);
-      const typeUsages = typeReferences.filter(t => t.name === name.local);
-      
+      const usages = usedSymbols.filter((u) => u.name === name.local);
+      const typeUsages = typeReferences.filter((t) => t.name === name.local);
+
       // If used in runtime contexts (call, instantiation, etc.) but imported as type
-      const runtimeUsages = usages.filter(u => 
-        u.type === "call" || 
-        u.type === "instantiation" || 
-        u.type === "methodCall"
+      const runtimeUsages = usages.filter(
+        (u) =>
+          u.type === "call" ||
+          u.type === "instantiation" ||
+          u.type === "methodCall",
       );
-      
+
       if (runtimeUsages.length > 0) {
         issues.push({
           type: "typeOnlyImportMisuse",

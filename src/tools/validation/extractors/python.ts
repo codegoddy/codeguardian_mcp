@@ -25,10 +25,27 @@ import { isPythonBuiltin, isPythonBuiltinType } from "../builtins.js";
 
 // Common project-internal import prefixes for Python
 const INTERNAL_PREFIXES = [
-  "app.", "src.", "tests.", "test.", "lib.", "core.", "api.",
-  "models.", "services.", "utils.", "helpers.", "config.",
-  "schemas.", "routers.", "routes.", "views.", "controllers.",
-  "handlers.", "middleware.", "database.", "db.",
+  "app.",
+  "src.",
+  "tests.",
+  "test.",
+  "lib.",
+  "core.",
+  "api.",
+  "models.",
+  "services.",
+  "utils.",
+  "helpers.",
+  "config.",
+  "schemas.",
+  "routers.",
+  "routes.",
+  "views.",
+  "controllers.",
+  "handlers.",
+  "middleware.",
+  "database.",
+  "db.",
 ];
 
 // ============================================================================
@@ -70,29 +87,30 @@ export function extractPythonSymbols(
         );
 
         // Detect API Routing (Semantic Bridge)
-        const routingDecorators = decorators.filter(d => 
-          d.includes(".route") || 
-          d.includes(".get") || 
-          d.includes(".post") || 
-          d.includes(".put") || 
-          d.includes(".delete") || 
-          d.includes(".patch")
+        const routingDecorators = decorators.filter(
+          (d) =>
+            d.includes(".route") ||
+            d.includes(".get") ||
+            d.includes(".post") ||
+            d.includes(".put") ||
+            d.includes(".delete") ||
+            d.includes(".patch"),
         );
 
         if (routingDecorators.length > 0) {
           for (const d of routingDecorators) {
-             // Extract route pattern: @app.route("/api/user") -> /api/user
-             const routeMatch = d.match(/["']([^"']+)["']/);
-             if (routeMatch) {
-               symbols.push({
-                 name: routeMatch[1],
-                 type: "route",
-                 file: filePath,
-                 line: node.startPosition.row + 1,
-                 column: node.startPosition.column,
-                 scope: name, // Associate with the function handling it
-               });
-             }
+            // Extract route pattern: @app.route("/api/user") -> /api/user
+            const routeMatch = d.match(/["']([^"']+)["']/);
+            if (routeMatch) {
+              symbols.push({
+                name: routeMatch[1],
+                type: "route",
+                file: filePath,
+                line: node.startPosition.row + 1,
+                column: node.startPosition.column,
+                scope: name, // Associate with the function handling it
+              });
+            }
           }
         }
 
@@ -151,9 +169,9 @@ export function extractPythonSymbols(
       const isClassLevel =
         !isModuleLevel &&
         currentClass !== null &&
-        (node.parent?.type === "expression_statement" &&
-          node.parent?.parent?.type === "block" &&
-          node.parent?.parent?.parent?.type === "class_definition");
+        node.parent?.type === "expression_statement" &&
+        node.parent?.parent?.type === "block" &&
+        node.parent?.parent?.parent?.type === "class_definition";
       if (isModuleLevel || isClassLevel) {
         const leftNode = node.childForFieldName("left");
         if (leftNode?.type === "identifier") {
@@ -203,22 +221,36 @@ export function collectPythonLocalDefinitions(
       if (!parent) break;
 
       // Assignment target: x = ...
-      if (parent.type === "assignment" && parent.childForFieldName("left")?.id === node.id) {
+      if (
+        parent.type === "assignment" &&
+        parent.childForFieldName("left")?.id === node.id
+      ) {
         definitions.add(name);
       }
       // Augmented assignment: x += ...
-      if (parent.type === "augmented_assignment" && parent.childForFieldName("left")?.id === node.id) {
+      if (
+        parent.type === "augmented_assignment" &&
+        parent.childForFieldName("left")?.id === node.id
+      ) {
         definitions.add(name);
       }
       // Function/class definition name
-      if ((parent.type === "function_definition" || parent.type === "class_definition") &&
-          parent.childForFieldName("name")?.id === node.id) {
+      if (
+        (parent.type === "function_definition" ||
+          parent.type === "class_definition") &&
+        parent.childForFieldName("name")?.id === node.id
+      ) {
         definitions.add(name);
       }
       // Function parameters (all types)
-      if (parent.type === "parameters" || parent.type === "typed_parameter" ||
-          parent.type === "default_parameter" || parent.type === "typed_default_parameter" ||
-          parent.type === "list_splat_pattern" || parent.type === "dictionary_splat_pattern") {
+      if (
+        parent.type === "parameters" ||
+        parent.type === "typed_parameter" ||
+        parent.type === "default_parameter" ||
+        parent.type === "typed_default_parameter" ||
+        parent.type === "list_splat_pattern" ||
+        parent.type === "dictionary_splat_pattern"
+      ) {
         definitions.add(name);
       }
       // Lambda parameters
@@ -226,7 +258,10 @@ export function collectPythonLocalDefinitions(
         definitions.add(name);
       }
       // For-loop variable: for x in ...
-      if (parent.type === "for_statement" && parent.childForFieldName("left")?.id === node.id) {
+      if (
+        parent.type === "for_statement" &&
+        parent.childForFieldName("left")?.id === node.id
+      ) {
         definitions.add(name);
       }
       // Tuple/pattern unpacking targets
@@ -238,15 +273,24 @@ export function collectPythonLocalDefinitions(
         definitions.add(name);
       }
       // Comprehension variable
-      if (parent.type === "for_in_clause" && parent.childForFieldName("left")?.id === node.id) {
+      if (
+        parent.type === "for_in_clause" &&
+        parent.childForFieldName("left")?.id === node.id
+      ) {
         definitions.add(name);
       }
       // Walrus operator target
-      if (parent.type === "named_expression" && parent.childForFieldName("name")?.id === node.id) {
+      if (
+        parent.type === "named_expression" &&
+        parent.childForFieldName("name")?.id === node.id
+      ) {
         definitions.add(name);
       }
       // Global/nonlocal declarations
-      if (parent.type === "global_statement" || parent.type === "nonlocal_statement") {
+      if (
+        parent.type === "global_statement" ||
+        parent.type === "nonlocal_statement"
+      ) {
         definitions.add(name);
       }
       // Unpacking target in assignment
@@ -320,35 +364,39 @@ export function extractPythonUsages(
           const objNode = funcNode.childForFieldName("object");
           const attrNode = funcNode.childForFieldName("attribute");
 
-            if (objNode && attrNode) {
-              const obj = getText(objNode, code);
-              const method = getText(attrNode, code);
+          if (objNode && attrNode) {
+            const obj = getText(objNode, code);
+            const method = getText(attrNode, code);
 
-              // Only track method calls with simple object references (identifier, attribute, subscript)
-              // Skip complex expressions like (end - start).total_seconds() where the "object"
-              // is a binary expression — these produce meaningless object names for validation
-              const simpleObjTypes = new Set([
-                "identifier", "attribute", "subscript", "call",
-                "parenthesized_expression",
-              ]);
-              const isSimpleObj = simpleObjTypes.has(objNode.type) && 
-                (objNode.type !== "parenthesized_expression" || 
-                 objNode.namedChildren[0]?.type === "identifier");
+            // Only track method calls with simple object references (identifier, attribute, subscript)
+            // Skip complex expressions like (end - start).total_seconds() where the "object"
+            // is a binary expression — these produce meaningless object names for validation
+            const simpleObjTypes = new Set([
+              "identifier",
+              "attribute",
+              "subscript",
+              "call",
+              "parenthesized_expression",
+            ]);
+            const isSimpleObj =
+              simpleObjTypes.has(objNode.type) &&
+              (objNode.type !== "parenthesized_expression" ||
+                objNode.namedChildren[0]?.type === "identifier");
 
-              if (isSimpleObj) {
-                if (isPythonBuiltin(method)) break;
+            if (isSimpleObj) {
+              if (isPythonBuiltin(method)) break;
 
-                usages.push({
-                  name: method,
-                  type: "methodCall",
-                  object: obj,
-                  line: node.startPosition.row + 1,
-                  column: node.startPosition.column,
-                  code: getLineText(code, node.startPosition.row),
-                  argCount,
-                });
-              }
+              usages.push({
+                name: method,
+                type: "methodCall",
+                object: obj,
+                line: node.startPosition.row + 1,
+                column: node.startPosition.column,
+                code: getLineText(code, node.startPosition.row),
+                argCount,
+              });
             }
+          }
         }
       }
       break;
@@ -377,42 +425,87 @@ export function extractPythonUsages(
       }
 
       // Skip if it's an attribute name (obj.NAME) — handled by methodCall extraction
-      if (parent.type === "attribute" && parent.childForFieldName("attribute")?.id === node.id) break;
+      if (
+        parent.type === "attribute" &&
+        parent.childForFieldName("attribute")?.id === node.id
+      )
+        break;
 
       // Skip if it's a function/class definition name
-      if ((parent.type === "function_definition" || parent.type === "class_definition") && 
-          parent.childForFieldName("name")?.id === node.id) break;
+      if (
+        (parent.type === "function_definition" ||
+          parent.type === "class_definition") &&
+        parent.childForFieldName("name")?.id === node.id
+      )
+        break;
 
       // Skip if it's a parameter definition (function params, lambda params)
-      if (parent.type === "parameters" || parent.type === "typed_parameter" || parent.type === "default_parameter" ||
-          parent.type === "typed_default_parameter" || parent.type === "list_splat_pattern" || parent.type === "dictionary_splat_pattern" ||
-          parent.type === "lambda_parameters") break;
+      if (
+        parent.type === "parameters" ||
+        parent.type === "typed_parameter" ||
+        parent.type === "default_parameter" ||
+        parent.type === "typed_default_parameter" ||
+        parent.type === "list_splat_pattern" ||
+        parent.type === "dictionary_splat_pattern" ||
+        parent.type === "lambda_parameters"
+      )
+        break;
 
       // Skip if it's part of an import statement
-      if (parent.type === "dotted_name" || parent.type === "aliased_import" ||
-          parent.type === "import_statement" || parent.type === "import_from_statement") break;
+      if (
+        parent.type === "dotted_name" ||
+        parent.type === "aliased_import" ||
+        parent.type === "import_statement" ||
+        parent.type === "import_from_statement"
+      )
+        break;
 
       // Skip assignment targets (left side of =) — these are definitions, not usages
-      if (parent.type === "assignment" && parent.childForFieldName("left")?.id === node.id) break;
-      if (parent.type === "augmented_assignment" && parent.childForFieldName("left")?.id === node.id) break;
+      if (
+        parent.type === "assignment" &&
+        parent.childForFieldName("left")?.id === node.id
+      )
+        break;
+      if (
+        parent.type === "augmented_assignment" &&
+        parent.childForFieldName("left")?.id === node.id
+      )
+        break;
 
       // Skip if it's the target in a for loop (for x in items)
-      if (parent.type === "for_statement" && parent.childForFieldName("left")?.id === node.id) break;
+      if (
+        parent.type === "for_statement" &&
+        parent.childForFieldName("left")?.id === node.id
+      )
+        break;
       // Also handle tuple unpacking in for loops: for k, v in items
-      if (parent.type === "pattern_list" || parent.type === "tuple_pattern") break;
+      if (parent.type === "pattern_list" || parent.type === "tuple_pattern")
+        break;
 
       // Skip if it's the variable in a with statement (with open() as f)
       // or except clause (except Exception as e)
       // Tree-sitter wraps the alias identifier in an as_pattern_target node
       if (parent.type === "as_pattern_target") break;
-      if (parent.type === "as_pattern" && parent.childForFieldName("alias")?.id === node.id) break;
+      if (
+        parent.type === "as_pattern" &&
+        parent.childForFieldName("alias")?.id === node.id
+      )
+        break;
       if (parent.type === "except_clause") break;
 
       // Skip keyword argument names (func(key=value) — skip "key")
-      if (parent.type === "keyword_argument" && parent.childForFieldName("name")?.id === node.id) break;
+      if (
+        parent.type === "keyword_argument" &&
+        parent.childForFieldName("name")?.id === node.id
+      )
+        break;
 
       // Skip comprehension variables (x for x in items)
-      if (parent.type === "for_in_clause" && parent.childForFieldName("left")?.id === node.id) break;
+      if (
+        parent.type === "for_in_clause" &&
+        parent.childForFieldName("left")?.id === node.id
+      )
+        break;
 
       // Decorators are intentionally skipped above.
 
@@ -420,10 +513,18 @@ export function extractPythonUsages(
       if (parent.type === "type" && parent.parent?.type === "assignment") break;
 
       // Skip walrus operator target (:= )
-      if (parent.type === "named_expression" && parent.childForFieldName("name")?.id === node.id) break;
+      if (
+        parent.type === "named_expression" &&
+        parent.childForFieldName("name")?.id === node.id
+      )
+        break;
 
       // Skip global/nonlocal declarations
-      if (parent.type === "global_statement" || parent.type === "nonlocal_statement") break;
+      if (
+        parent.type === "global_statement" ||
+        parent.type === "nonlocal_statement"
+      )
+        break;
 
       // Skip if it's a tuple/list unpacking target in assignment
       if (isUnpackingTarget(node)) break;
@@ -433,7 +534,11 @@ export function extractPythonUsages(
       if (localDefinitions?.has(name)) break;
 
       // If we reach here, it's a genuine reference usage
-      const exists = usages.some(u => u.line === node.startPosition.row + 1 && u.column === node.startPosition.column);
+      const exists = usages.some(
+        (u) =>
+          u.line === node.startPosition.row + 1 &&
+          u.column === node.startPosition.column,
+      );
       if (!exists) {
         usages.push({
           name,
@@ -449,7 +554,14 @@ export function extractPythonUsages(
 
   for (const child of node.children) {
     if (child) {
-      extractPythonUsages(child, code, usages, externalSymbols, localDefinitions, false);
+      extractPythonUsages(
+        child,
+        code,
+        usages,
+        externalSymbols,
+        localDefinitions,
+        false,
+      );
     }
   }
 }
@@ -478,8 +590,12 @@ export function extractPythonImports(
         if (child.type === "dotted_name") {
           // Simple: import json, import app.models
           const module = getText(child, code);
-          const isInternal = module.startsWith(".") ||
-            INTERNAL_PREFIXES.some((prefix) => module.startsWith(prefix) || module === prefix.slice(0, -1));
+          const isInternal =
+            module.startsWith(".") ||
+            INTERNAL_PREFIXES.some(
+              (prefix) =>
+                module.startsWith(prefix) || module === prefix.slice(0, -1),
+            );
           imports.push({
             module,
             names: [{ imported: module, local: module }],
@@ -493,8 +609,12 @@ export function extractPythonImports(
           if (nameNode) {
             const module = getText(nameNode, code);
             const local = aliasNode ? getText(aliasNode, code) : module;
-            const isInternal = module.startsWith(".") ||
-              INTERNAL_PREFIXES.some((prefix) => module.startsWith(prefix) || module === prefix.slice(0, -1));
+            const isInternal =
+              module.startsWith(".") ||
+              INTERNAL_PREFIXES.some(
+                (prefix) =>
+                  module.startsWith(prefix) || module === prefix.slice(0, -1),
+              );
             imports.push({
               module,
               names: [{ imported: module, local }],
@@ -514,10 +634,26 @@ export function extractPythonImports(
         const module = getText(moduleNode, code);
         const names: Array<{ imported: string; local: string }> = [];
 
-        for (const child of node.children) {
+        for (let i = 0; i < node.childCount; i++) {
+          const child = node.child(i);
           if (!child) continue;
 
-          if (child.type === "dotted_name" && child !== moduleNode) {
+          // `wildcard_import` has fieldName=null in tree-sitter-python, so it
+          // must be checked BEFORE the fieldName guard below.
+          if (child.type === "wildcard_import") {
+            // from module import *  — record as a wildcard so callers can skip
+            // unused-import checks while the module still enters the dependency graph
+            names.push({ imported: "*", local: "*" });
+            continue;
+          }
+
+          // tree-sitter marks imported targets in `from ... import ...`
+          // with field name "name". Filtering by field name avoids
+          // accidentally re-adding the module path as an imported symbol.
+          const fieldName = node.fieldNameForChild?.(i);
+          if (fieldName !== "name") continue;
+
+          if (child.type === "dotted_name") {
             const name = getText(child, code);
             names.push({ imported: name, local: name });
           } else if (child.type === "aliased_import") {
@@ -537,7 +673,10 @@ export function extractPythonImports(
         // - Common project prefixes: app., src., tests., lib., core., api., models., services., etc.
         const isInternal =
           module.startsWith(".") ||
-          INTERNAL_PREFIXES.some((prefix) => module.startsWith(prefix) || module === prefix.slice(0, -1));
+          INTERNAL_PREFIXES.some(
+            (prefix) =>
+              module.startsWith(prefix) || module === prefix.slice(0, -1),
+          );
         const isExternal = !isInternal;
 
         imports.push({
@@ -577,6 +716,21 @@ export function extractPythonTypeReferences(
   switch (node.type) {
     // Function parameter type annotation: def func(x: TypeName)
     case "typed_parameter": {
+      const typeNode = node.childForFieldName("type");
+      if (typeNode) {
+        extractPythonTypeNamesFromNode(
+          typeNode,
+          code,
+          references,
+          "typeAnnotation",
+        );
+      }
+      break;
+    }
+
+    // Function parameter with default: def func(x: TypeName = default)
+    // tree-sitter-python uses typed_default_parameter for `x: T = val`
+    case "typed_default_parameter": {
       const typeNode = node.childForFieldName("type");
       if (typeNode) {
         extractPythonTypeNamesFromNode(
@@ -701,30 +855,85 @@ export function extractPythonTypeNamesFromNode(
     // Simple type: TypeName
     case "identifier": {
       const name = getText(node, code);
-      if (!isPythonBuiltinType(name)) {
+      references.push({
+        name,
+        context,
+        line: node.startPosition.row + 1,
+      });
+      break;
+    }
+
+    // Generic type (tree-sitter-python ≥ 0.20 WASM): List[T], Dict[K, V], Optional[T]
+    // The WASM grammar emits `generic_type { identifier, type_parameter }` rather than
+    // the older `subscript { value, subscript }` shape. Keep `subscript` as a fallback
+    // for any grammar version that still uses it.
+    case "generic_type": {
+      // First child is the bare type name identifier (e.g. "Optional", "List")
+      const identifierChild = node.children.find(
+        (c) => c && c.type === "identifier",
+      );
+      if (identifierChild) {
         references.push({
-          name,
+          name: getText(identifierChild, code),
           context,
-          line: node.startPosition.row + 1,
+          line: identifierChild.startPosition.row + 1,
         });
+      }
+      // type_parameter wraps the bracketed arguments: [str], [str, int], etc.
+      const typeParamChild = node.children.find(
+        (c) => c && c.type === "type_parameter",
+      );
+      if (typeParamChild) {
+        extractPythonTypeNamesFromNode(
+          typeParamChild,
+          code,
+          references,
+          "genericParam",
+        );
       }
       break;
     }
 
-    // Generic type: List[TypeName], Dict[K, V], Optional[T]
+    // type_parameter: the [...] wrapper inside a generic_type
+    // Contains one or more `type` nodes separated by commas
+    case "type_parameter": {
+      for (const child of node.children) {
+        if (
+          child &&
+          child.type !== "," &&
+          child.type !== "[" &&
+          child.type !== "]"
+        ) {
+          extractPythonTypeNamesFromNode(child, code, references, context);
+        }
+      }
+      break;
+    }
+
+    // `type` node: transparent wrapper that tree-sitter-python emits around
+    // every type annotation (e.g. the node for `Optional[str]` in a param).
+    // Just pass through to the contained expression.
+    case "type": {
+      for (const child of node.children) {
+        if (child) {
+          extractPythonTypeNamesFromNode(child, code, references, context);
+        }
+      }
+      break;
+    }
+
+    // Legacy fallback: older grammar versions used `subscript` for generic types
     case "subscript": {
       const valueNode = node.childForFieldName("value");
       const subscriptNode = node.childForFieldName("subscript");
 
       if (valueNode) {
         const typeName = getText(valueNode, code);
-        if (!isPythonBuiltinType(typeName)) {
-          references.push({
-            name: typeName,
-            context,
-            line: valueNode.startPosition.row + 1,
-          });
-        }
+        references.push({
+          name: typeName,
+          context,
+          line: valueNode.startPosition.row + 1,
+        });
       }
 
       // Extract type arguments
@@ -771,6 +980,15 @@ export function extractPythonTypeNamesFromNode(
         context,
         line: node.startPosition.row + 1,
       });
+
+      const objectNode = node.childForFieldName("object");
+      if (objectNode?.type === "identifier") {
+        references.push({
+          name: getText(objectNode, code),
+          context,
+          line: objectNode.startPosition.row + 1,
+        });
+      }
       break;
     }
 
@@ -850,26 +1068,60 @@ function isUnpackingTarget(node: SyntaxNode): boolean {
   let current = node.parent;
   while (current) {
     // If we hit a tuple/list that is the left side of an assignment, it's an unpacking target
-    if (current.type === "pattern_list" || current.type === "tuple_pattern" || current.type === "list_pattern") {
+    if (
+      current.type === "pattern_list" ||
+      current.type === "tuple_pattern" ||
+      current.type === "list_pattern"
+    ) {
       const grandparent = current.parent;
       if (grandparent) {
-        if (grandparent.type === "assignment" && grandparent.childForFieldName("left")?.id === current.id) return true;
-        if (grandparent.type === "for_statement" && grandparent.childForFieldName("left")?.id === current.id) return true;
-        if (grandparent.type === "for_in_clause" && grandparent.childForFieldName("left")?.id === current.id) return true;
+        if (
+          grandparent.type === "assignment" &&
+          grandparent.childForFieldName("left")?.id === current.id
+        )
+          return true;
+        if (
+          grandparent.type === "for_statement" &&
+          grandparent.childForFieldName("left")?.id === current.id
+        )
+          return true;
+        if (
+          grandparent.type === "for_in_clause" &&
+          grandparent.childForFieldName("left")?.id === current.id
+        )
+          return true;
       }
     }
     // Also check expression_list (Python uses this for tuple unpacking without parens)
     if (current.type === "expression_list") {
       const grandparent = current.parent;
       if (grandparent) {
-        if (grandparent.type === "assignment" && grandparent.childForFieldName("left")?.id === current.id) return true;
-        if (grandparent.type === "for_statement" && grandparent.childForFieldName("left")?.id === current.id) return true;
-        if (grandparent.type === "for_in_clause" && grandparent.childForFieldName("left")?.id === current.id) return true;
+        if (
+          grandparent.type === "assignment" &&
+          grandparent.childForFieldName("left")?.id === current.id
+        )
+          return true;
+        if (
+          grandparent.type === "for_statement" &&
+          grandparent.childForFieldName("left")?.id === current.id
+        )
+          return true;
+        if (
+          grandparent.type === "for_in_clause" &&
+          grandparent.childForFieldName("left")?.id === current.id
+        )
+          return true;
       }
     }
     // Don't traverse too far up
-    if (current.type === "assignment" || current.type === "for_statement" || current.type === "for_in_clause" ||
-        current.type === "function_definition" || current.type === "class_definition" || current.type === "module") {
+    if (
+      current.type === "assignment" ||
+      current.type === "for_statement" ||
+      current.type === "for_in_clause" ||
+      current.type === "function_definition" ||
+      current.type === "class_definition" ||
+      current.type === "module"
+    ) {
       break;
     }
     current = current.parent;

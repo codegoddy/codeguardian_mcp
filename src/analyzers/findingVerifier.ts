@@ -22,6 +22,7 @@
 
 import { logger } from "../utils/logger.js";
 import type { ProjectContext } from "../context/projectContext.js";
+import { resolveImport } from "../context/projectContext.js";
 import type { ValidationIssue, DeadCodeIssue, ASTUsage } from "../tools/validation/types.js";
 import { exec } from "child_process";
 import { promisify } from "util";
@@ -669,6 +670,7 @@ async function verifyDeadCodeWithCache(
 
       const isPublicApi = await checkIfPublicApi(issue, ctx);
       const isTestFile = issue.file.includes('.test.') || issue.file.includes('.spec.') || issue.file.includes('/test/');
+      const moduleUsage = await checkPartiallyUsedModuleExport(issue, ctx);
 
       if (isPublicApi) {
         status = "false_positive";
@@ -681,6 +683,14 @@ async function verifyDeadCodeWithCache(
         confidence = 75;
         method = "test_file_analysis";
         reasons.push("This is a test file - exports may be used by test runners");
+      } else if (moduleUsage.isPartiallyUsed) {
+        status = "false_positive";
+        confidence = 86;
+        method = "module_surface_analysis";
+        reasons.push(
+          `Module is imported by ${moduleUsage.importers.length} file(s) and has other used exports: ${moduleUsage.usedExports.slice(0, 3).join(", ")}${moduleUsage.usedExports.length > 3 ? ", …" : ""}`,
+        );
+        reasons.push("Unused export may be an intentionally exposed helper/API surface");
       } else {
         status = "confirmed";
         confidence = 92;
@@ -1075,8 +1085,10 @@ async function checkModuleExports(
   issue: ValidationIssue,
   ctx: VerificationContext,
 ): Promise<{ moduleExists: boolean; exportExists: boolean }> {
-  const moduleMatch = issue.message.match(/module ['"]([^'"]+)['"]/);
-  const exportMatch = issue.message.match(/export ['"]([^'"]+)['"]/);
+  const moduleMatch = issue.message.match(/module ['"]([^'"]+)['"]/i);
+  const exportMatch =
+    issue.message.match(/export(?:\s+named)?\s+['"]([^'"]+)['"]/i) ||
+    issue.message.match(/no\s+export\s+named\s+['"]([^'"]+)['"]/i);
 
   const moduleName = moduleMatch?.[1];
   const exportName = exportMatch?.[1];
@@ -1085,20 +1097,57 @@ async function checkModuleExports(
     return { moduleExists: false, exportExists: false };
   }
 
-  // Convert Python dotted module paths to file paths (e.g., app.api.cli_tokens -> app/api/cli_tokens)
-  const moduleAsPath = moduleName.replace(/\./g, "/");
-
-  const possiblePaths = [
-    path.join(ctx.projectPath, moduleName),
-    path.join(ctx.projectPath, `${moduleName}.ts`),
-    path.join(ctx.projectPath, `${moduleName}.tsx`),
-    path.join(ctx.projectPath, `${moduleName}.js`),
-    path.join(ctx.projectPath, `${moduleName}/index.ts`),
-    path.join(ctx.projectPath, `${moduleName}/index.js`),
-    // Python module paths (dotted notation)
-    path.join(ctx.projectPath, `${moduleAsPath}.py`),
-    path.join(ctx.projectPath, moduleAsPath, "__init__.py"),
+  const buildCandidates = (basePath: string): string[] => [
+    basePath,
+    `${basePath}.ts`,
+    `${basePath}.tsx`,
+    `${basePath}.mts`,
+    `${basePath}.cts`,
+    `${basePath}.js`,
+    `${basePath}.jsx`,
+    `${basePath}.mjs`,
+    `${basePath}.cjs`,
+    `${basePath}.py`,
+    path.join(basePath, "index.ts"),
+    path.join(basePath, "index.tsx"),
+    path.join(basePath, "index.js"),
+    path.join(basePath, "index.jsx"),
+    path.join(basePath, "__init__.py"),
   ];
+
+  const candidateSet = new Set<string>();
+
+  // Relative imports must be resolved from the importing file directory.
+  // Previous behavior resolved from project root, causing false positives.
+  if (moduleName.startsWith(".")) {
+    const issueFilePath = issue.file
+      ? path.isAbsolute(issue.file)
+        ? issue.file
+        : path.resolve(ctx.projectPath, issue.file)
+      : null;
+
+    if (issueFilePath) {
+      const importBase = path.resolve(path.dirname(issueFilePath), moduleName);
+      for (const p of buildCandidates(importBase)) {
+        candidateSet.add(p);
+      }
+    }
+  }
+
+  // Project-root resolution fallback for non-relative imports
+  const rootBase = path.resolve(ctx.projectPath, moduleName);
+  for (const p of buildCandidates(rootBase)) {
+    candidateSet.add(p);
+  }
+
+  // Python dotted module fallback: app.api.cli_tokens -> app/api/cli_tokens
+  const moduleAsPath = moduleName.replace(/\./g, "/");
+  const dottedBase = path.resolve(ctx.projectPath, moduleAsPath);
+  for (const p of buildCandidates(dottedBase)) {
+    candidateSet.add(p);
+  }
+
+  const possiblePaths = Array.from(candidateSet);
 
   let moduleExists = false;
   let modulePath = "";
@@ -1114,7 +1163,16 @@ async function checkModuleExports(
     }
   }
 
-  if (!moduleExists || !exportName) {
+  if (!moduleExists) {
+    return { moduleExists, exportExists: false };
+  }
+
+  // Namespace imports (`import * as x from ...`) are valid if module exists.
+  if (exportName === "*") {
+    return { moduleExists: true, exportExists: true };
+  }
+
+  if (!exportName) {
     return { moduleExists, exportExists: false };
   }
 
@@ -1477,6 +1535,109 @@ async function checkFileImports(
   }
 
   return { isImported: importers.length > 0, importers: [...new Set(importers)] };
+}
+
+function resolveContextFilePath(filePath: string, ctx: VerificationContext): string | null {
+  if (!filePath) return null;
+
+  const files = ctx.projectContext.files;
+  if (files.has(filePath)) return filePath;
+
+  const absoluteCandidate = path.isAbsolute(filePath)
+    ? filePath
+    : path.resolve(ctx.projectPath, filePath);
+  if (files.has(absoluteCandidate)) return absoluteCandidate;
+
+  const normalizedTarget = filePath.replace(/\\/g, "/");
+  const normalizedAbsolute = absoluteCandidate.replace(/\\/g, "/");
+
+  for (const existing of files.keys()) {
+    const normalizedExisting = existing.replace(/\\/g, "/");
+    const relativeToProject = path
+      .relative(ctx.projectPath, existing)
+      .replace(/\\/g, "/");
+
+    if (
+      normalizedExisting === normalizedTarget ||
+      normalizedExisting === normalizedAbsolute ||
+      normalizedExisting.endsWith(`/${normalizedTarget}`) ||
+      relativeToProject === normalizedTarget
+    ) {
+      return existing;
+    }
+  }
+
+  return null;
+}
+
+async function checkPartiallyUsedModuleExport(
+  issue: DeadCodeIssue,
+  ctx: VerificationContext,
+): Promise<{ isPartiallyUsed: boolean; importers: string[]; usedExports: string[] }> {
+  if (issue.type !== "unusedExport") {
+    return { isPartiallyUsed: false, importers: [], usedExports: [] };
+  }
+
+  const resolvedFile = resolveContextFilePath(issue.file, ctx);
+  if (!resolvedFile) {
+    return { isPartiallyUsed: false, importers: [], usedExports: [] };
+  }
+
+  const fileInfo = ctx.projectContext.files.get(resolvedFile);
+  if (!fileInfo) {
+    return { isPartiallyUsed: false, importers: [], usedExports: [] };
+  }
+
+  const allFileKeys = Array.from(ctx.projectContext.files.keys());
+  const importers = new Set<string>(
+    ctx.projectContext.reverseImportGraph.get(resolvedFile) || [],
+  );
+  const importedSymbols = new Set<string>();
+
+  for (const dep of ctx.projectContext.dependencies) {
+    if (dep.to !== resolvedFile) continue;
+    importers.add(dep.from);
+    for (const sym of dep.importedSymbols) {
+      importedSymbols.add(sym);
+    }
+  }
+
+  // Safety fallback: check raw import statements so partially stale dependency graphs
+  // don't cause false positives.
+  for (const [importerFile, importerInfo] of ctx.projectContext.files) {
+    if (importerFile === resolvedFile) continue;
+    for (const imp of importerInfo.imports) {
+      const resolvedImport = resolveImport(imp.source, importerFile, allFileKeys);
+      if (resolvedImport !== resolvedFile) continue;
+      importers.add(importerFile);
+      for (const sym of imp.namedImports) {
+        importedSymbols.add(sym);
+      }
+    }
+  }
+
+  if (importers.size === 0) {
+    return { isPartiallyUsed: false, importers: [], usedExports: [] };
+  }
+
+  const exportedNames = new Set<string>([
+    ...fileInfo.exports.map((exp) => exp.name),
+    ...fileInfo.symbols.filter((sym) => sym.exported).map((sym) => sym.name),
+  ]);
+
+  if (exportedNames.size < 2) {
+    return { isPartiallyUsed: false, importers: Array.from(importers), usedExports: [] };
+  }
+
+  const usedOtherExports = Array.from(exportedNames).filter(
+    (name) => name !== issue.name && importedSymbols.has(name),
+  );
+
+  return {
+    isPartiallyUsed: usedOtherExports.length > 0,
+    importers: Array.from(importers),
+    usedExports: usedOtherExports,
+  };
 }
 
 async function checkIfEntryPoint(

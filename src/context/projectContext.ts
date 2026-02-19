@@ -988,12 +988,11 @@ async function buildProjectContext(
   
   const filesToProcess = files.slice(0, maxFiles);
 
-  // Always find test files separately for import tracking (dead code detection)
-  // This ensures exports used only in tests aren't flagged as dead code
-  let testFiles: string[] = [];
-  if (!includeTests) {
-    testFiles = await findTestFiles(projectPath, language);
-  }
+  // Always find test files separately for import tracking (dead code detection).
+  // Even when includeTests=true, many repos keep tests outside source roots.
+  // Tracking test imports prevents false orphaned-file reports.
+  const testFiles = await findTestFiles(projectPath, language);
+  const sourceFileSet = new Set(filesToProcess);
 
   // Detect frameworks (supports multiple for full-stack projects)
   context.frameworks = await detectFrameworks(projectPath, filesToProcess);
@@ -1062,6 +1061,7 @@ async function buildProjectContext(
   // This ensures exports used only in tests aren't flagged as dead code
   for (let i = 0; i < testFiles.length; i++) {
     const testFilePath = testFiles[i];
+    if (sourceFileSet.has(testFilePath)) continue;
     try {
       const content = await fs.readFile(testFilePath, "utf-8");
       const stats = await fs.stat(testFilePath);

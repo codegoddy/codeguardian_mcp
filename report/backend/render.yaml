@@ -1,0 +1,53 @@
+# @format
+
+services:
+  # Web Service (FastAPI Backend with bundled NATS)
+  - type: web
+    name: dev-hq-backend
+    env: docker
+    region: frankfurt
+    plan: free
+    dockerContext: backend
+    dockerfilePath: backend/Dockerfile
+    healthCheckPath: /
+    numInstances: 1
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: DATABASE_URL
+        fromDatabase:
+          name: dev-hq-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      # NATS is now bundled with the backend, so it runs on localhost
+      - key: NATS_URL
+        value: nats://localhost:4222
+      # User should fill these in dashboard
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      # GitHub Integration OAuth (for repository connections)
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_WEBHOOK_SECRET
+        sync: false
+      - key: FRONTEND_URL
+        value: https://www.devhq.site/
+      - key: ENVIRONMENT
+        value: production
+
+databases:
+  - name: dev-hq-db
+    databaseName: devhq
+    user: devhq
+    plan: free
+    region: frankfurt
+    ipAllowList: [] # Allow all internal

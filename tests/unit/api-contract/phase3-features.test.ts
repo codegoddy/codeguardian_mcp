@@ -676,7 +676,16 @@ type CreateUserInput = Omit<User, 'id'>;
 describe("Phase 3 Integration Tests (Report Directory)", () => {
   test("should extract types from report frontend", async () => {
     const fs = await import("fs/promises");
-    const typeFiles = await fs.readdir(path.join(process.cwd(), "report", "frontend", "src"), { recursive: true });
+    const reportFrontendSrc = path.join(process.cwd(), "report", "frontend", "src");
+    let typeFiles: string[] = [];
+
+    try {
+      typeFiles = await fs.readdir(reportFrontendSrc, { recursive: true }) as string[];
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
     
     // Look for type definition files
     const typeDefFiles = typeFiles.filter(f => 

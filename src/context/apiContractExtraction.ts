@@ -90,8 +90,27 @@ export async function extractTypesFromFileAST(
 // ============================================================================
 
 /**
+ * Strip Python docstrings from source content to prevent false positives
+ * in regex-based route extraction. Replaces string content with spaces while
+ * preserving newlines so that line numbers remain accurate.
+ */
+function stripPythonDocstrings(content: string): string {
+  // Match triple-double-quoted and triple-single-quoted strings (multiline-aware)
+  // We preserve newlines inside docstrings so line numbers stay correct.
+  return content.replace(/"""[\s\S]*?"""|'''[\s\S]*?'''/g, (match) =>
+    match.replace(/[^\n]/g, " "),
+  );
+}
+
+/**
  * Extract API route definitions from Python files
- * Uses regex-based extraction for Python (tree-sitter-python not available)
+ * Prefers AST-based extraction; falls back to regex only when AST is unavailable
+ * for the given framework or throws an unrecoverable error.
+ *
+ * IMPORTANT: When AST extraction is supported (fastapi / flask) and runs
+ * successfully, its result is trusted even if it is empty. This prevents the
+ * regex fallback from picking up route-like patterns that appear inside
+ * docstrings or comment examples.
  */
 export async function extractRoutesFromFile(
   filePath: string,
@@ -102,10 +121,22 @@ export async function extractRoutesFromFile(
   try {
     const content = await fs.readFile(filePath, "utf-8");
 
-    // Prefer AST-based extraction (tree-sitter-python is available)
-    try {
-      const astRoutes = extractRoutesFromPythonAST(content, filePath, framework);
-      if (astRoutes.length > 0) {
+    // AST extraction is supported for FastAPI and Flask.
+    // When it succeeds (no exception), we always trust the result — including an
+    // empty array — so we never fall through to the regex scanner for these
+    // frameworks. This is the key guard that prevents docstring examples from
+    // being misidentified as real route definitions.
+    const astSupportedFramework =
+      framework === "fastapi" || framework === "flask";
+    if (astSupportedFramework) {
+      try {
+        const astRoutes = extractRoutesFromPythonAST(
+          content,
+          filePath,
+          framework,
+        );
+        // Return the AST result unconditionally (even if empty).
+        // An empty result means the file genuinely has no route decorators.
         return astRoutes.map((r) => ({
           method: r.method,
           path: r.path,
@@ -116,12 +147,19 @@ export async function extractRoutesFromFile(
           file: filePath,
           line: r.line,
         }));
+      } catch {
+        // AST parsing threw — fall through to regex as last resort.
+        logger.debug(
+          `AST route extraction failed for ${filePath}, falling back to regex`,
+        );
       }
-    } catch {
-      // Fall back to legacy regex below
     }
 
-    const lines = content.split("\n");
+    // Regex fallback: used for unsupported frameworks (e.g. Django) or when
+    // AST threw an exception. Strip docstrings first so that code examples
+    // inside documentation strings are not mistaken for real route definitions.
+    const strippedContent = stripPythonDocstrings(content);
+    const lines = strippedContent.split("\n");
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -133,9 +171,12 @@ export async function extractRoutesFromFile(
           /@(?:app|router)\.(get|post|put|patch|delete)\s*\(\s*["']([^"']+)["']/i,
         );
         if (fastapiMatch) {
+          // Use original (un-stripped) content for handler extraction so that
+          // parameter type hints inside function bodies are still readable.
+          const originalLines = content.split("\n");
           const route = extractFastAPIRoute(
             content,
-            lines,
+            originalLines,
             i,
             fastapiMatch[1].toUpperCase(),
             fastapiMatch[2],
@@ -148,7 +189,15 @@ export async function extractRoutesFromFile(
         // Flask: @app.route("/api/clients", methods=["POST"])
         const flaskMatch = line.match(/@app\.route\s*\(\s*["']([^"']+)["']/i);
         if (flaskMatch) {
-          const route = extractFlaskRoute(content, lines, i, flaskMatch[1], filePath, lineNum);
+          const originalLines = content.split("\n");
+          const route = extractFlaskRoute(
+            content,
+            originalLines,
+            i,
+            flaskMatch[1],
+            filePath,
+            lineNum,
+          );
           if (route) routes.push(route);
         }
       }
@@ -234,7 +283,9 @@ function extractFlaskRoute(
   const decoratorLineContent = lines[decoratorLine];
   const methodsMatch = decoratorLineContent.match(/methods\s*=\s*\[(.+?)\]/);
   if (methodsMatch) {
-    const methods = methodsMatch[1].split(",").map((m) => m.trim().replace(/["']/g, ""));
+    const methods = methodsMatch[1]
+      .split(",")
+      .map((m) => m.trim().replace(/["']/g, ""));
     if (methods.length > 0) {
       method = methods[0].toUpperCase();
     }
@@ -267,7 +318,9 @@ function extractFlaskRoute(
 /**
  * Extract Pydantic model definitions from Python files
  */
-export async function extractModelsFromFile(filePath: string): Promise<ApiModelDefinition[]> {
+export async function extractModelsFromFile(
+  filePath: string,
+): Promise<ApiModelDefinition[]> {
   const models: ApiModelDefinition[] = [];
 
   try {
@@ -338,7 +391,9 @@ export async function extractModelsFromFile(filePath: string): Promise<ApiModelD
         }
 
         // Extract field: name: str or email: str = Field(...)
-        const fieldMatch = line.match(/^(?:\s+)(\w+)\s*:\s*([\w\[\],\s]+?)(?:\s*=\s*(.+))?$/);
+        const fieldMatch = line.match(
+          /^(?:\s+)(\w+)\s*:\s*([\w\[\],\s]+?)(?:\s*=\s*(.+))?$/,
+        );
         if (fieldMatch) {
           const fieldName = fieldMatch[1];
           const fieldType = fieldMatch[2].trim();
@@ -380,7 +435,6 @@ export async function extractModelsFromFile(filePath: string): Promise<ApiModelD
   return models;
 }
 
-
 // ============================================================================
 // Utility Functions
 // ============================================================================
@@ -401,7 +455,7 @@ function isPrimitiveType(typeName: string): boolean {
     "Optional",
     "Union",
   ];
-  
+
   // TypeScript primitives
   const tsPrimitives = [
     "string",
@@ -414,11 +468,14 @@ function isPrimitiveType(typeName: string): boolean {
     "void",
     "never",
   ];
-  
+
   // Normalize the type name (remove array brackets, etc.)
   const normalized = typeName.replace(/\[\]$/, "").replace(/\|.*$/, "").trim();
-  
-  return pythonPrimitives.includes(normalized) || tsPrimitives.includes(normalized.toLowerCase());
+
+  return (
+    pythonPrimitives.includes(normalized) ||
+    tsPrimitives.includes(normalized.toLowerCase())
+  );
 }
 
 // ============================================================================
@@ -428,7 +485,9 @@ function isPrimitiveType(typeName: string): boolean {
 /**
  * Extract imports from a TypeScript file
  */
-export async function extractImportsFromFileAST(filePath: string): Promise<ASTImport[]> {
+export async function extractImportsFromFileAST(
+  filePath: string,
+): Promise<ASTImport[]> {
   try {
     const content = await fs.readFile(filePath, "utf-8");
     return extractImportsAST(content, "typescript");
@@ -441,15 +500,27 @@ export async function extractImportsFromFileAST(filePath: string): Promise<ASTIm
 /**
  * Resolve an import path to an absolute file path
  */
-export function resolveImportPath(importPath: string, fromFile: string): string | null {
+export function resolveImportPath(
+  importPath: string,
+  fromFile: string,
+): string | null {
   // Handle relative imports
   if (importPath.startsWith("./") || importPath.startsWith("../")) {
     const fromDir = path.dirname(fromFile);
     let resolvedPath = path.resolve(fromDir, importPath);
-    
+
     // Try common TypeScript/JavaScript extensions
-    const extensions = [".ts", ".tsx", ".js", ".jsx", "/index.ts", "/index.tsx", "/index.js", "/index.jsx"];
-    
+    const extensions = [
+      ".ts",
+      ".tsx",
+      ".js",
+      ".jsx",
+      "/index.ts",
+      "/index.tsx",
+      "/index.js",
+      "/index.jsx",
+    ];
+
     // First try exact path
     for (const ext of extensions) {
       const fullPath = resolvedPath + ext;
@@ -460,10 +531,10 @@ export function resolveImportPath(importPath: string, fromFile: string): string 
         return resolvedPath + ext;
       }
     }
-    
+
     return resolvedPath + ".ts"; // Default to .ts
   }
-  
+
   // Handle path aliases (e.g., "@/types", "~/components")
   // This would require tsconfig.json parsing to resolve properly
   // For now, return null to indicate we can't resolve it
@@ -471,7 +542,7 @@ export function resolveImportPath(importPath: string, fromFile: string): string 
     logger.debug(`Cannot resolve path alias: ${importPath} from ${fromFile}`);
     return null;
   }
-  
+
   // External package - not a local type import
   return null;
 }
@@ -485,14 +556,14 @@ export async function resolveTypeImport(
 ): Promise<{ filePath: string; importInfo: ASTImport } | null> {
   // Extract imports from the importing file
   const imports = await extractImportsFromFileAST(importingFile);
-  
+
   // Find the import that contains this type
   for (const importInfo of imports) {
     // Check if this import includes the type we're looking for
     const matchingName = importInfo.names.find(
-      (n) => n.local === typeName || n.imported === typeName
+      (n) => n.local === typeName || n.imported === typeName,
     );
-    
+
     if (matchingName) {
       // Resolve the import path
       const resolvedPath = resolveImportPath(importInfo.module, importingFile);
@@ -504,17 +575,20 @@ export async function resolveTypeImport(
       }
     }
   }
-  
+
   return null;
 }
 
 /**
  * Check if a type is imported (vs defined in the same file)
  */
-export async function isImportedType(typeName: string, filePath: string): Promise<boolean> {
+export async function isImportedType(
+  typeName: string,
+  filePath: string,
+): Promise<boolean> {
   const imports = await extractImportsFromFileAST(filePath);
   return imports.some((imp) =>
-    imp.names.some((n) => n.local === typeName || n.imported === typeName)
+    imp.names.some((n) => n.local === typeName || n.imported === typeName),
   );
 }
 
@@ -526,14 +600,14 @@ export async function buildImportResolutionMap(
   serviceFiles: string[],
 ): Promise<Map<string, string>> {
   const typeToFileMap = new Map<string, string>();
-  
+
   for (const filePath of serviceFiles) {
     const imports = await extractImportsFromFileAST(filePath);
-    
+
     for (const importInfo of imports) {
       // Skip external packages
       if (importInfo.isExternal) continue;
-      
+
       const resolvedPath = resolveImportPath(importInfo.module, filePath);
       if (resolvedPath) {
         for (const name of importInfo.names) {
@@ -543,6 +617,6 @@ export async function buildImportResolutionMap(
       }
     }
   }
-  
+
   return typeToFileMap;
 }

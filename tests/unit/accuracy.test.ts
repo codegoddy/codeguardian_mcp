@@ -157,4 +157,28 @@ describe("Validation Accuracy", () => {
     expect(parsed.hallucinations.length).toBe(0);
     expect(parsed.score).toBe(100);
   });
+
+  it("should NOT flag template-literal method chains as undefined variables", async () => {
+    const result = await validateCodeTool.handler({
+      projectPath: ".",
+      newCode: `
+        const q = "abc";
+        const sop = { sopCode: "A", sopNumber: "1" };
+        const ok = \`\${sop.sopCode}-\${sop.sopNumber}\`
+          .toLowerCase()
+          .includes(q);
+        console.log(ok);
+      `,
+      language: "typescript",
+    });
+
+    const parsed = JSON.parse(result.content[0].text);
+    const templateRootHallucinations = parsed.hallucinations.filter((h: any) =>
+      h.message.includes("'`${") || h.message.includes("'${")
+    );
+
+    expect(templateRootHallucinations.length).toBe(0);
+    expect(parsed.hallucinations.length).toBe(0);
+    expect(parsed.score).toBe(100);
+  });
 });

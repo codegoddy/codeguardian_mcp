@@ -1,0 +1,6 @@
+c51f883414a3e33adb10b565cb8329f67482849873ed7e7ac5a8e0582125c651  devhq-v1.4.3-darwin-amd64
+90947287f7c2cc5356009ae0858fc9022bf12b1de1614e958a8ac2ee6b14c60a  devhq-v1.4.3-darwin-arm64
+1daabba48ebffbef09ccc189f67bfd066151fd6a16d81a34fbe685279c3c24bd  devhq-v1.4.3-linux-amd64
+81dc8b0e1a1ad0ef25adafe8bd56376169f354d5b368402b585e22a938b1ed21  devhq-v1.4.3-linux-arm64
+f3f4db7e6c1ffd8bddd02505bdca4cbb9a11ec93f560dac222d90391d544cbe5  devhq-v1.4.3-windows-amd64.exe
+4232be59527fdebc322fc60dfe2de6b21744f6ce9ce99117a2a35a80f069deef  devhq-v1.4.3-windows-arm64.exe

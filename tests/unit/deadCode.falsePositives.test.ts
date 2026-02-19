@@ -434,4 +434,75 @@ export function useActivePayments() {
       expect(deadCodeNames).not.toContain("getActivePaymentMethods");
     }, 30000); // 30 second timeout
   });
+
+  describe("Python orphaned-file false positives", () => {
+    it("should NOT flag a Python utility module used only in tests as orphaned", async () => {
+      const pyDir = path.join(tempDir, "python-test-import-tracking");
+      const appUtilsDir = path.join(pyDir, "app", "utils");
+      const testsDir = path.join(pyDir, "tests");
+      await fs.mkdir(appUtilsDir, { recursive: true });
+      await fs.mkdir(testsDir, { recursive: true });
+
+      await fs.writeFile(
+        path.join(appUtilsDir, "query_optimizer.py"),
+        [
+          "class QueryOptimizer:",
+          "    pass",
+          "",
+          "def batch_load_by_ids(ids):",
+          "    return ids",
+        ].join("\n"),
+      );
+
+      await fs.writeFile(
+        path.join(testsDir, "test_query_optimizer.py"),
+        [
+          "from app.utils.query_optimizer import QueryOptimizer, batch_load_by_ids",
+          "",
+          "def test_optimizer_usage():",
+          "    assert QueryOptimizer is not None",
+          "    assert batch_load_by_ids([1]) == [1]",
+        ].join("\n"),
+      );
+
+      const result = await validateCodeTool.handler({
+        projectPath: pyDir,
+        language: "python",
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      const orphaned = (parsed.deadCode || []).filter((d: any) => d.type === "orphanedFile");
+      const orphanedFiles = orphaned.map((d: any) => d.file || d.name);
+
+      expect(orphanedFiles).not.toContain("app/utils/query_optimizer.py");
+    });
+
+    it("should NOT flag Python CLI scripts with __main__ entrypoint as orphaned", async () => {
+      const pyDir = path.join(tempDir, "python-main-script");
+      const utilsDir = path.join(pyDir, "app", "utils");
+      await fs.mkdir(utilsDir, { recursive: true });
+
+      await fs.writeFile(
+        path.join(utilsDir, "seed_system_templates.py"),
+        [
+          "def seed_templates():",
+          "    return 1",
+          "",
+          "if __name__ == \"__main__\":",
+          "    seed_templates()",
+        ].join("\n"),
+      );
+
+      const result = await validateCodeTool.handler({
+        projectPath: pyDir,
+        language: "python",
+      });
+
+      const parsed = JSON.parse(result.content[0].text);
+      const orphaned = (parsed.deadCode || []).filter((d: any) => d.type === "orphanedFile");
+      const orphanedFiles = orphaned.map((d: any) => d.file || d.name);
+
+      expect(orphanedFiles).not.toContain("app/utils/seed_system_templates.py");
+    });
+  });
 });

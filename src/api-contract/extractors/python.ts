@@ -71,7 +71,10 @@ export async function extractRoutes(
 /**
  * Get file patterns for route files based on framework
  */
-function getRoutePatterns(projectPath: string, framework: BackendFramework): string[] {
+function getRoutePatterns(
+  projectPath: string,
+  framework: BackendFramework,
+): string[] {
   switch (framework) {
     case "fastapi":
       return [
@@ -108,17 +111,46 @@ function getRoutePatterns(projectPath: string, framework: BackendFramework): str
 }
 
 /**
- * Extract routes from a Python file
+ * Strip Python triple-quoted docstrings from source content so that code
+ * examples embedded inside them are not matched by the regex route scanner.
+ * Newlines are preserved so that line numbers remain accurate.
+ */
+function stripPythonDocstrings(content: string): string {
+  return content.replace(/"""[\s\S]*?"""|'''[\s\S]*?'''/g, (match) =>
+    match.replace(/[^\n]/g, " "),
+  );
+}
+
+/**
+ * Extract routes from a Python file.
+ *
+ * Strategy:
+ *  1. For AST-supported frameworks (fastapi / flask), run tree-sitter extraction.
+ *     If it succeeds (no exception), return its result unconditionally — even an
+ *     empty array. This is the critical guard: an empty AST result means the file
+ *     genuinely has no route decorators, so we must NOT fall through to regex
+ *     (which would pick up route-like patterns inside docstrings).
+ *  2. For unsupported frameworks, or when AST throws, fall back to regex scanning
+ *     after first stripping triple-quoted docstrings from the content.
  */
 export function extractRoutesFromFile(
   content: string,
   filePath: string,
   framework: BackendFramework,
 ): RouteDefinition[] {
-  // Prefer AST-based extraction for supported frameworks
-  try {
-    const astRoutes = extractRoutesFromPythonAST(content, filePath, framework);
-    if (astRoutes.length > 0) {
+  // AST extraction is only supported for FastAPI and Flask.
+  const astSupportedFramework =
+    framework === "fastapi" || framework === "flask";
+
+  if (astSupportedFramework) {
+    try {
+      const astRoutes = extractRoutesFromPythonAST(
+        content,
+        filePath,
+        framework,
+      );
+      // Trust the AST result unconditionally — including an empty array.
+      // An empty result means there are truly no route decorators in this file.
       return astRoutes.map((r) => ({
         method: r.method,
         path: r.path,
@@ -128,13 +160,19 @@ export function extractRoutesFromFile(
         file: filePath,
         line: r.line,
       }));
+    } catch {
+      // AST parsing threw an error — fall through to regex as a last resort.
     }
-  } catch {
-    // Fall through to regex
   }
 
+  // Regex fallback: used for unsupported frameworks (e.g. Django) or when the
+  // AST parser threw an unrecoverable exception. Strip docstrings first so that
+  // code examples inside documentation strings are not mistaken for route defs.
+  const strippedContent = stripPythonDocstrings(content);
   const routes: RouteDefinition[] = [];
-  const lines = content.split("\n");
+  // Keep the original lines for handler extraction (parameter hints, etc.)
+  const originalLines = content.split("\n");
+  const lines = strippedContent.split("\n");
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -149,7 +187,7 @@ export function extractRoutesFromFile(
       if (fastapiMatch) {
         const route = extractFastAPIRoute(
           content,
-          lines,
+          originalLines,
           i,
           fastapiMatch[1].toUpperCase(),
           fastapiMatch[2],
@@ -169,7 +207,7 @@ export function extractRoutesFromFile(
       if (flaskMatch) {
         const route = extractFlaskRoute(
           content,
-          lines,
+          originalLines,
           i,
           flaskMatch[1],
           filePath,
@@ -193,7 +231,7 @@ export function extractRoutesFromFile(
       for (const method of methods) {
         const route = extractGenericRoute(
           content,
-          lines,
+          originalLines,
           i,
           method.toUpperCase(),
           genericMatch[1],
@@ -240,8 +278,9 @@ function extractFastAPIRoute(
 
       // Extract request model from parameter type hint
       // data: ClientCreate
-      const paramMatch = line.match(/\w+\s*:\s*(\w+)(?:\s*[,\)])/) ||
-                        line.match(/\w+\s*:\s*([\w\[\]]+)(?:\s*[,\)])/);
+      const paramMatch =
+        line.match(/\w+\s*:\s*(\w+)(?:\s*[,\)])/) ||
+        line.match(/\w+\s*:\s*([\w\[\]]+)(?:\s*[,\)])/);
       if (paramMatch) {
         const typeName = paramMatch[1];
         // Filter out primitive types
@@ -524,7 +563,11 @@ export function extractModelsFromFile(
         if (fieldType.includes("Optional")) {
           required = false;
         } else if (fieldDefault) {
-          if (fieldDefault === "None" || fieldDefault.startsWith('"') || fieldDefault.startsWith("'")) {
+          if (
+            fieldDefault === "None" ||
+            fieldDefault.startsWith('"') ||
+            fieldDefault.startsWith("'")
+          ) {
             required = false;
           } else if (!fieldDefault.includes("...")) {
             required = false;
@@ -594,9 +637,7 @@ function isPrimitiveType(typeName: string): boolean {
 /**
  * Extract API configuration from a Python project
  */
-export async function extractApiConfig(
-  projectPath: string,
-): Promise<{
+export async function extractApiConfig(projectPath: string): Promise<{
   apiPrefix: string;
   framework: string;
 }> {

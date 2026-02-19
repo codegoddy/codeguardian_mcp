@@ -7,7 +7,11 @@
  * @format
  */
 
-import type { ProjectContext, ApiContractContext, ApiRouteDefinition } from "../../context/projectContext.js";
+import type {
+  ProjectContext,
+  ApiContractContext,
+  ApiRouteDefinition,
+} from "../../context/projectContext.js";
 import * as fsSync from "fs";
 import * as path from "path";
 import { getParser } from "../../tools/validation/parser.js";
@@ -59,8 +63,9 @@ function validatePotentialDoubleApiPrefix(
       if (fsSync.existsSync(frontendFile)) {
         const content = fsSync.readFileSync(frontendFile, "utf-8");
         apiBaseHasPrefix =
-          /(?:API_BASE_URL|baseURL|baseUrl)\s*[:=][^\n]*\/api(?:['"`]|\/|\b)/i.test(content) ||
-          /VITE_API_URL[^\n]*\/api(?:['"`]|\/|\b)/i.test(content);
+          /(?:API_BASE_URL|baseURL|baseUrl)\s*[:=][^\n]*\/api(?:['"`]|\/|\b)/i.test(
+            content,
+          ) || /VITE_API_URL[^\n]*\/api(?:['"`]|\/|\b)/i.test(content);
       }
     } catch {
       apiBaseHasPrefix = false;
@@ -166,7 +171,9 @@ export function validateApiContractsFromContext(
 // Endpoint Validation
 // ============================================================================
 
-function validateEndpoints(apiContract: ApiContractContext): ApiContractIssue[] {
+function validateEndpoints(
+  apiContract: ApiContractContext,
+): ApiContractIssue[] {
   const issues: ApiContractIssue[] = [];
   const apiBasePrefixCache = new Map<string, boolean>();
   const frontendServiceUsageCache: FrontendServiceUsageCache = {
@@ -193,18 +200,24 @@ function validateEndpoints(apiContract: ApiContractContext): ApiContractIssue[] 
     // Check if there are multiple methods available for this endpoint
     if (mapping.hasMultipleMethods && mapping.availableMethods) {
       const currentMethod = mapping.frontend.method;
-      const otherMethods = mapping.availableMethods.filter(m => m !== currentMethod);
-      
+      const otherMethods = mapping.availableMethods.filter(
+        (m) => m !== currentMethod,
+      );
+
       if (otherMethods.length > 0) {
         // Check if the function name suggests a different method should be used
         const functionName = mapping.frontend.name.toLowerCase();
         const suggestedMethod = inferMethodFromFunctionName(functionName);
-        
-        if (suggestedMethod && suggestedMethod !== currentMethod && mapping.availableMethods.includes(suggestedMethod)) {
+
+        if (
+          suggestedMethod &&
+          suggestedMethod !== currentMethod &&
+          mapping.availableMethods.includes(suggestedMethod)
+        ) {
           issues.push({
             type: "apiMethodMismatch",
             severity: "high",
-            message: `Suspicious HTTP method: function '${mapping.frontend.name}' suggests ${suggestedMethod}, but frontend uses ${currentMethod}. Backend also supports: ${otherMethods.join(', ')}`,
+            message: `Suspicious HTTP method: function '${mapping.frontend.name}' suggests ${suggestedMethod}, but frontend uses ${currentMethod}. Backend also supports: ${otherMethods.join(", ")}`,
             file: mapping.frontend.file,
             line: mapping.frontend.line,
             endpoint,
@@ -247,14 +260,26 @@ function validateEndpoints(apiContract: ApiContractContext): ApiContractIssue[] 
   return issues;
 }
 
-function validateUnmatchedBackend(apiContract: ApiContractContext): ApiContractIssue[] {
+function validateUnmatchedBackend(
+  apiContract: ApiContractContext,
+): ApiContractIssue[] {
   const issues: ApiContractIssue[] = [];
 
   if (apiContract.unmatchedBackend.length === 0) return issues;
 
+  // If no frontend services were found at all, this is a backend-only project
+  // (guardian was started on the backend directory without a paired frontend).
+  // Flagging every backend route as "no matching frontend service" produces 100%
+  // false positives in this case, so we skip the check entirely.
+  if (apiContract.frontendServices.length === 0) {
+    return issues;
+  }
+
   const frontendRoots = new Set<string>();
   for (const service of apiContract.frontendServices) {
-    const normalized = removeApiPrefix(normalizePathForComparison(service.endpoint));
+    const normalized = removeApiPrefix(
+      normalizePathForComparison(service.endpoint),
+    );
     const root = normalized.split("/")[0];
     if (root) frontendRoots.add(root);
   }
@@ -295,7 +320,10 @@ function validateUnmatchedBackend(apiContract: ApiContractContext): ApiContractI
 
     // Skip routes that appear to be method mismatches or near-matches already
     // represented from the frontend side.
-    const nearFrontend = findSimilarFrontendService(route, apiContract.frontendServices);
+    const nearFrontend = findSimilarFrontendService(
+      route,
+      apiContract.frontendServices,
+    );
     if (nearFrontend) continue;
 
     issues.push({
@@ -348,7 +376,9 @@ function isLikelyUnregisteredExpressRoute(
   return !normalizedRoutePath.startsWith("api/");
 }
 
-function validateBackendHandlerImplementations(apiContract: ApiContractContext): ApiContractIssue[] {
+function validateBackendHandlerImplementations(
+  apiContract: ApiContractContext,
+): ApiContractIssue[] {
   const issues: ApiContractIssue[] = [];
   if (apiContract.backendRoutes.length === 0) return issues;
 
@@ -360,7 +390,9 @@ function validateBackendHandlerImplementations(apiContract: ApiContractContext):
     const backendMethod = mapping?.backend?.method;
     const backendPath = mapping?.backend?.path;
     if (!backendMethod || !backendPath) continue;
-    mappedBackendRouteKeys.add(buildBackendRouteKey(backendMethod, backendPath));
+    mappedBackendRouteKeys.add(
+      buildBackendRouteKey(backendMethod, backendPath),
+    );
   }
 
   for (const route of apiContract.backendRoutes) {
@@ -483,19 +515,29 @@ function hasFrontendPathMatch(
 
 function inferMethodFromFunctionName(functionName: string): string | undefined {
   const methodPatterns: Record<string, string[]> = {
-    'GET': ['get', 'fetch', 'load', 'retrieve', 'read', 'list', 'find', 'search'],
-    'POST': ['create', 'add', 'post', 'submit', 'save', 'insert', 'register', 'login', 'logout'],
-    'PUT': ['update', 'edit', 'modify', 'change', 'replace'],
-    'PATCH': ['patch', 'partial', 'tweak'],
-    'DELETE': ['delete', 'remove', 'destroy', 'clear', 'drop']
+    GET: ["get", "fetch", "load", "retrieve", "read", "list", "find", "search"],
+    POST: [
+      "create",
+      "add",
+      "post",
+      "submit",
+      "save",
+      "insert",
+      "register",
+      "login",
+      "logout",
+    ],
+    PUT: ["update", "edit", "modify", "change", "replace"],
+    PATCH: ["patch", "partial", "tweak"],
+    DELETE: ["delete", "remove", "destroy", "clear", "drop"],
   };
-  
+
   for (const [method, patterns] of Object.entries(methodPatterns)) {
-    if (patterns.some(pattern => functionName.includes(pattern))) {
+    if (patterns.some((pattern) => functionName.includes(pattern))) {
       return method;
     }
   }
-  
+
   return undefined;
 }
 
@@ -538,23 +580,26 @@ function validatePathCompatibility(
   // so frontend "roles/{role_id}/sops" matches backend "api/roles/{id}/sops"
   const feStripped = removeApiPrefix(normalizedFrontend);
   const beStripped = removeApiPrefix(normalizedBackend);
-  const frontendSegments = feStripped.split('/');
-  const backendSegments = beStripped.split('/');
-  
+  const frontendSegments = feStripped.split("/");
+  const backendSegments = beStripped.split("/");
+
   // Build positional param map: match params by their position in the path
   const positionallyMatched = new Set<string>();
   const positionallyMatchedBackend = new Set<string>();
-  
+
   if (frontendSegments.length === backendSegments.length) {
     for (let i = 0; i < frontendSegments.length; i++) {
       const fSeg = frontendSegments[i];
       const bSeg = backendSegments[i];
       if (isPathParam(fSeg) && isPathParam(bSeg)) {
         // Both are path params at the same position — they're equivalent
-        const fParam = fSeg.replace(/[{}\$:]/g, '').split(':')[0];
-        const bParam = bSeg.replace(/[{}\$:]/g, '').split(':')[0];
+        const fParam = fSeg.replace(/[{}\$:]/g, "").split(":")[0];
+        const bParam = bSeg.replace(/[{}\$:]/g, "").split(":")[0];
         // Convert camelCase frontend param to snake_case for comparison
-        const fParamSnake = fParam.replace(/[A-Z]/g, (letter: string) => `_${letter.toLowerCase()}`);
+        const fParamSnake = fParam.replace(
+          /[A-Z]/g,
+          (letter: string) => `_${letter.toLowerCase()}`,
+        );
         positionallyMatched.add(fParam);
         positionallyMatched.add(fParamSnake);
         positionallyMatchedBackend.add(bParam);
@@ -564,7 +609,10 @@ function validatePathCompatibility(
 
   // Check for missing parameters in frontend (skip positionally matched ones)
   for (const param of backendParams) {
-    if (!frontendParams.includes(param) && !positionallyMatchedBackend.has(param)) {
+    if (
+      !frontendParams.includes(param) &&
+      !positionallyMatchedBackend.has(param)
+    ) {
       issues.push({
         type: "apiPathMismatch",
         severity: "high",
@@ -614,17 +662,29 @@ function validateRequestResponseTypes(
     const backendRequestModel = mapping.backend.requestModel;
 
     // Skip validation for complex types that couldn't be extracted properly
-    if (isComplexType(frontendRequestType) || isComplexType(backendRequestModel)) {
+    if (
+      isComplexType(frontendRequestType) ||
+      isComplexType(backendRequestModel)
+    ) {
       // Complex types - skip detailed validation
     } else if (frontendRequestType !== backendRequestModel) {
       // Check if they're similar type names
-      if (!areSimilarTypeNames(frontendRequestType.toLowerCase(), backendRequestModel.toLowerCase())) {
+      if (
+        !areSimilarTypeNames(
+          frontendRequestType.toLowerCase(),
+          backendRequestModel.toLowerCase(),
+        )
+      ) {
         // Check if there's a type mapping for this
         const typeMapping = apiContract.typeMappings.get(frontendRequestType);
         if (!typeMapping || typeMapping.backend?.name !== backendRequestModel) {
           // Check if FE sends an array type that the BE wraps in a model
           // e.g., FE sends PaymentMilestoneCreate[] → BE expects PaymentScheduleSetup { milestones: List[PaymentMilestoneCreate] }
-          const isWrappedArray = isArrayTypeWrappedInModel(frontendRequestType, backendRequestModel, apiContract);
+          const isWrappedArray = isArrayTypeWrappedInModel(
+            frontendRequestType,
+            backendRequestModel,
+            apiContract,
+          );
           if (!isWrappedArray) {
             issues.push({
               type: "apiTypeMismatch",
@@ -644,13 +704,16 @@ function validateRequestResponseTypes(
     // Validate field compatibility if we have the type mapping
     const typeMapping = apiContract.typeMappings.get(frontendRequestType);
     if (typeMapping) {
-      const backendModel = apiContract.backendModels.find(m => m.name === backendRequestModel);
+      const backendModel = apiContract.backendModels.find(
+        (m) => m.name === backendRequestModel,
+      );
       if (backendModel) {
         // Check for missing required fields
         for (const backendField of backendModel.fields) {
           if (backendField.required) {
             const frontendField = typeMapping.frontend.fields.find(
-              (f: { name: string }) => normalizeName(f.name) === normalizeName(backendField.name),
+              (f: { name: string }) =>
+                normalizeName(f.name) === normalizeName(backendField.name),
             );
 
             if (!frontendField) {
@@ -683,7 +746,10 @@ function validateRequestResponseTypes(
     if (normalizedFrontendType !== normalizedBackendModel) {
       // Check if there's a type mapping for this
       const typeMapping = apiContract.typeMappings.get(normalizedFrontendType);
-      if (!typeMapping || typeMapping.backend?.name !== normalizedBackendModel) {
+      if (
+        !typeMapping ||
+        typeMapping.backend?.name !== normalizedBackendModel
+      ) {
         issues.push({
           type: "apiTypeMismatch",
           severity: "medium",
@@ -731,7 +797,8 @@ function validateInlineRequestResponseFields(
   const backendHandlerName = mapping?.backend?.handler;
 
   if (!frontendFile || !backendFile || !method || !backendPath) return issues;
-  if (!fsSync.existsSync(frontendFile) || !fsSync.existsSync(backendFile)) return issues;
+  if (!fsSync.existsSync(frontendFile) || !fsSync.existsSync(backendFile))
+    return issues;
 
   let feContent = "";
   let beContent = "";
@@ -754,26 +821,42 @@ function validateInlineRequestResponseFields(
 
   const frontendFnName: string | undefined = mapping?.frontend?.name;
   const feFnNode = frontendFnName
-    ? findFunctionLikeByName(feTree.rootNode, feContent, frontendFnName, mapping?.frontend?.line)
+    ? findFunctionLikeByName(
+        feTree.rootNode,
+        feContent,
+        frontendFnName,
+        mapping?.frontend?.line,
+      )
     : null;
-  const shouldValidateFrontendFieldMismatches = shouldValidateInlineFrontendFieldMismatches(
-    mapping,
-    feTree.rootNode,
-    feFnNode,
-    feContent,
-    apiContract,
-    frontendServiceUsageCache,
-  );
+  const shouldValidateFrontendFieldMismatches =
+    shouldValidateInlineFrontendFieldMismatches(
+      mapping,
+      feTree.rootNode,
+      feFnNode,
+      feContent,
+      apiContract,
+      frontendServiceUsageCache,
+    );
 
-  const feResponseFields = feFnNode ? extractResponseFieldsUsed(feFnNode, feContent) : new Set<string>();
-  const feRequestFields = feFnNode ? extractRequestBodyFieldsUsed(feFnNode, feContent) : new Set<string>();
+  const feResponseFields = feFnNode
+    ? extractResponseFieldsUsed(feFnNode, feContent)
+    : new Set<string>();
+  const feRequestFields = feFnNode
+    ? extractRequestBodyFieldsUsed(feFnNode, feContent)
+    : new Set<string>();
   const feRequestTypeFields = feFnNode
-    ? inferRequestBodyFieldsFromTypedParams(feFnNode, feContent, apiContract.frontendTypes)
+    ? inferRequestBodyFieldsFromTypedParams(
+        feFnNode,
+        feContent,
+        apiContract.frontendTypes,
+      )
     : new Set<string>();
   for (const field of feRequestTypeFields) {
     feRequestFields.add(field);
   }
-  const feRequestBodyHasSpread = feFnNode ? requestBodyHasSpreadLiteral(feFnNode, feContent) : false;
+  const feRequestBodyHasSpread = feFnNode
+    ? requestBodyHasSpreadLiteral(feFnNode, feContent)
+    : false;
 
   const backendHandler = resolveExpressBackendHandler(
     beTree.rootNode,
@@ -789,14 +872,22 @@ function validateInlineRequestResponseFields(
   const beRequestFields = backendHandler
     ? extractBackendRequestFields(backendHandler.node, backendHandler.content)
     : new Set<string>();
-  const feQueryFields = new Set<string>((mapping?.frontend?.queryParams || []).map((p: any) => p.name));
-  const beDeclaredQueryFields = new Set<string>((mapping?.backend?.queryParams || []).map((p: any) => p.name));
+  const feQueryFields = new Set<string>(
+    (mapping?.frontend?.queryParams || []).map((p: any) => p.name),
+  );
+  const beDeclaredQueryFields = new Set<string>(
+    (mapping?.backend?.queryParams || []).map((p: any) => p.name),
+  );
   const beHandlerQueryFields = backendHandler
     ? extractBackendQueryFields(backendHandler.node, backendHandler.content)
     : new Set<string>();
 
   // Response field mismatches
-  if (shouldValidateFrontendFieldMismatches && feResponseFields.size > 0 && beResponseFields.size > 0) {
+  if (
+    shouldValidateFrontendFieldMismatches &&
+    feResponseFields.size > 0 &&
+    beResponseFields.size > 0
+  ) {
     for (const field of feResponseFields) {
       if (!beResponseFields.has(field)) {
         issues.push({
@@ -954,13 +1045,18 @@ function detectBackendPropertyHallucinations(
       const nameNode = node.childForFieldName?.("name");
       const valueNode = node.childForFieldName?.("value");
       if (nameNode?.type === "identifier" && valueNode) {
-        const variableName = content.slice(nameNode.startIndex, nameNode.endIndex);
+        const variableName = content.slice(
+          nameNode.startIndex,
+          nameNode.endIndex,
+        );
         const callNode = unwrapAwaitExpression(valueNode);
         if (callNode?.type === "call_expression") {
           const fnNode = callNode.childForFieldName?.("function");
           const prismaRef = extractPrismaModelReference(fnNode, content);
           if (prismaRef && prismaMethods.has(prismaRef.method.toLowerCase())) {
-            const modelFields = knownModelFieldSets.get(normalizeName(prismaRef.model));
+            const modelFields = knownModelFieldSets.get(
+              normalizeName(prismaRef.model),
+            );
             if (modelFields) {
               variableToModel.set(variableName, {
                 modelName: prismaRef.model,
@@ -985,7 +1081,10 @@ function detectBackendPropertyHallucinations(
     if (!paramsNode) return null;
 
     if (paramsNode.type === "identifier") {
-      const paramName = content.slice(paramsNode.startIndex, paramsNode.endIndex);
+      const paramName = content.slice(
+        paramsNode.startIndex,
+        paramsNode.endIndex,
+      );
       return paramName || null;
     }
 
@@ -1021,14 +1120,24 @@ function detectBackendPropertyHallucinations(
         const objectNode = fnNode.childForFieldName?.("object");
         const propertyNode = fnNode.childForFieldName?.("property");
 
-        if (objectNode?.type === "identifier" && propertyNode?.type === "property_identifier") {
-          const collectionName = content.slice(objectNode.startIndex, objectNode.endIndex);
-          const iterateMethod = content.slice(propertyNode.startIndex, propertyNode.endIndex);
+        if (
+          objectNode?.type === "identifier" &&
+          propertyNode?.type === "property_identifier"
+        ) {
+          const collectionName = content.slice(
+            objectNode.startIndex,
+            objectNode.endIndex,
+          );
+          const iterateMethod = content.slice(
+            propertyNode.startIndex,
+            propertyNode.endIndex,
+          );
           const modelRef = variableToModel.get(collectionName);
 
           if (modelRef?.isCollection && arrayMethodNames.has(iterateMethod)) {
             const callbackNode = (argsNode.namedChildren || []).find(
-              (child: any) => child.type === "arrow_function" || child.type === "function",
+              (child: any) =>
+                child.type === "arrow_function" || child.type === "function",
             );
             const callbackParam = extractFirstCallbackParamName(callbackNode);
             if (callbackParam && !variableToModel.has(callbackParam)) {
@@ -1043,7 +1152,8 @@ function detectBackendPropertyHallucinations(
       }
     }
 
-    for (const child of node.children || []) registerCollectionElementAliases(child);
+    for (const child of node.children || [])
+      registerCollectionElementAliases(child);
   };
 
   registerCollectionElementAliases(handlerNode);
@@ -1056,11 +1166,20 @@ function detectBackendPropertyHallucinations(
     if (node.type === "member_expression") {
       const objectNode = node.childForFieldName?.("object");
       const propertyNode = node.childForFieldName?.("property");
-      if (objectNode?.type === "identifier" && propertyNode?.type === "property_identifier") {
-        const variableName = content.slice(objectNode.startIndex, objectNode.endIndex);
+      if (
+        objectNode?.type === "identifier" &&
+        propertyNode?.type === "property_identifier"
+      ) {
+        const variableName = content.slice(
+          objectNode.startIndex,
+          objectNode.endIndex,
+        );
         const modelRef = variableToModel.get(variableName);
         if (modelRef) {
-          const propertyName = content.slice(propertyNode.startIndex, propertyNode.endIndex);
+          const propertyName = content.slice(
+            propertyNode.startIndex,
+            propertyNode.endIndex,
+          );
 
           if (modelRef.isCollection && arrayMethodNames.has(propertyName)) {
             // `findMany()` returns arrays, so collection methods/properties are valid.
@@ -1118,13 +1237,17 @@ function extractPrismaModelReference(
 
   const methodNode = functionNode.childForFieldName?.("property");
   const objectNode = functionNode.childForFieldName?.("object");
-  if (!methodNode || !objectNode || objectNode.type !== "member_expression") return null;
+  if (!methodNode || !objectNode || objectNode.type !== "member_expression")
+    return null;
 
   const prismaRootNode = objectNode.childForFieldName?.("object");
   const modelNode = objectNode.childForFieldName?.("property");
   if (!prismaRootNode || !modelNode) return null;
 
-  const prismaRoot = content.slice(prismaRootNode.startIndex, prismaRootNode.endIndex);
+  const prismaRoot = content.slice(
+    prismaRootNode.startIndex,
+    prismaRootNode.endIndex,
+  );
   if (prismaRoot !== "prisma") return null;
 
   const model = content.slice(modelNode.startIndex, modelNode.endIndex);
@@ -1134,7 +1257,12 @@ function extractPrismaModelReference(
   return { model, method };
 }
 
-function findFunctionLikeByName(root: any, content: string, name: string, preferredLine?: number): any | null {
+function findFunctionLikeByName(
+  root: any,
+  content: string,
+  name: string,
+  preferredLine?: number,
+): any | null {
   const candidates: any[] = [];
   const target = name.trim();
 
@@ -1143,7 +1271,10 @@ function findFunctionLikeByName(root: any, content: string, name: string, prefer
 
     if (node.type === "function_declaration") {
       const nameNode = node.childForFieldName?.("name");
-      if (nameNode && content.slice(nameNode.startIndex, nameNode.endIndex) === target) {
+      if (
+        nameNode &&
+        content.slice(nameNode.startIndex, nameNode.endIndex) === target
+      ) {
         candidates.push(node);
       }
     }
@@ -1152,8 +1283,13 @@ function findFunctionLikeByName(root: any, content: string, name: string, prefer
     if (node.type === "variable_declarator") {
       const nameNode = node.childForFieldName?.("name");
       const valueNode = node.childForFieldName?.("value");
-      const nodeName = nameNode ? content.slice(nameNode.startIndex, nameNode.endIndex) : "";
-      if (nodeName === target && (valueNode?.type === "arrow_function" || valueNode?.type === "function")) {
+      const nodeName = nameNode
+        ? content.slice(nameNode.startIndex, nameNode.endIndex)
+        : "";
+      if (
+        nodeName === target &&
+        (valueNode?.type === "arrow_function" || valueNode?.type === "function")
+      ) {
         candidates.push(valueNode);
       }
     }
@@ -1162,7 +1298,11 @@ function findFunctionLikeByName(root: any, content: string, name: string, prefer
     if (node.type === "pair") {
       const keyNode = node.childForFieldName?.("key");
       const valueNode = node.childForFieldName?.("value");
-      if (keyNode && valueNode && (valueNode.type === "arrow_function" || valueNode.type === "function")) {
+      if (
+        keyNode &&
+        valueNode &&
+        (valueNode.type === "arrow_function" || valueNode.type === "function")
+      ) {
         const keyText = content
           .slice(keyNode.startIndex, keyNode.endIndex)
           .replace(/^['"`]/, "")
@@ -1264,7 +1404,10 @@ function shouldValidateInlineFrontendFieldMismatches(
   return isUsed;
 }
 
-function extractFrontendServiceReference(frontendFnNode: any, frontendContent: string): string | null {
+function extractFrontendServiceReference(
+  frontendFnNode: any,
+  frontendContent: string,
+): string | null {
   let pairNode = frontendFnNode;
   while (pairNode && pairNode.type !== "pair") {
     pairNode = pairNode.parent;
@@ -1280,7 +1423,10 @@ function extractFrontendServiceReference(frontendFnNode: any, frontendContent: s
     .replace(/['"`]$/, "");
   if (!methodName) return null;
 
-  const objectName = extractServiceObjectNameFromPair(pairNode, frontendContent);
+  const objectName = extractServiceObjectNameFromPair(
+    pairNode,
+    frontendContent,
+  );
   if (!objectName) return null;
 
   return `${objectName}.${methodName}`;
@@ -1309,7 +1455,10 @@ function findFrontendServiceReferenceByName(
           .replace(/['"`]$/, "");
 
         if (keyText === target) {
-          const objectName = extractServiceObjectNameFromPair(node, frontendContent);
+          const objectName = extractServiceObjectNameFromPair(
+            node,
+            frontendContent,
+          );
           if (objectName) {
             const line =
               typeof keyNode?.startPosition?.row === "number"
@@ -1343,14 +1492,20 @@ function findFrontendServiceReferenceByName(
   return best.reference;
 }
 
-function extractServiceObjectNameFromPair(pairNode: any, frontendContent: string): string | null {
+function extractServiceObjectNameFromPair(
+  pairNode: any,
+  frontendContent: string,
+): string | null {
   let current = pairNode?.parent;
   while (current) {
     if (current.type === "variable_declarator") {
       const nameNode = current.childForFieldName?.("name");
       if (nameNode?.type !== "identifier") return null;
 
-      const objectName = frontendContent.slice(nameNode.startIndex, nameNode.endIndex);
+      const objectName = frontendContent.slice(
+        nameNode.startIndex,
+        nameNode.endIndex,
+      );
       return objectName || null;
     }
     current = current.parent;
@@ -1381,7 +1536,10 @@ function isFrontendServiceReferenceUsed(
     return true;
   }
 
-  const sourceFiles = getFrontendSourceFiles(frontendRoot, frontendServiceUsageCache);
+  const sourceFiles = getFrontendSourceFiles(
+    frontendRoot,
+    frontendServiceUsageCache,
+  );
   if (sourceFiles.length === 0) {
     frontendServiceUsageCache.serviceUsage.set(usageCacheKey, true);
     return true;
@@ -1397,7 +1555,10 @@ function isFrontendServiceReferenceUsed(
   let methodUsed = false;
   let objectUsedByAnyMethod = false;
   for (const filePath of sourceFiles) {
-    const sourceContent = readCachedFileContent(filePath, frontendServiceUsageCache);
+    const sourceContent = readCachedFileContent(
+      filePath,
+      frontendServiceUsageCache,
+    );
     if (!sourceContent) continue;
 
     if (anyMemberCallPattern.test(sourceContent)) {
@@ -1409,10 +1570,16 @@ function isFrontendServiceReferenceUsed(
       break;
     }
 
-    const aliases = extractDestructuredMethodAliases(sourceContent, serviceObject, serviceMethod);
+    const aliases = extractDestructuredMethodAliases(
+      sourceContent,
+      serviceObject,
+      serviceMethod,
+    );
     if (
       aliases.some((alias) => {
-        const aliasCallPattern = new RegExp(`\\b${escapeRegexLiteral(alias)}\\s*\\(`);
+        const aliasCallPattern = new RegExp(
+          `\\b${escapeRegexLiteral(alias)}\\s*\\(`,
+        );
         return aliasCallPattern.test(sourceContent);
       })
     ) {
@@ -1455,7 +1622,9 @@ function extractDestructuredMethodAliases(
       }
 
       const aliasMatch = entry.match(
-        new RegExp(`^${escapeRegexLiteral(serviceMethod)}\\s*:\\s*([A-Za-z_$][\\w$]*)$`),
+        new RegExp(
+          `^${escapeRegexLiteral(serviceMethod)}\\s*:\\s*([A-Za-z_$][\\w$]*)$`,
+        ),
       );
       if (aliasMatch) {
         aliases.add(aliasMatch[1]);
@@ -1466,7 +1635,10 @@ function extractDestructuredMethodAliases(
   return Array.from(aliases);
 }
 
-function resolveFrontendSourceRoot(apiContract: ApiContractContext, frontendFile: string): string | null {
+function resolveFrontendSourceRoot(
+  apiContract: ApiContractContext,
+  frontendFile: string,
+): string | null {
   const configuredRoot = apiContract?.projectStructure?.frontend?.path;
   if (configuredRoot && fsSync.existsSync(configuredRoot)) {
     return configuredRoot;
@@ -1543,7 +1715,10 @@ function escapeRegexLiteral(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function extractResponseFieldsUsed(functionNode: any, content: string): Set<string> {
+function extractResponseFieldsUsed(
+  functionNode: any,
+  content: string,
+): Set<string> {
   const fields = new Set<string>();
   const jsonVars = new Set<string>();
 
@@ -1566,9 +1741,15 @@ function extractResponseFieldsUsed(functionNode: any, content: string): Set<stri
     if (node.type === "member_expression") {
       const objectNode = node.childForFieldName?.("object");
       const propertyNode = node.childForFieldName?.("property");
-      if (objectNode?.type === "identifier" && propertyNode?.type === "property_identifier") {
+      if (
+        objectNode?.type === "identifier" &&
+        propertyNode?.type === "property_identifier"
+      ) {
         const obj = content.slice(objectNode.startIndex, objectNode.endIndex);
-        const prop = content.slice(propertyNode.startIndex, propertyNode.endIndex);
+        const prop = content.slice(
+          propertyNode.startIndex,
+          propertyNode.endIndex,
+        );
         if (jsonVars.has(obj)) fields.add(prop);
       }
     }
@@ -1623,7 +1804,10 @@ function inferRequestBodyFieldsFromTypedParams(
   return inferred;
 }
 
-function extractRequestBodyVariableNames(functionNode: any, content: string): Set<string> {
+function extractRequestBodyVariableNames(
+  functionNode: any,
+  content: string,
+): Set<string> {
   const bodyVars = new Set<string>();
 
   const collectSpreadIdentifiers = (objectNode: any) => {
@@ -1706,10 +1890,13 @@ function resolveNamedTypeFieldNames(
     return new Set((target?.fields || []).map((field) => field.name));
   };
 
-  const unwrapArray = (text: string): string => text.replace(/\[\]$/, "").trim();
+  const unwrapArray = (text: string): string =>
+    text.replace(/\[\]$/, "").trim();
   const baseText = unwrapArray(cleaned);
 
-  const passthroughWrapper = baseText.match(/^(?:Partial|Required|Readonly|NonNullable|Promise|Array)<\s*([^>]+)\s*>$/);
+  const passthroughWrapper = baseText.match(
+    /^(?:Partial|Required|Readonly|NonNullable|Promise|Array)<\s*([^>]+)\s*>$/,
+  );
   if (passthroughWrapper) {
     return resolveNamedTypeFieldNames(passthroughWrapper[1], frontendTypes);
   }
@@ -1753,12 +1940,17 @@ function resolveNamedTypeFieldNames(
   return lookupTypeFields(baseText);
 }
 
-function requestBodyHasSpreadLiteral(functionNode: any, content: string): boolean {
+function requestBodyHasSpreadLiteral(
+  functionNode: any,
+  content: string,
+): boolean {
   let hasSpread = false;
 
   const objectHasSpread = (node: any): boolean => {
     if (!node || node.type !== "object") return false;
-    return (node.children || []).some((child: any) => child.type === "spread_element");
+    return (node.children || []).some(
+      (child: any) => child.type === "spread_element",
+    );
   };
 
   const visit = (node: any) => {
@@ -1822,7 +2014,10 @@ function isAwaitedJsonCall(node: any, content: string): boolean {
   return propText === "json";
 }
 
-function extractRequestBodyFieldsUsed(functionNode: any, content: string): Set<string> {
+function extractRequestBodyFieldsUsed(
+  functionNode: any,
+  content: string,
+): Set<string> {
   const fields = new Set<string>();
   const bodyVars = new Set<string>();
 
@@ -1915,28 +2110,36 @@ function extractRequestBodyFieldsUsed(functionNode: any, content: string): Set<s
     const nameNode =
       param.childForFieldName?.("pattern") ||
       param.childForFieldName?.("name") ||
-      (param.namedChildren ? param.namedChildren.find((c: any) => c.type === "identifier") : null);
+      (param.namedChildren
+        ? param.namedChildren.find((c: any) => c.type === "identifier")
+        : null);
     if (!nameNode) continue;
     const paramName = content.slice(nameNode.startIndex, nameNode.endIndex);
     if (!bodyVars.has(paramName)) continue;
 
     const typeNode =
       param.childForFieldName?.("type") ||
-      (param.namedChildren ? param.namedChildren.find((c: any) => c.type === "type_annotation") : null);
+      (param.namedChildren
+        ? param.namedChildren.find((c: any) => c.type === "type_annotation")
+        : null);
     if (!typeNode) continue;
     const astKeys = extractKeysFromInlineObjectTypeNode(typeNode, content);
     if (astKeys.length > 0) {
       for (const key of astKeys) fields.add(key);
     } else {
       const typeText = content.slice(typeNode.startIndex, typeNode.endIndex);
-      for (const key of extractKeysFromInlineObjectType(typeText)) fields.add(key);
+      for (const key of extractKeysFromInlineObjectType(typeText))
+        fields.add(key);
     }
   }
 
   return fields;
 }
 
-function extractKeysFromInlineObjectTypeNode(typeNode: any, content: string): string[] {
+function extractKeysFromInlineObjectTypeNode(
+  typeNode: any,
+  content: string,
+): string[] {
   const keys: string[] = [];
   let objectType: any | null = null;
 
@@ -1955,7 +2158,14 @@ function extractKeysFromInlineObjectTypeNode(typeNode: any, content: string): st
     if (child.type !== "property_signature") continue;
     const nameNode =
       child.childForFieldName?.("name") ||
-      (child.namedChildren ? child.namedChildren.find((c: any) => c.type === "property_identifier" || c.type === "identifier" || c.type === "string") : null);
+      (child.namedChildren
+        ? child.namedChildren.find(
+            (c: any) =>
+              c.type === "property_identifier" ||
+              c.type === "identifier" ||
+              c.type === "string",
+          )
+        : null);
     if (!nameNode) continue;
     const raw = content.slice(nameNode.startIndex, nameNode.endIndex);
     const cleaned = raw.replace(/^['"`]/, "").replace(/['"`]$/, "");
@@ -2010,9 +2220,17 @@ function resolveExpressBackendHandler(
   preferredHandlerName?: string,
 ): { node: any; content: string; filePath: string } | null {
   if (preferredHandlerName) {
-    const localFn = findFunctionLikeByName(routeTreeRoot, routeFileContent, preferredHandlerName);
+    const localFn = findFunctionLikeByName(
+      routeTreeRoot,
+      routeFileContent,
+      preferredHandlerName,
+    );
     if (localFn) {
-      return { node: localFn, content: routeFileContent, filePath: routeFilePath };
+      return {
+        node: localFn,
+        content: routeFileContent,
+        filePath: routeFilePath,
+      };
     }
 
     const importedFile = resolveImportedHandlerFile(
@@ -2053,7 +2271,11 @@ function resolveExpressBackendHandler(
     backendPath,
   );
   if (inlineHandler) {
-    return { node: inlineHandler, content: routeFileContent, filePath: routeFilePath };
+    return {
+      node: inlineHandler,
+      content: routeFileContent,
+      filePath: routeFilePath,
+    };
   }
 
   const namedHandler = findExpressRouteHandlerIdentifier(
@@ -2064,7 +2286,11 @@ function resolveExpressBackendHandler(
   );
   if (!namedHandler) return null;
 
-  const handlerFile = resolveImportedHandlerFile(routeFilePath, routeFileContent, namedHandler);
+  const handlerFile = resolveImportedHandlerFile(
+    routeFilePath,
+    routeFileContent,
+    namedHandler,
+  );
   if (!handlerFile || !fsSync.existsSync(handlerFile)) return null;
 
   let handlerContent = "";
@@ -2081,7 +2307,11 @@ function resolveExpressBackendHandler(
     return null;
   }
 
-  const handlerNode = findFunctionLikeByName(handlerTree.rootNode, handlerContent, namedHandler);
+  const handlerNode = findFunctionLikeByName(
+    handlerTree.rootNode,
+    handlerContent,
+    namedHandler,
+  );
   if (!handlerNode) return null;
 
   return {
@@ -2123,7 +2353,8 @@ function findExpressRouteHandlerIdentifier(
               .replace(/['"`]$/, "");
             if (isRoutePathMatchForHandler(raw, backendPath)) {
               const inlineFnArg = (args.children || []).find(
-                (c: any) => c.type === "arrow_function" || c.type === "function",
+                (c: any) =>
+                  c.type === "arrow_function" || c.type === "function",
               );
               if (inlineFnArg) {
                 return;
@@ -2134,7 +2365,10 @@ function findExpressRouteHandlerIdentifier(
               );
               if (identifierArgs.length > 0) {
                 const handlerNode = identifierArgs[identifierArgs.length - 1];
-                found = content.slice(handlerNode.startIndex, handlerNode.endIndex);
+                found = content.slice(
+                  handlerNode.startIndex,
+                  handlerNode.endIndex,
+                );
                 return;
               }
             }
@@ -2174,7 +2408,8 @@ function resolveImportedHandlerFile(
     }
   }
 
-  const defaultImportRegex = /import\s+([A-Za-z_][A-Za-z0-9_]*)\s+from\s*['"]([^'"]+)['"]/g;
+  const defaultImportRegex =
+    /import\s+([A-Za-z_][A-Za-z0-9_]*)\s+from\s*['"]([^'"]+)['"]/g;
   while ((match = defaultImportRegex.exec(routeFileContent))) {
     if (match[1] === handlerName) {
       const resolved = resolveImportTarget(routeFilePath, match[2]);
@@ -2182,7 +2417,8 @@ function resolveImportedHandlerFile(
     }
   }
 
-  const requireNamedRegex = /const\s*{([^}]+)}\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)/g;
+  const requireNamedRegex =
+    /const\s*{([^}]+)}\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)/g;
   while ((match = requireNamedRegex.exec(routeFileContent))) {
     const importedList = match[1]
       .split(",")
@@ -2199,7 +2435,10 @@ function resolveImportedHandlerFile(
   return null;
 }
 
-function resolveImportTarget(routeFilePath: string, importPath: string): string | null {
+function resolveImportTarget(
+  routeFilePath: string,
+  importPath: string,
+): string | null {
   if (!importPath.startsWith(".")) return null;
 
   const baseDir = path.dirname(routeFilePath);
@@ -2231,7 +2470,10 @@ function resolveImportTarget(routeFilePath: string, importPath: string): string 
   return null;
 }
 
-function isRoutePathMatchForHandler(routePath: string, targetBackendPath: string): boolean {
+function isRoutePathMatchForHandler(
+  routePath: string,
+  targetBackendPath: string,
+): boolean {
   const normalizedRoutePath = normalizePathForComparison(routePath);
   const normalizedTargetPath = normalizePathForComparison(targetBackendPath);
 
@@ -2258,7 +2500,12 @@ function isRoutePathMatchForHandler(routePath: string, targetBackendPath: string
   return false;
 }
 
-function findExpressRouteHandler(root: any, content: string, method: string, backendPath: string): any | null {
+function findExpressRouteHandler(
+  root: any,
+  content: string,
+  method: string,
+  backendPath: string,
+): any | null {
   let found: any | null = null;
   const targetMethod = method.toLowerCase();
 
@@ -2270,14 +2517,25 @@ function findExpressRouteHandler(root: any, content: string, method: string, bac
       if (fn?.type === "member_expression" && args) {
         const obj = fn.childForFieldName?.("object");
         const prop = fn.childForFieldName?.("property");
-        const propText = prop ? content.slice(prop.startIndex, prop.endIndex).toLowerCase() : "";
-        if (propText === targetMethod && (obj?.type === "identifier")) {
-          const firstArg = (args.children || []).find((c: any) => c.type === "string" || c.type === "template_string");
+        const propText = prop
+          ? content.slice(prop.startIndex, prop.endIndex).toLowerCase()
+          : "";
+        if (propText === targetMethod && obj?.type === "identifier") {
+          const firstArg = (args.children || []).find(
+            (c: any) => c.type === "string" || c.type === "template_string",
+          );
           if (firstArg && firstArg.type === "string") {
-            const raw = content.slice(firstArg.startIndex, firstArg.endIndex).trim().replace(/^['"`]/, "").replace(/['"`]$/, "");
+            const raw = content
+              .slice(firstArg.startIndex, firstArg.endIndex)
+              .trim()
+              .replace(/^['"`]/, "")
+              .replace(/['"`]$/, "");
             if (isRoutePathMatchForHandler(raw, backendPath)) {
               // Find the first function-like arg after the path
-              const fnArg = (args.children || []).find((c: any) => c.type === "arrow_function" || c.type === "function");
+              const fnArg = (args.children || []).find(
+                (c: any) =>
+                  c.type === "arrow_function" || c.type === "function",
+              );
               if (fnArg) {
                 found = fnArg;
                 return;
@@ -2334,12 +2592,17 @@ function detectMissingBackendResponse(
         const objectNode = fnNode.childForFieldName?.("object");
         const propertyNode = fnNode.childForFieldName?.("property");
         const propertyText = propertyNode
-          ? content.slice(propertyNode.startIndex, propertyNode.endIndex).toLowerCase()
+          ? content
+              .slice(propertyNode.startIndex, propertyNode.endIndex)
+              .toLowerCase()
           : "";
 
         if (responseMethods.has(propertyText)) {
           if (objectNode?.type === "identifier") {
-            const objectText = content.slice(objectNode.startIndex, objectNode.endIndex);
+            const objectText = content.slice(
+              objectNode.startIndex,
+              objectNode.endIndex,
+            );
             if (objectText === "res") {
               hasResponse = true;
               return;
@@ -2355,7 +2618,9 @@ function detectMissingBackendResponse(
                 ? content.slice(nestedObj.startIndex, nestedObj.endIndex)
                 : "";
               const nestedPropText = nestedProp
-                ? content.slice(nestedProp.startIndex, nestedProp.endIndex).toLowerCase()
+                ? content
+                    .slice(nestedProp.startIndex, nestedProp.endIndex)
+                    .toLowerCase()
                 : "";
               if (nestedObjText === "res" && nestedPropText === "status") {
                 hasResponse = true;
@@ -2384,7 +2649,8 @@ function detectMissingBackendResponse(
       file: handlerFilePath,
       line: issueLine,
       endpoint,
-      suggestion: "Ensure every execution path sends a response or delegates to middleware with next(err)",
+      suggestion:
+        "Ensure every execution path sends a response or delegates to middleware with next(err)",
       confidence: 75,
     });
   }
@@ -2411,7 +2677,10 @@ function detectUnusedLocalVariables(
     if (node.type === "variable_declarator") {
       const nameNode = node.childForFieldName?.("name");
       if (nameNode?.type === "identifier") {
-        const variableName = content.slice(nameNode.startIndex, nameNode.endIndex);
+        const variableName = content.slice(
+          nameNode.startIndex,
+          nameNode.endIndex,
+        );
         if (variableName && !variableName.startsWith("_")) {
           const declarationLine =
             typeof nameNode?.startPosition?.row === "number"
@@ -2436,7 +2705,10 @@ function detectUnusedLocalVariables(
       node.type === "shorthand_property_identifier_pattern"
     ) {
       const identifier = content.slice(node.startIndex, node.endIndex);
-      identifierCounts.set(identifier, (identifierCounts.get(identifier) || 0) + 1);
+      identifierCounts.set(
+        identifier,
+        (identifierCounts.get(identifier) || 0) + 1,
+      );
     }
 
     for (const child of node.children || []) collectIdentifierUsage(child);
@@ -2517,7 +2789,10 @@ function detectUnknownPrismaModelQueries(
       if (prismaRef) {
         const methodName = prismaRef.method.toLowerCase();
         const modelName = normalizeName(prismaRef.model);
-        if (prismaQueryMethods.has(methodName) && !knownModelNames.has(modelName)) {
+        if (
+          prismaQueryMethods.has(methodName) &&
+          !knownModelNames.has(modelName)
+        ) {
           const issueLine =
             typeof node?.startPosition?.row === "number"
               ? node.startPosition.row + 1
@@ -2547,7 +2822,10 @@ function detectUnknownPrismaModelQueries(
   return issues;
 }
 
-function extractBackendResponseFields(handlerFnNode: any, content: string): Set<string> {
+function extractBackendResponseFields(
+  handlerFnNode: any,
+  content: string,
+): Set<string> {
   const fields = new Set<string>();
   const visit = (node: any) => {
     if (!node) return;
@@ -2558,9 +2836,13 @@ function extractBackendResponseFields(handlerFnNode: any, content: string): Set<
         const obj = fn.childForFieldName?.("object");
         const prop = fn.childForFieldName?.("property");
         const objText = obj ? content.slice(obj.startIndex, obj.endIndex) : "";
-        const propText = prop ? content.slice(prop.startIndex, prop.endIndex) : "";
+        const propText = prop
+          ? content.slice(prop.startIndex, prop.endIndex)
+          : "";
         if (objText === "res" && propText === "json") {
-          const objArg = (args.children || []).find((c: any) => c.type === "object");
+          const objArg = (args.children || []).find(
+            (c: any) => c.type === "object",
+          );
           if (objArg) {
             for (const child of objArg.children || []) {
               if (child.type === "pair") {
@@ -2574,7 +2856,10 @@ function extractBackendResponseFields(handlerFnNode: any, content: string): Set<
               }
 
               // Shorthand properties: { name, email }
-              if (child.type === "shorthand_property_identifier" || child.type === "shorthand_property_identifier_pattern") {
+              if (
+                child.type === "shorthand_property_identifier" ||
+                child.type === "shorthand_property_identifier_pattern"
+              ) {
                 const keyText = content.slice(child.startIndex, child.endIndex);
                 if (keyText) fields.add(keyText);
               }
@@ -2589,12 +2874,18 @@ function extractBackendResponseFields(handlerFnNode: any, content: string): Set<
   return fields;
 }
 
-function extractBackendQueryFields(handlerFnNode: any, content: string): Set<string> {
+function extractBackendQueryFields(
+  handlerFnNode: any,
+  content: string,
+): Set<string> {
   const fields = new Set<string>();
   const queryVars = new Set<string>();
 
   const collectPatternIdentifiers = (patternNode: any) => {
-    const patternText = content.slice(patternNode.startIndex, patternNode.endIndex);
+    const patternText = content.slice(
+      patternNode.startIndex,
+      patternNode.endIndex,
+    );
     const re = /\b([A-Za-z_][A-Za-z0-9_]*)\b/g;
     let m: RegExpExecArray | null;
     while ((m = re.exec(patternText))) {
@@ -2610,22 +2901,32 @@ function extractBackendQueryFields(handlerFnNode: any, content: string): Set<str
       const valueNode = node.childForFieldName?.("value");
 
       // const { category } = req.query
-      if (nameNode?.type === "object_pattern" && valueNode?.type === "member_expression") {
+      if (
+        nameNode?.type === "object_pattern" &&
+        valueNode?.type === "member_expression"
+      ) {
         const obj = valueNode.childForFieldName?.("object");
         const prop = valueNode.childForFieldName?.("property");
         const objText = obj ? content.slice(obj.startIndex, obj.endIndex) : "";
-        const propText = prop ? content.slice(prop.startIndex, prop.endIndex) : "";
+        const propText = prop
+          ? content.slice(prop.startIndex, prop.endIndex)
+          : "";
         if (objText === "req" && propText === "query") {
           collectPatternIdentifiers(nameNode);
         }
       }
 
       // const query = req.query
-      if (nameNode?.type === "identifier" && valueNode?.type === "member_expression") {
+      if (
+        nameNode?.type === "identifier" &&
+        valueNode?.type === "member_expression"
+      ) {
         const obj = valueNode.childForFieldName?.("object");
         const prop = valueNode.childForFieldName?.("property");
         const objText = obj ? content.slice(obj.startIndex, obj.endIndex) : "";
-        const propText = prop ? content.slice(prop.startIndex, prop.endIndex) : "";
+        const propText = prop
+          ? content.slice(prop.startIndex, prop.endIndex)
+          : "";
         if (objText === "req" && propText === "query") {
           const varName = content.slice(nameNode.startIndex, nameNode.endIndex);
           if (varName) queryVars.add(varName);
@@ -2633,8 +2934,14 @@ function extractBackendQueryFields(handlerFnNode: any, content: string): Set<str
       }
 
       // const { category } = query
-      if (nameNode?.type === "object_pattern" && valueNode?.type === "identifier") {
-        const valueText = content.slice(valueNode.startIndex, valueNode.endIndex);
+      if (
+        nameNode?.type === "object_pattern" &&
+        valueNode?.type === "identifier"
+      ) {
+        const valueText = content.slice(
+          valueNode.startIndex,
+          valueNode.endIndex,
+        );
         if (queryVars.has(valueText)) {
           collectPatternIdentifiers(nameNode);
         }
@@ -2645,21 +2952,38 @@ function extractBackendQueryFields(handlerFnNode: any, content: string): Set<str
     if (node.type === "member_expression") {
       const objectNode = node.childForFieldName?.("object");
       const propertyNode = node.childForFieldName?.("property");
-      if (propertyNode?.type === "property_identifier" && objectNode?.type === "member_expression") {
+      if (
+        propertyNode?.type === "property_identifier" &&
+        objectNode?.type === "member_expression"
+      ) {
         const innerObj = objectNode.childForFieldName?.("object");
         const innerProp = objectNode.childForFieldName?.("property");
-        const innerObjText = innerObj ? content.slice(innerObj.startIndex, innerObj.endIndex) : "";
-        const innerPropText = innerProp ? content.slice(innerProp.startIndex, innerProp.endIndex) : "";
+        const innerObjText = innerObj
+          ? content.slice(innerObj.startIndex, innerObj.endIndex)
+          : "";
+        const innerPropText = innerProp
+          ? content.slice(innerProp.startIndex, innerProp.endIndex)
+          : "";
         if (innerObjText === "req" && innerPropText === "query") {
-          fields.add(content.slice(propertyNode.startIndex, propertyNode.endIndex));
+          fields.add(
+            content.slice(propertyNode.startIndex, propertyNode.endIndex),
+          );
         }
       }
 
       // query.status (where query = req.query)
-      if (objectNode?.type === "identifier" && propertyNode?.type === "property_identifier") {
-        const objText = content.slice(objectNode.startIndex, objectNode.endIndex);
+      if (
+        objectNode?.type === "identifier" &&
+        propertyNode?.type === "property_identifier"
+      ) {
+        const objText = content.slice(
+          objectNode.startIndex,
+          objectNode.endIndex,
+        );
         if (queryVars.has(objText)) {
-          fields.add(content.slice(propertyNode.startIndex, propertyNode.endIndex));
+          fields.add(
+            content.slice(propertyNode.startIndex, propertyNode.endIndex),
+          );
         }
       }
     }
@@ -2671,7 +2995,10 @@ function extractBackendQueryFields(handlerFnNode: any, content: string): Set<str
   return fields;
 }
 
-function extractBackendRequestFields(handlerFnNode: any, content: string): Set<string> {
+function extractBackendRequestFields(
+  handlerFnNode: any,
+  content: string,
+): Set<string> {
   const fields = new Set<string>();
   const visit = (node: any) => {
     if (!node) return;
@@ -2680,13 +3007,21 @@ function extractBackendRequestFields(handlerFnNode: any, content: string): Set<s
     if (node.type === "variable_declarator") {
       const nameNode = node.childForFieldName?.("name");
       const valueNode = node.childForFieldName?.("value");
-      if (nameNode?.type === "object_pattern" && valueNode?.type === "member_expression") {
+      if (
+        nameNode?.type === "object_pattern" &&
+        valueNode?.type === "member_expression"
+      ) {
         const obj = valueNode.childForFieldName?.("object");
         const prop = valueNode.childForFieldName?.("property");
         const objText = obj ? content.slice(obj.startIndex, obj.endIndex) : "";
-        const propText = prop ? content.slice(prop.startIndex, prop.endIndex) : "";
+        const propText = prop
+          ? content.slice(prop.startIndex, prop.endIndex)
+          : "";
         if (objText === "req" && propText === "body") {
-          const patternText = content.slice(nameNode.startIndex, nameNode.endIndex);
+          const patternText = content.slice(
+            nameNode.startIndex,
+            nameNode.endIndex,
+          );
           const re = /\b([A-Za-z_][A-Za-z0-9_]*)\b/g;
           let m: RegExpExecArray | null;
           while ((m = re.exec(patternText))) {
@@ -2700,13 +3035,22 @@ function extractBackendRequestFields(handlerFnNode: any, content: string): Set<s
     if (node.type === "member_expression") {
       const objectNode = node.childForFieldName?.("object");
       const propertyNode = node.childForFieldName?.("property");
-      if (propertyNode?.type === "property_identifier" && objectNode?.type === "member_expression") {
+      if (
+        propertyNode?.type === "property_identifier" &&
+        objectNode?.type === "member_expression"
+      ) {
         const innerObj = objectNode.childForFieldName?.("object");
         const innerProp = objectNode.childForFieldName?.("property");
-        const innerObjText = innerObj ? content.slice(innerObj.startIndex, innerObj.endIndex) : "";
-        const innerPropText = innerProp ? content.slice(innerProp.startIndex, innerProp.endIndex) : "";
+        const innerObjText = innerObj
+          ? content.slice(innerObj.startIndex, innerObj.endIndex)
+          : "";
+        const innerPropText = innerProp
+          ? content.slice(innerProp.startIndex, innerProp.endIndex)
+          : "";
         if (innerObjText === "req" && innerPropText === "body") {
-          fields.add(content.slice(propertyNode.startIndex, propertyNode.endIndex));
+          fields.add(
+            content.slice(propertyNode.startIndex, propertyNode.endIndex),
+          );
         }
       }
     }
@@ -2728,8 +3072,13 @@ function validateQueryParameters(
 
   const frontendParams = mapping.frontend.queryParams || [];
   const backendParams = mapping.backend.queryParams || [];
-  const method = (mapping?.backend?.method || mapping?.frontend?.method || "REQUEST").toUpperCase();
-  const backendPath = mapping?.backend?.path || mapping?.frontend?.endpoint || endpoint;
+  const method = (
+    mapping?.backend?.method ||
+    mapping?.frontend?.method ||
+    "REQUEST"
+  ).toUpperCase();
+  const backendPath =
+    mapping?.backend?.path || mapping?.frontend?.endpoint || endpoint;
 
   // Check for missing required query params in frontend
   for (const backendParam of backendParams) {
@@ -2784,11 +3133,15 @@ function validateQueryParameters(
       issues.push({
         type: "apiTypeMismatch",
         severity: (result.severity as "high" | "medium" | "low") || "medium",
-        message: result.reason || `Query parameter '${frontendParam.name}' type mismatch: frontend uses '${frontendParam.type}', backend expects '${backendParam.type}'`,
+        message:
+          result.reason ||
+          `Query parameter '${frontendParam.name}' type mismatch: frontend uses '${frontendParam.type}', backend expects '${backendParam.type}'`,
         file: mapping.frontend.file,
         line: mapping.frontend.line,
         endpoint,
-        suggestion: result.suggestion || `Ensure query parameter '${frontendParam.name}' types are compatible`,
+        suggestion:
+          result.suggestion ||
+          `Ensure query parameter '${frontendParam.name}' types are compatible`,
         confidence: 85,
       });
     }
@@ -2812,7 +3165,8 @@ function validateTypes(apiContract: ApiContractContext): ApiContractIssue[] {
     for (const backendField of backendModel.fields) {
       if (backendField.required) {
         const frontendField = frontendType.fields.find(
-          (f: { name: string }) => normalizeName(f.name) === normalizeName(backendField.name),
+          (f: { name: string }) =>
+            normalizeName(f.name) === normalizeName(backendField.name),
         );
 
         if (!frontendField) {
@@ -2831,11 +3185,15 @@ function validateTypes(apiContract: ApiContractContext): ApiContractIssue[] {
 
     // Check for naming convention mismatches
     // Skip if both files are TypeScript/JavaScript (same naming convention expected)
-    const isSameLanguage = isSameLanguageProject(frontendType.file, backendModel.file);
+    const isSameLanguage = isSameLanguageProject(
+      frontendType.file,
+      backendModel.file,
+    );
     if (!isSameLanguage) {
       for (const frontendField of frontendType.fields) {
         const backendField = backendModel.fields.find(
-          (f: { name: string }) => normalizeName(f.name) === normalizeName(frontendField.name),
+          (f: { name: string }) =>
+            normalizeName(f.name) === normalizeName(frontendField.name),
         );
 
         if (backendField && frontendField.name !== backendField.name) {
@@ -2855,20 +3213,32 @@ function validateTypes(apiContract: ApiContractContext): ApiContractIssue[] {
     // Check type compatibility
     for (const frontendField of frontendType.fields) {
       const backendField = backendModel.fields.find(
-        (f: { name: string }) => normalizeName(f.name) === normalizeName(frontendField.name),
+        (f: { name: string }) =>
+          normalizeName(f.name) === normalizeName(frontendField.name),
       );
 
       if (backendField) {
-        const result = areTypesCompatible(frontendField.type, backendField.type);
+        const result = areTypesCompatible(
+          frontendField.type,
+          backendField.type,
+        );
 
         if (!result.compatible || result.severity) {
           issues.push({
             type: "apiTypeMismatch",
-            severity: (result.severity as "high" | "medium" | "low") || "medium",
-            message: result.reason || `Type mismatch for field '${frontendField.name}': frontend uses '${frontendField.type}', backend expects '${backendField.type}'`,
+            severity:
+              (result.severity as "high" | "medium" | "low") || "medium",
+            message:
+              result.reason ||
+              `Type mismatch for field '${frontendField.name}': frontend uses '${frontendField.type}', backend expects '${backendField.type}'`,
             file: frontendType.file,
             line: frontendType.line,
-            suggestion: result.suggestion || getTypeCompatibilitySuggestion(frontendField.type, backendField.type),
+            suggestion:
+              result.suggestion ||
+              getTypeCompatibilitySuggestion(
+                frontendField.type,
+                backendField.type,
+              ),
             confidence: 85,
           });
         }
@@ -2883,7 +3253,9 @@ function validateTypes(apiContract: ApiContractContext): ApiContractIssue[] {
 // Unmatched Frontend Validation
 // ============================================================================
 
-function validateUnmatchedFrontend(apiContract: ApiContractContext): ApiContractIssue[] {
+function validateUnmatchedFrontend(
+  apiContract: ApiContractContext,
+): ApiContractIssue[] {
   const issues: ApiContractIssue[] = [];
 
   for (const service of apiContract.unmatchedFrontend) {
@@ -2894,13 +3266,18 @@ function validateUnmatchedFrontend(apiContract: ApiContractContext): ApiContract
 
     // Check if there's a similar endpoint with different method or path
     const similarRoute = findSimilarRoute(service, apiContract.backendRoutes);
-    
+
     if (similarRoute) {
-      const servicePathNormalized = normalizePathForComparison(service.endpoint);
+      const servicePathNormalized = normalizePathForComparison(
+        service.endpoint,
+      );
       const routePathNormalized = normalizePathForComparison(similarRoute.path);
       const samePathIgnoringPrefix =
         pathsMatchStrict(servicePathNormalized, routePathNormalized) ||
-        pathsMatchStrict(removeApiPrefix(servicePathNormalized), removeApiPrefix(routePathNormalized));
+        pathsMatchStrict(
+          removeApiPrefix(servicePathNormalized),
+          removeApiPrefix(routePathNormalized),
+        );
 
       // Check if it's a method mismatch
       if (samePathIgnoringPrefix) {
@@ -2956,13 +3333,13 @@ const DEFAULT_IGNORE_PATTERNS = [
   /\/paypal\/webhook/i,
   /\/github\/webhook/i,
   /\/slack\/webhook/i,
-  
+
   // Admin routes
   /\/admin/i,
   /\/api\/admin/i,
   /\/management/i,
   /\/api\/management/i,
-  
+
   // Internal/debug routes
   /\/debug/i,
   /\/internal/i,
@@ -2972,13 +3349,13 @@ const DEFAULT_IGNORE_PATTERNS = [
   /\/metrics/i,
   /\/ready/i,
   /\/alive/i,
-  
+
   // OAuth/Auth callbacks
   /\/auth\/callback/i,
   /\/oauth/i,
   /\/oauth2/i,
   /\/callback/i,
-  
+
   // API documentation
   /\/docs/i,
   /\/swagger/i,
@@ -2995,38 +3372,44 @@ function shouldIgnoreEndpoint(endpoint: string): boolean {
 
 function findSimilarRoute(
   service: { method: string; endpoint: string },
-  backendRoutes: ApiRouteDefinition[]
+  backendRoutes: ApiRouteDefinition[],
 ): ApiRouteDefinition | undefined {
   const normalizedEndpoint = normalizePathForComparison(service.endpoint);
-  
+
   // First, check for exact path match with different method (normalizing params)
-  const samePathDifferentMethod = backendRoutes.find(route => {
+  const samePathDifferentMethod = backendRoutes.find((route) => {
     const normalizedRoute = normalizePathForComparison(route.path);
-    return normalizedRoute === normalizedEndpoint && 
-           route.method.toUpperCase() !== service.method.toUpperCase();
+    return (
+      normalizedRoute === normalizedEndpoint &&
+      route.method.toUpperCase() !== service.method.toUpperCase()
+    );
   });
-  
+
   if (samePathDifferentMethod) {
     return samePathDifferentMethod;
   }
 
   // Also check with API prefix stripped
   const endpointNoPrefix = removeApiPrefix(normalizedEndpoint);
-  const samePathNoPrefixDiffMethod = backendRoutes.find(route => {
-    const normalizedRoute = removeApiPrefix(normalizePathForComparison(route.path));
-    return normalizedRoute === endpointNoPrefix && 
-           route.method.toUpperCase() !== service.method.toUpperCase();
+  const samePathNoPrefixDiffMethod = backendRoutes.find((route) => {
+    const normalizedRoute = removeApiPrefix(
+      normalizePathForComparison(route.path),
+    );
+    return (
+      normalizedRoute === endpointNoPrefix &&
+      route.method.toUpperCase() !== service.method.toUpperCase()
+    );
   });
 
   if (samePathNoPrefixDiffMethod) {
     return samePathNoPrefixDiffMethod;
   }
-  
+
   // Then, check for similar paths (same number of segments, similar structure)
   // Collect ALL candidates and pick the best match (prefer literal matches over param matches)
-  const endpointSegments = normalizedEndpoint.split('/');
+  const endpointSegments = normalizedEndpoint.split("/");
   let bestCandidate: { route: ApiRouteDefinition; score: number } | undefined;
-  
+
   const scoreSegments = (feSegs: string[], beSegs: string[]): number => {
     if (feSegs.length !== beSegs.length) return 0;
     let score = 0;
@@ -3049,7 +3432,7 @@ function findSimilarRoute(
 
   for (const route of backendRoutes) {
     const normalizedRoute = normalizePathForComparison(route.path);
-    const routeSegments = normalizedRoute.split('/');
+    const routeSegments = normalizedRoute.split("/");
     const score = scoreSegments(endpointSegments, routeSegments);
     if (score >= 0.7 && (!bestCandidate || score > bestCandidate.score)) {
       bestCandidate = { route, score };
@@ -3057,10 +3440,12 @@ function findSimilarRoute(
   }
 
   // Try again with API prefix stripped
-  const endpointSegmentsNoPrefix = endpointNoPrefix.split('/');
+  const endpointSegmentsNoPrefix = endpointNoPrefix.split("/");
   for (const route of backendRoutes) {
-    const normalizedRoute = removeApiPrefix(normalizePathForComparison(route.path));
-    const routeSegments = normalizedRoute.split('/');
+    const normalizedRoute = removeApiPrefix(
+      normalizePathForComparison(route.path),
+    );
+    const routeSegments = normalizedRoute.split("/");
     const score = scoreSegments(endpointSegmentsNoPrefix, routeSegments);
     if (score >= 0.7 && (!bestCandidate || score > bestCandidate.score)) {
       bestCandidate = { route, score };
@@ -3068,7 +3453,7 @@ function findSimilarRoute(
   }
 
   if (bestCandidate) return bestCandidate.route;
-  
+
   return undefined;
 }
 
@@ -3080,19 +3465,22 @@ function findSimilarRoute(
  * Check if frontend and backend files are in the same language family
  * (both TS/JS = same naming convention, no need to flag camelCase vs snake_case)
  */
-function isSameLanguageProject(frontendFile: string, backendFile: string): boolean {
+function isSameLanguageProject(
+  frontendFile: string,
+  backendFile: string,
+): boolean {
   const tsJsExtensions = [".ts", ".tsx", ".js", ".jsx", ".mjs"];
   const pyExtensions = [".py"];
-  
-  const feIsTs = tsJsExtensions.some(ext => frontendFile.endsWith(ext));
-  const beIsTs = tsJsExtensions.some(ext => backendFile.endsWith(ext));
-  const beIsPy = pyExtensions.some(ext => backendFile.endsWith(ext));
-  
+
+  const feIsTs = tsJsExtensions.some((ext) => frontendFile.endsWith(ext));
+  const beIsTs = tsJsExtensions.some((ext) => backendFile.endsWith(ext));
+  const beIsPy = pyExtensions.some((ext) => backendFile.endsWith(ext));
+
   // Same language if both are TS/JS
   if (feIsTs && beIsTs) return true;
   // Different languages if FE is TS and BE is Python
   if (feIsTs && beIsPy) return false;
-  
+
   return false;
 }
 
@@ -3168,19 +3556,22 @@ function pathsMatchStrict(path1: string, path2: string): boolean {
 function normalizePathForComparison(path: string): string {
   // First apply basic normalization
   let normalized = normalizePath(path);
-  
+
   // Convert JavaScript ${variable} to {variable} for comparison
   normalized = normalized.replace(/\$\{(\w+)\}/g, (match, varName) => {
     // Convert camelCase to snake_case
-    const snakeCase = varName.replace(/[A-Z]/g, (letter: string) => `_${letter.toLowerCase()}`);
+    const snakeCase = varName.replace(
+      /[A-Z]/g,
+      (letter: string) => `_${letter.toLowerCase()}`,
+    );
     return `{${snakeCase}}`;
   });
-  
+
   // Convert Express :param to {param} for comparison
   normalized = normalized.replace(/:([a-zA-Z_]\w*)/g, (match, paramName) => {
     return `{${paramName}}`;
   });
-  
+
   return normalized;
 }
 
@@ -3191,15 +3582,15 @@ function normalizePathForComparison(path: string): string {
 function segmentSimilarity(a: string, b: string): number {
   if (a === b) return 1.0;
   if (!a || !b) return 0;
-  
+
   const al = a.toLowerCase();
   const bl = b.toLowerCase();
   const maxLen = Math.max(al.length, bl.length);
   const minLen = Math.min(al.length, bl.length);
-  
+
   // Check if one contains the other (e.g., 'user' in 'users')
   if (al.includes(bl) || bl.includes(al)) return 0.8;
-  
+
   // Longest common prefix ratio (weighted by shorter string coverage)
   let commonPrefix = 0;
   for (let i = 0; i < minLen; i++) {
@@ -3213,11 +3604,11 @@ function segmentSimilarity(a: string, b: string): number {
   const prefixByLonger = commonPrefix / maxLen;
   // Blend: mostly shorter-based, with a penalty for length difference
   const prefixScore = prefixByShorter * 0.7 + prefixByLonger * 0.3;
-  
+
   // Normalized Levenshtein distance
   const dist = levenshteinDistance(al, bl);
-  const levenshteinScore = 1 - (dist / maxLen);
-  
+  const levenshteinScore = 1 - dist / maxLen;
+
   return Math.max(prefixScore, levenshteinScore);
 }
 
@@ -3227,11 +3618,13 @@ function segmentSimilarity(a: string, b: string): number {
 function levenshteinDistance(a: string, b: string): number {
   const m = a.length;
   const n = b.length;
-  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
-  
+  const dp: number[][] = Array.from({ length: m + 1 }, () =>
+    Array(n + 1).fill(0),
+  );
+
   for (let i = 0; i <= m; i++) dp[i][0] = i;
   for (let j = 0; j <= n; j++) dp[0][j] = j;
-  
+
   for (let i = 1; i <= m; i++) {
     for (let j = 1; j <= n; j++) {
       if (a[i - 1] === b[j - 1]) {
@@ -3241,7 +3634,7 @@ function levenshteinDistance(a: string, b: string): number {
       }
     }
   }
-  
+
   return dp[m][n];
 }
 
@@ -3257,7 +3650,7 @@ function isPathParam(segment: string): boolean {
 
 function extractPathParams(path: string): string[] {
   const params: string[] = [];
-  
+
   // Extract Python/FastAPI style params: {param} or {param:type}
   const pythonMatches = path.match(/\{([^}]+)\}/g);
   if (pythonMatches) {
@@ -3266,14 +3659,17 @@ function extractPathParams(path: string): string[] {
       params.push(param);
     }
   }
-  
+
   // Extract JavaScript template literal params: ${variable}
   const jsMatches = path.match(/\$\{(\w+)\}/g);
   if (jsMatches) {
     for (const match of jsMatches) {
       const param = match.replace(/[\${}]/g, "");
       // Convert camelCase to snake_case for comparison
-      const snakeCase = param.replace(/[A-Z]/g, (letter: string) => `_${letter.toLowerCase()}`);
+      const snakeCase = param.replace(
+        /[A-Z]/g,
+        (letter: string) => `_${letter.toLowerCase()}`,
+      );
       params.push(snakeCase);
     }
   }
@@ -3290,7 +3686,15 @@ function extractPathParams(path: string): string[] {
   return params;
 }
 
-function areTypesCompatible(tsType: string, pyType: string): { compatible: boolean; severity?: string; reason?: string; suggestion?: string } {
+function areTypesCompatible(
+  tsType: string,
+  pyType: string,
+): {
+  compatible: boolean;
+  severity?: string;
+  reason?: string;
+  suggestion?: string;
+} {
   // Skip validation for complex/object types that couldn't be extracted properly
   if (isComplexType(tsType) || isComplexType(pyType)) {
     return { compatible: true };
@@ -3339,7 +3743,7 @@ function areTypesCompatible(tsType: string, pyType: string): { compatible: boole
  */
 function isComplexType(type: string): boolean {
   // If type contains newlines, braces, or is very long, it's likely a complex object literal
-  if (type.includes('\n') || type.includes('{') || type.includes('}')) {
+  if (type.includes("\n") || type.includes("{") || type.includes("}")) {
     return true;
   }
   // If type is very long (>50 chars), it's likely not a simple type name
@@ -3356,22 +3760,28 @@ function isComplexType(type: string): boolean {
 function areSimilarTypeNames(type1: string, type2: string): boolean {
   // If both have different CRUD operation suffixes, they're NOT similar
   // (e.g., ClientCreate vs ClientUpdate are different request body types)
-  const crudSuffixes = ['create', 'update', 'delete', 'patch'];
-  const suffix1 = crudSuffixes.find(s => type1.endsWith(s));
-  const suffix2 = crudSuffixes.find(s => type2.endsWith(s));
+  const crudSuffixes = ["create", "update", "delete", "patch"];
+  const suffix1 = crudSuffixes.find((s) => type1.endsWith(s));
+  const suffix2 = crudSuffixes.find((s) => type2.endsWith(s));
   if (suffix1 && suffix2 && suffix1 !== suffix2) {
     return false;
   }
 
   // Remove common non-CRUD suffixes
-  const clean1 = type1.replace(/(response|request|model|entity|dto|schema)$/i, '');
-  const clean2 = type2.replace(/(response|request|model|entity|dto|schema)$/i, '');
-  
+  const clean1 = type1.replace(
+    /(response|request|model|entity|dto|schema)$/i,
+    "",
+  );
+  const clean2 = type2.replace(
+    /(response|request|model|entity|dto|schema)$/i,
+    "",
+  );
+
   // If one contains the other, they're likely related
   if (clean1.includes(clean2) || clean2.includes(clean1)) {
     return true;
   }
-  
+
   return false;
 }
 
@@ -3385,10 +3795,12 @@ function isArrayTypeWrappedInModel(
   apiContract: ApiContractContext,
 ): boolean {
   // Only applies when frontend type is an array
-  if (!frontendType.endsWith('[]')) return false;
+  if (!frontendType.endsWith("[]")) return false;
 
-  const elementType = frontendType.replace(/\[\]$/, '');
-  const backendModel = apiContract.backendModels.find(m => m.name === backendModelName);
+  const elementType = frontendType.replace(/\[\]$/, "");
+  const backendModel = apiContract.backendModels.find(
+    (m) => m.name === backendModelName,
+  );
   if (!backendModel) return false;
 
   // Check if the backend model has a field whose type is a list of the element type
@@ -3396,9 +3808,11 @@ function isArrayTypeWrappedInModel(
     const fieldType = field.type.toLowerCase();
     const elementLower = elementType.toLowerCase();
     // Match patterns like List[PaymentMilestoneCreate], list[PaymentMilestoneCreate], Sequence[...]
-    if (fieldType.includes(`list[${elementLower}]`) ||
-        fieldType.includes(`sequence[${elementLower}]`) ||
-        fieldType === `${elementLower}[]`) {
+    if (
+      fieldType.includes(`list[${elementLower}]`) ||
+      fieldType.includes(`sequence[${elementLower}]`) ||
+      fieldType === `${elementLower}[]`
+    ) {
       return true;
     }
   }
@@ -3406,7 +3820,15 @@ function isArrayTypeWrappedInModel(
   return false;
 }
 
-function checkProblematicTypePairs(tsType: string, pyType: string): { compatible: boolean; severity: string; reason: string; suggestion: string } | null {
+function checkProblematicTypePairs(
+  tsType: string,
+  pyType: string,
+): {
+  compatible: boolean;
+  severity: string;
+  reason: string;
+  suggestion: string;
+} | null {
   const normalizedTs = normalizeType(tsType);
   const normalizedPy = normalizeType(pyType);
 
@@ -3447,7 +3869,10 @@ function checkProblematicTypePairs(tsType: string, pyType: string): { compatible
   }
 
   // String vs Number mismatch
-  if (normalizedTs === "string" && ["int", "float", "integer", "decimal"].includes(normalizedPy)) {
+  if (
+    normalizedTs === "string" &&
+    ["int", "float", "integer", "decimal"].includes(normalizedPy)
+  ) {
     return {
       compatible: false,
       severity: "high",
@@ -3457,7 +3882,10 @@ function checkProblematicTypePairs(tsType: string, pyType: string): { compatible
   }
 
   // Number vs String mismatch
-  if (normalizedTs === "number" && ["str", "text", "email"].includes(normalizedPy)) {
+  if (
+    normalizedTs === "number" &&
+    ["str", "text", "email"].includes(normalizedPy)
+  ) {
     return {
       compatible: false,
       severity: "high",
@@ -3467,7 +3895,14 @@ function checkProblematicTypePairs(tsType: string, pyType: string): { compatible
   }
 
   // Array/List handling
-  if (tsType.includes("[]") && !(pyType.includes("List") || pyType.includes("list") || pyType.includes("Sequence"))) {
+  if (
+    tsType.includes("[]") &&
+    !(
+      pyType.includes("List") ||
+      pyType.includes("list") ||
+      pyType.includes("Sequence")
+    )
+  ) {
     return {
       compatible: false,
       severity: "high",
@@ -3492,7 +3927,10 @@ function normalizeType(type: string): string {
     .replace(/\?/g, ""); // Remove TypeScript optional marker
 }
 
-function getTypeCompatibilitySuggestion(tsType: string, pyType: string): string {
+function getTypeCompatibilitySuggestion(
+  tsType: string,
+  pyType: string,
+): string {
   const suggestions: Record<string, Record<string, string>> = {
     string: {
       uuid: "Use string type for UUID (serialization)",
@@ -3507,6 +3945,7 @@ function getTypeCompatibilitySuggestion(tsType: string, pyType: string): string 
   };
 
   return (
-    suggestions[tsType]?.[pyType] || `Ensure types are compatible: ${tsType} vs ${pyType}`
+    suggestions[tsType]?.[pyType] ||
+    `Ensure types are compatible: ${tsType} vs ${pyType}`
   );
 }

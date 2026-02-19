@@ -330,6 +330,22 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+async function isPythonCliScript(filePath: string): Promise<boolean> {
+  if (!filePath.endsWith(".py")) return false;
+
+  try {
+    let content = fileContentCache.get(filePath);
+    if (!content) {
+      content = await fs.readFile(filePath, "utf-8");
+      fileContentCache.set(filePath, content);
+    }
+
+    return /if\s+__name__\s*==\s*["']__main__["']\s*:/.test(content);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Check if a symbol is used anywhere in the codebase using AST analysis.
  *
@@ -800,6 +816,12 @@ export async function detectDeadCode(
       fileInfo.exports.length > 0 || fileInfo.symbols.some((s) => s.exported);
 
     if (importers.length === 0 && hasExports) {
+      // Python standalone scripts with a __main__ entrypoint are intentionally
+      // runnable modules and should not be treated as orphaned files.
+      if (context.language === "python" && await isPythonCliScript(filePath)) {
+        continue;
+      }
+
       // Python-specific: Check if this file is re-exported via __init__.py
       // In Python, files exported through __init__.py are NOT orphaned
       if (context.language === "python") {

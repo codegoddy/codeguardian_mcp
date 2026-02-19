@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Signed Contract - {{ project_name }}</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 2cm 2cm 3cm 2cm;
+            @bottom-center {
+                content: "Page " counter(page) " of " counter(pages) " | Contract ID: {{ contract_id }}";
+                font-size: 9pt;
+                color: #666;
+                border-top: 1px solid #ddd;
+                padding-top: 10px;
+            }
+        }
+        
+        * {
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Times New Roman', Georgia, serif;
+            color: #1a1a1a;
+            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+            font-size: 11pt;
+        }
+        
+        /* Professional Header */
+        .document-header {
+            border-bottom: 3px double #111111;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .header-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 20px;
+        }
+        
+        .logo-section {
+            text-align: left;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+        }
+        
+        .logo-section h1 {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            color: #111111;
+            margin: 0;
+            font-size: 24pt;
+            font-weight: 900;
+            letter-spacing: -0.05em;
+            text-transform: uppercase;
+        }
+        
+        .logo-section .tagline {
+            font-size: 9pt;
+            color: #666;
+            margin-top: 3px;
+            font-style: italic;
+        }
+        
+        .document-type {
+            text-align: right;
+        }
+        
+        .document-type h2 {
+            margin: 0;
+            font-size: 18pt;
+            color: #1a365d;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        
+        .document-type .status-badge {
+            display: inline-block;
+            background: #10b981;
+            color: white;
+            padding: 4px 12px;
+            font-size: 8pt;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-top: 8px;
+            border-radius: 2px;
+        }
+        
+        /* Contract Info Bar */
+        .contract-info-bar {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            padding: 15px 20px;
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 30px;
+            font-size: 10pt;
+        }
+        
+        .info-item {
+            text-align: center;
+        }
+        
+        .info-item .label {
+            display: block;
+            font-weight: 600;
+            color: #64748b;
+            font-size: 8pt;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 3px;
+        }
+        
+        .info-item .value {
+            color: #1a365d;
+            font-weight: 600;
+        }
+        
+        /* Parties Section */
+        .parties-section {
+            margin-bottom: 30px;
+        }
+        
+        .parties-section h3 {
+            font-size: 11pt;
+            color: #1a365d;
+            border-bottom: 2px solid #1a365d;
+            padding-bottom: 8px;
+            margin-bottom: 20px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .parties-grid {
+            display: flex;
+            gap: 40px;
+        }
+        
+        .party-box {
+            flex: 1;
+            padding: 20px;
+            background: #fafafa;
+            border-left: 4px solid #1a365d;
+        }
+        
+        .party-box.client {
+            border-left-color: #2563eb;
+        }
+        
+        .party-label {
+            font-size: 8pt;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        
+        .party-name {
+            font-size: 13pt;
+            font-weight: 700;
+            color: #1a365d;
+            margin-bottom: 5px;
+        }
+        
+        .party-company {
+            font-size: 10pt;
+            color: #475569;
+            font-style: italic;
+        }
+        
+        /* Key Terms Box */
+        .key-terms-box {
+            background: #f0f9ff;
+            border: 1px solid #0ea5e9;
+            border-radius: 4px;
+            padding: 25px;
+            margin: 30px 0;
+        }
+        
+        .key-terms-box h3 {
+            margin: 0 0 20px 0;
+            font-size: 12pt;
+            color: #0369a1;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .terms-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        
+        .term-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px dashed #cbd5e1;
+        }
+        
+        .term-item.full-width {
+            grid-column: 1 / -1;
+        }
+        
+        .term-label {
+            font-weight: 600;
+            color: #475569;
+            font-size: 10pt;
+        }
+        
+        .term-value {
+            color: #1a365d;
+            font-weight: 700;
+            font-size: 10pt;
+        }
+        
+        /* Contract Content */
+        .contract-content {
+            margin: 30px 0;
+            text-align: justify;
+        }
+        
+        .contract-content h2 {
+            color: #1a365d;
+            font-size: 14pt;
+            margin: 25px 0 15px 0;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        
+        .contract-content h3 {
+            color: #334155;
+            font-size: 12pt;
+            margin: 20px 0 10px 0;
+        }
+        
+        .contract-content p {
+            margin: 12px 0;
+            text-align: justify;
+        }
+        
+        .contract-content ul, .contract-content ol {
+            margin: 12px 0;
+            padding-left: 25px;
+        }
+        
+        .contract-content li {
+            margin: 8px 0;
+        }
+        
+        /* Signature Section */
+        .signature-section {
+            margin-top: 40px;
+            page-break-inside: avoid;
+        }
+        
+        .signature-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .signature-header h2 {
+            font-size: 16pt;
+            color: #1a365d;
+            margin: 0 0 10px 0;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        
+        .signature-header p {
+            color: #64748b;
+            font-size: 10pt;
+            margin: 0;
+        }
+        
+        .signatures-grid {
+            display: flex;
+            gap: 60px;
+            margin-top: 30px;
+        }
+        
+        .signature-block {
+            flex: 1;
+        }
+        
+        .signature-line {
+            border-bottom: 2px solid #1a365d;
+            padding-bottom: 15px;
+            margin-bottom: 15px;
+            min-height: 60px;
+            display: flex;
+            align-items: flex-end;
+        }
+        
+        .signature-name {
+            font-family: 'Brush Script MT', 'Segoe Script', cursive;
+            font-size: 24pt;
+            color: #1a365d;
+            font-weight: normal;
+        }
+        
+        .signature-info {
+            font-size: 9pt;
+            color: #64748b;
+        }
+        
+        .signature-info .name {
+            font-weight: 700;
+            color: #1a365d;
+            font-size: 11pt;
+            margin-bottom: 3px;
+        }
+        
+        .signature-info .details {
+            line-height: 1.5;
+        }
+        
+        /* Verification Section */
+        .verification-section {
+            margin-top: 40px;
+            padding: 30px;
+            background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+            border: 2px solid #22c55e;
+            border-radius: 4px;
+            text-align: center;
+        }
+        
+        .verification-seal {
+            display: inline-flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .seal-icon {
+            width: 50px;
+            height: 50px;
+            background: #22c55e;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            color: white;
+        }
+        
+        .seal-text h3 {
+            margin: 0;
+            color: #166534;
+            font-size: 14pt;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .seal-text p {
+            margin: 5px 0 0 0;
+            color: #15803d;
+            font-size: 9pt;
+        }
+        
+        .verification-details {
+            background: white;
+            border: 1px solid #bbf7d0;
+            border-radius: 4px;
+            padding: 20px;
+            margin-top: 20px;
+            text-align: left;
+        }
+        
+        .verification-details .detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 9pt;
+        }
+        
+        .verification-details .detail-row:last-child {
+            border-bottom: none;
+        }
+        
+        .verification-details .label {
+            color: #64748b;
+            font-weight: 600;
+        }
+        
+        .verification-details .value {
+            color: #1a365d;
+            font-family: 'Courier New', monospace;
+            font-size: 8pt;
+        }
+        
+        .verification-details .value.highlight {
+            color: #166534;
+            font-weight: 700;
+        }
+        
+        /* Document Footer */
+        .document-footer {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #e2e8f0;
+            text-align: center;
+        }
+        
+        .footer-notice {
+            font-size: 9pt;
+            color: #64748b;
+            margin-bottom: 10px;
+            font-style: italic;
+        }
+        
+        .footer-legal {
+            font-size: 8pt;
+            color: #94a3b8;
+            line-height: 1.6;
+        }
+        
+        .footer-meta {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px dashed #cbd5e1;
+            font-size: 8pt;
+            color: #94a3b8;
+        }
+        
+        .contract-id-box {
+            display: inline-block;
+            background: #f1f5f9;
+            padding: 8px 15px;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+        
+        .contract-id-label {
+            font-size: 7pt;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .contract-id-value {
+            font-family: 'Courier New', monospace;
+            font-size: 9pt;
+            color: #1a365d;
+            font-weight: 600;
+        }
+        
+        /* Page break utility */
+        .page-break {
+            page-break-after: always;
+        }
+        
+        /* Contract clauses styling */
+        .clause {
+            margin: 15px 0;
+            padding-left: 20px;
+            position: relative;
+        }
+        
+        .clause-number {
+            position: absolute;
+            left: 0;
+            font-weight: 700;
+            color: #1a365d;
+        }
+        
+        /* Table styling */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+            font-size: 10pt;
+        }
+        
+        th, td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        
+        th {
+            background: #f8fafc;
+            font-weight: 600;
+            color: #1a365d;
+            font-size: 9pt;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Professional Header -->
+    <div class="document-header">
+        <div class="header-top">
+            <div class="logo-section">
+                <!-- DevHQ Isometric Logo -->
+                <svg class="logo-icon" width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <!-- Right Face -->
+                    <path d="M20 40V22L36 13V31L20 40Z" fill="#111111"/>
+                    <!-- Left Face -->
+                    <path d="M20 40L4 31V13L20 22V40Z" fill="#666666"/>
+                    <!-- Top Face (Lime) -->
+                    <path d="M20 22L36 13L20 4L4 13L20 22Z" fill="#ccff00"/>
+                </svg>
+                <div>
+                    <h1>DevHQ</h1>
+                    <div class="tagline">Scope Guardrail System</div>
+                </div>
+            </div>
+            <div class="document-type">
+                <h2>Service Agreement</h2>
+                <div class="status-badge">✓ Executed</div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Contract Info Bar -->
+    <div class="contract-info-bar">
+        <div class="info-item">
+            <span class="label">Contract Date</span>
+            <span class="value">{{ contract_date }}</span>
+        </div>
+        <div class="info-item">
+            <span class="label">Project Name</span>
+            <span class="value">{{ project_name }}</span>
+        </div>
+        <div class="info-item">
+            <span class="label">Contract ID</span>
+            <span class="value">{{ contract_id }}</span>
+        </div>
+    </div>
+    
+    <!-- Parties Section -->
+    <div class="parties-section">
+        <h3>Parties to This Agreement</h3>
+        <div class="parties-grid">
+            <div class="party-box developer">
+                <div class="party-label">Service Provider (Developer)</div>
+                <div class="party-name">{{ developer_name }}</div>
+                <div class="party-company">DevHQ Platform User</div>
+            </div>
+            <div class="party-box client">
+                <div class="party-label">Client</div>
+                <div class="party-name">{{ client_name }}</div>
+                {% if client_company %}
+                <div class="party-company">{{ client_company }}</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    
+    <!-- Key Terms Summary -->
+    <div class="key-terms-box">
+        <h3>📋 Key Terms & Conditions</h3>
+        <div class="terms-grid">
+            <div class="term-item">
+                <span class="term-label">Total Project Budget:</span>
+                <span class="term-value">{{ currency }}{{ project_budget }}</span>
+            </div>
+            <div class="term-item">
+                <span class="term-label">Hourly Rate:</span>
+                <span class="term-value">{{ currency }}{{ hourly_rate }}/hour</span>
+            </div>
+            {% if max_revisions %}
+            <div class="term-item">
+                <span class="term-label">Maximum Revisions:</span>
+                <span class="term-value">{{ max_revisions }} per deliverable</span>
+            </div>
+            {% endif %}
+            {% if auto_pause_threshold %}
+            <div class="term-item">
+                <span class="term-label">Auto-Pause Threshold:</span>
+                <span class="term-value">{{ auto_pause_threshold }}% of budget</span>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    
+    <!-- Contract Content -->
+    <div class="contract-content">
+        {{ contract_content | safe }}
+    </div>
+    
+    <!-- Page Break before Signatures -->
+    <div class="page-break"></div>
+    
+    <!-- Signature Section -->
+    <div class="signature-section">
+        <div class="signature-header">
+            <h2>Execution of Agreement</h2>
+            <p>The parties have executed this Agreement as of the date first written above.</p>
+        </div>
+        
+        <div class="signatures-grid">
+            <div class="signature-block">
+                <div class="signature-line">
+                    <span class="signature-name">{{ client_signature_name }}</span>
+                </div>
+                <div class="signature-info">
+                    <div class="name">{{ client_name }}</div>
+                    <div class="details">
+                        Client<br>
+                        Signed: {{ signed_date }} at {{ signed_time }}<br>
+                        IP: {{ signature_ip }}
+                    </div>
+                </div>
+            </div>
+            
+            <div class="signature-block">
+                <div class="signature-line">
+                    <span style="color: #94a3b8; font-size: 10pt;">Electronically acknowledged via platform</span>
+                </div>
+                <div class="signature-info">
+                    <div class="name">{{ developer_name }}</div>
+                    <div class="details">
+                        Service Provider<br>
+                        DevHQ Platform
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Digital Verification Section -->
+    <div class="verification-section">
+        <div class="verification-seal">
+            <div class="seal-icon">✓</div>
+            <div class="seal-text">
+                <h3>Digitally Signed and Verified</h3>
+                <p>This document has been electronically signed and is legally binding</p>
+            </div>
+        </div>
+        
+        <div class="verification-details">
+            <div class="detail-row">
+                <span class="label">Signer:</span>
+                <span class="value highlight">{{ client_signature_name }}</span>
+            </div>
+            <div class="detail-row">
+                <span class="label">Date & Time of Signature:</span>
+                <span class="value">{{ signed_date }} at {{ signed_time }}</span>
+            </div>
+            <div class="detail-row">
+                <span class="label">IP Address:</span>
+                <span class="value">{{ signature_ip }}</span>
+            </div>
+            <div class="detail-row">
+                <span class="label">User Agent:</span>
+                <span class="value">{{ signature_user_agent[:50] }}{% if signature_user_agent|length > 50 %}...{% endif %}</span>
+            </div>
+            <div class="detail-row">
+                <span class="label">Document ID:</span>
+                <span class="value">{{ contract_id }}</span>
+            </div>
+            <div class="detail-row">
+                <span class="label">Generated:</span>
+                <span class="value">{{ generated_date }}</span>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Document Footer -->
+    <div class="document-footer">
+        <div class="footer-notice">
+            <strong>This is a legally binding digital contract.</strong> By signing above, both parties agree to be bound by the terms and conditions outlined in this Agreement.
+        </div>
+        <div class="footer-legal">
+            This document was generated by DevHQ - Scope Guardrail System.<br>
+            The electronic signature captured in this document complies with applicable electronic signature laws.<br>
+            Document verification can be performed using the Contract ID listed below.
+        </div>
+        <div class="contract-id-box">
+            <div class="contract-id-label">Contract Reference ID</div>
+            <div class="contract-id-value">{{ contract_id }}</div>
+        </div>
+        <div class="footer-meta">
+            Document generated on {{ generated_date }}<br>
+            © {{ contract_date.split(' ')[-1] }} DevHQ. All rights reserved.
+        </div>
+    </div>
+</body>
+</html>

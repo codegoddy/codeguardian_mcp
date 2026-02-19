@@ -139,9 +139,9 @@ describe("Manifest Loader Module", () => {
 
   describe("loadPythonModuleExports", () => {
     it("should return empty map for non-Python project", async () => {
-      const exports = await loadPythonModuleExports(".");
+      const exports = await loadPythonModuleExports("tests/fixtures/dep-graph-project");
 
-      // This is a TypeScript project, so should have no Python __init__.py files
+      // Fixture is TypeScript-only and should have no Python __init__.py files
       expect(exports.size).toBe(0);
     });
   });

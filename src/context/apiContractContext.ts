@@ -45,13 +45,14 @@ export async function extractApiContractContext(
 
   try {
     // Step 1: Detect project structure (frontend/backend)
-    const projectStructure =
-      (await detectProjectStructureAuto(
-        path.resolve(context.projectPath),
-      )) as unknown as ApiContractContext["projectStructure"];
+    const projectStructure = (await detectProjectStructureAuto(
+      path.resolve(context.projectPath),
+    )) as unknown as ApiContractContext["projectStructure"];
 
     if (!projectStructure.frontend && !projectStructure.backend) {
-      logger.info("No frontend or backend detected - skipping API Contract extraction");
+      logger.info(
+        "No frontend or backend detected - skipping API Contract extraction",
+      );
       return undefined;
     }
 
@@ -73,19 +74,37 @@ export async function extractApiContractContext(
 
     if (projectStructure.backend) {
       const backendPath = projectStructure.backend.path;
-      
+
       // Extract router prefixes from main.py/app.py
       const routerPrefixes = await extractRouterPrefixes(backendPath);
-      
+
       [backendRoutes, backendModels] = await Promise.all([
-        extractBackendRoutes(context, backendPath, projectStructure.backend.framework, routerPrefixes),
-        extractBackendModels(context, backendPath, projectStructure.backend.framework),
+        extractBackendRoutes(
+          context,
+          backendPath,
+          projectStructure.backend.framework,
+          routerPrefixes,
+        ),
+        extractBackendModels(
+          context,
+          backendPath,
+          projectStructure.backend.framework,
+        ),
       ]);
     }
 
     // Step 4: Build mappings
-    const { endpointMappings, typeMappings, unmatchedFrontend, unmatchedBackend } =
-      buildContractMappings(frontendServices, frontendTypes, backendRoutes, backendModels);
+    const {
+      endpointMappings,
+      typeMappings,
+      unmatchedFrontend,
+      unmatchedBackend,
+    } = buildContractMappings(
+      frontendServices,
+      frontendTypes,
+      backendRoutes,
+      backendModels,
+    );
 
     const apiContractContext: ApiContractContext = {
       projectStructure,
@@ -150,24 +169,35 @@ async function extractFrontendServices(
     }
 
     // Common root-level API files (e.g., frontend/api.ts, frontend/apiClient.ts)
-    if (base === "api.ts" || base === "api.tsx" || base.endsWith(".api.ts") || base.includes("apiclient")) {
+    if (
+      base === "api.ts" ||
+      base === "api.tsx" ||
+      base.endsWith(".api.ts") ||
+      base.includes("apiclient")
+    ) {
       return true;
     }
 
     return false;
   });
 
-  logger.debug(`[API Contract] Found ${serviceFiles.length} service files in ${frontendPath}`);
+  logger.debug(
+    `[API Contract] Found ${serviceFiles.length} service files in ${frontendPath}`,
+  );
 
   for (const fileInfo of serviceFiles) {
     try {
       logger.debug(`[API Contract] Extracting from: ${fileInfo.path}`);
       // Use AST-based extraction
       const fileServices = await extractServicesFromFileAST(fileInfo.path);
-      logger.debug(`[API Contract] Extracted ${fileServices.length} services from ${fileInfo.path}`);
+      logger.debug(
+        `[API Contract] Extracted ${fileServices.length} services from ${fileInfo.path}`,
+      );
       services.push(...fileServices);
     } catch (err) {
-      logger.warn(`[API Contract] Failed to extract services from ${fileInfo.path}: ${err}`);
+      logger.warn(
+        `[API Contract] Failed to extract services from ${fileInfo.path}: ${err}`,
+      );
     }
   }
 
@@ -211,17 +241,23 @@ async function extractFrontendTypes(
     return false;
   });
 
-  logger.debug(`[API Contract] Found ${typeFiles.length} type files in ${frontendPath}`);
+  logger.debug(
+    `[API Contract] Found ${typeFiles.length} type files in ${frontendPath}`,
+  );
 
   for (const fileInfo of typeFiles) {
     try {
       logger.debug(`[API Contract] Extracting types from: ${fileInfo.path}`);
       // Use AST-based extraction
       const fileTypes = await extractTypesFromFileAST(fileInfo.path);
-      logger.debug(`[API Contract] Extracted ${fileTypes.length} types from ${fileInfo.path}`);
+      logger.debug(
+        `[API Contract] Extracted ${fileTypes.length} types from ${fileInfo.path}`,
+      );
       types.push(...fileTypes);
     } catch (err) {
-      logger.warn(`[API Contract] Failed to extract types from ${fileInfo.path}: ${err}`);
+      logger.warn(
+        `[API Contract] Failed to extract types from ${fileInfo.path}: ${err}`,
+      );
     }
   }
 
@@ -241,13 +277,15 @@ async function extractBackendRoutes(
   const routes: ApiRouteDefinition[] = [];
 
   // Find route files using the context's file index
-  const routeFiles = Array.from(context.files.values()).filter((f) => f.path.startsWith(backendPath),
+  const routeFiles = Array.from(context.files.values()).filter((f) =>
+    f.path.startsWith(backendPath),
   );
 
   if (framework === "express" || framework === "nestjs") {
     // Express/Node.js backend — process TS/JS files
     for (const fileInfo of routeFiles) {
-      if (!fileInfo.path.endsWith(".ts") && !fileInfo.path.endsWith(".js")) continue;
+      if (!fileInfo.path.endsWith(".ts") && !fileInfo.path.endsWith(".js"))
+        continue;
       const normalized = fileInfo.path.toLowerCase();
       const base = path.basename(normalized);
 
@@ -268,7 +306,11 @@ async function extractBackendRoutes(
 
       try {
         const content = await fs.readFile(fileInfo.path, "utf-8");
-        const fileRoutes = extractRoutesFromExpressContent(content, fileInfo.path, routerPrefixes);
+        const fileRoutes = extractRoutesFromExpressContent(
+          content,
+          fileInfo.path,
+          routerPrefixes,
+        );
         routes.push(...fileRoutes);
       } catch (err) {
         logger.debug(`Failed to extract routes from ${fileInfo.path}`);
@@ -283,7 +325,10 @@ async function extractBackendRoutes(
         const moduleName = path.basename(fileInfo.path).replace(/\.py$/, "");
         const mountPrefix = routerPrefixes.get(moduleName) || "";
 
-        const fileRoutes = await extractRoutesFromFile(fileInfo.path, framework);
+        const fileRoutes = await extractRoutesFromFile(
+          fileInfo.path,
+          framework,
+        );
         for (const r of fileRoutes) {
           const normalizedRoutePath = normalizeFullPath(r.path);
           const normalizedMount = normalizeFullPath(mountPrefix);
@@ -296,7 +341,9 @@ async function extractBackendRoutes(
 
           routes.push({
             ...r,
-            path: shouldPrefix ? normalizeFullPath(normalizedMount + normalizedRoutePath) : normalizedRoutePath,
+            path: shouldPrefix
+              ? normalizeFullPath(normalizedMount + normalizedRoutePath)
+              : normalizedRoutePath,
           });
         }
       } catch (err) {
@@ -308,6 +355,22 @@ async function extractBackendRoutes(
   return routes;
 }
 
+/**
+ * Strip Python triple-quoted docstrings from source content so that code
+ * examples embedded inside them are not matched by the regex route scanner.
+ * Newlines are preserved so that line numbers remain accurate.
+ *
+ * NOTE: This helper is used by the legacy regex-based route scanner
+ * (extractRoutesFromPythonContent). The primary extraction path in
+ * extractBackendRoutes uses extractRoutesFromFile (apiContractExtraction.ts)
+ * which already applies the same guard.
+ */
+function stripPythonDocstringsLocal(content: string): string {
+  return content.replace(/"""[\s\S]*?"""|'''[\s\S]*?'''/g, (match) =>
+    match.replace(/[^\n]/g, " "),
+  );
+}
+
 function extractRoutesFromPythonContent(
   content: string,
   filePath: string,
@@ -315,23 +378,32 @@ function extractRoutesFromPythonContent(
   routerPrefixes: Map<string, string>,
 ): ApiRouteDefinition[] {
   const routes: ApiRouteDefinition[] = [];
-  const lines = content.split("\n");
+
+  // Strip docstrings before regex scanning so that code examples inside
+  // documentation strings (e.g. usage examples showing @router.get("/projects"))
+  // are not mistakenly extracted as real route definitions.
+  const strippedContent = stripPythonDocstringsLocal(content);
+  const lines = strippedContent.split("\n");
+  // Keep original lines for handler detail extraction (preserves type hints, etc.)
+  const originalLines = content.split("\n");
 
   // Extract module name from file path (e.g., "clients" from ".../api/clients.py")
   const moduleMatch = filePath.match(/\/(\w+)\.py$/);
   const moduleName = moduleMatch ? moduleMatch[1] : "";
   const mainPrefix = routerPrefixes.get(moduleName) || "";
-  
+
   // Extract router's internal prefix (e.g., router = APIRouter(prefix="/time-entries"))
   let routerPrefix = "";
-  for (const line of lines) {
-    const routerPrefixMatch = line.match(/APIRouter\s*\(\s*.*prefix\s*=\s*["']([^"']+)["']/);
+  for (const line of originalLines) {
+    const routerPrefixMatch = line.match(
+      /APIRouter\s*\(\s*.*prefix\s*=\s*["']([^"']+)["']/,
+    );
     if (routerPrefixMatch) {
       routerPrefix = routerPrefixMatch[1];
       break;
     }
   }
-  
+
   // Combine prefixes: main.py prefix + router internal prefix
   const prefix = mainPrefix + routerPrefix;
 
@@ -341,10 +413,19 @@ function extractRoutesFromPythonContent(
 
     if (framework === "fastapi") {
       // FastAPI: @app.post("/api/clients") or @router.delete("")
-      const fastapiMatch = line.match(/@(?:app|router)\.(get|post|put|patch|delete)\s*\(\s*["']([^"']*)["']/i);
+      const fastapiMatch = line.match(
+        /@(?:app|router)\.(get|post|put|patch|delete)\s*\(\s*["']([^"']*)["']/i,
+      );
       if (fastapiMatch) {
         const routePath = prefix + fastapiMatch[2];
-        const route = extractFastAPIRouteDetails(lines, i, fastapiMatch[1], routePath, filePath, lineNum);
+        const route = extractFastAPIRouteDetails(
+          originalLines,
+          i,
+          fastapiMatch[1],
+          routePath,
+          filePath,
+          lineNum,
+        );
         if (route) routes.push(route);
       }
     } else if (framework === "flask") {
@@ -352,7 +433,13 @@ function extractRoutesFromPythonContent(
       const flaskMatch = line.match(/@app\.route\s*\(\s*["']([^"']+)["']/i);
       if (flaskMatch) {
         const routePath = prefix + flaskMatch[1];
-        const route = extractFlaskRouteDetails(lines, i, routePath, filePath, lineNum);
+        const route = extractFlaskRouteDetails(
+          originalLines,
+          i,
+          routePath,
+          filePath,
+          lineNum,
+        );
         if (route) routes.push(route);
       }
     }
@@ -400,14 +487,25 @@ function extractFastAPIRouteDetails(
       }
 
       // Extract request model from parameter type hint (non-primitive types are request bodies)
-      const paramMatches = signature.matchAll(/(\w+)\s*:\s*(\w+)(?:\s*=\s*([^,\)]+))?/g);
+      const paramMatches = signature.matchAll(
+        /(\w+)\s*:\s*(\w+)(?:\s*=\s*([^,\)]+))?/g,
+      );
       for (const match of paramMatches) {
         const paramName = match[1];
         const paramType = match[2];
         const defaultValue = match[3];
 
         // Skip common non-body parameters
-        if (["db", "session", "request", "response", "user", "current_user"].includes(paramName)) {
+        if (
+          [
+            "db",
+            "session",
+            "request",
+            "response",
+            "user",
+            "current_user",
+          ].includes(paramName)
+        ) {
           continue;
         }
 
@@ -417,7 +515,15 @@ function extractFastAPIRouteDetails(
         }
 
         // Check if it's a query parameter (primitive type)
-        const primitiveTypes = ["str", "int", "float", "bool", "uuid", "datetime", "date"];
+        const primitiveTypes = [
+          "str",
+          "int",
+          "float",
+          "bool",
+          "uuid",
+          "datetime",
+          "date",
+        ];
         if (primitiveTypes.includes(paramType.toLowerCase())) {
           if (!queryParams) queryParams = [];
           queryParams.push({
@@ -425,7 +531,10 @@ function extractFastAPIRouteDetails(
             type: paramType,
             required: !defaultValue, // Has default value = optional
           });
-        } else if (!requestModel && !["str", "int", "float", "bool"].includes(paramType)) {
+        } else if (
+          !requestModel &&
+          !["str", "int", "float", "bool"].includes(paramType)
+        ) {
           // Non-primitive type without default is likely the request body model
           requestModel = paramType;
         }
@@ -433,25 +542,39 @@ function extractFastAPIRouteDetails(
 
       // Extract response model from return type
       const returnMatch = signature.match(/-\s*>\s*(\w+)/);
-      if (returnMatch && !["str", "int", "float", "bool", "dict", "list", "none"].includes(returnMatch[1].toLowerCase())) {
+      if (
+        returnMatch &&
+        !["str", "int", "float", "bool", "dict", "list", "none"].includes(
+          returnMatch[1].toLowerCase(),
+        )
+      ) {
         responseModel = returnMatch[1];
       }
 
       // If no request model found from params (e.g., function reads request.json() manually),
       // scan the function body for Pydantic model instantiation patterns:
       //   ModelName(**body_json)  or  ModelName.model_validate(body)  or  ModelName.parse_obj(body)
-      if (!requestModel && (method.toUpperCase() === "POST" || method.toUpperCase() === "PUT" || method.toUpperCase() === "PATCH")) {
+      if (
+        !requestModel &&
+        (method.toUpperCase() === "POST" ||
+          method.toUpperCase() === "PUT" ||
+          method.toUpperCase() === "PATCH")
+      ) {
         const bodySearchEnd = Math.min(decoratorLine + 40, lines.length);
         for (let k = i + 1; k < bodySearchEnd; k++) {
           const bodyLine = lines[k];
           // Match: variable = ModelName(**anything)
-          const instantiationMatch = bodyLine.match(/=\s*([A-Z]\w+)\s*\(\s*\*\*/);
+          const instantiationMatch = bodyLine.match(
+            /=\s*([A-Z]\w+)\s*\(\s*\*\*/,
+          );
           if (instantiationMatch) {
             requestModel = instantiationMatch[1];
             break;
           }
           // Match: variable = ModelName.model_validate(anything) or .parse_obj(anything)
-          const validateMatch = bodyLine.match(/=\s*([A-Z]\w+)\s*\.(?:model_validate|parse_obj)\s*\(/);
+          const validateMatch = bodyLine.match(
+            /=\s*([A-Z]\w+)\s*\.(?:model_validate|parse_obj)\s*\(/,
+          );
           if (validateMatch) {
             requestModel = validateMatch[1];
             break;
@@ -492,7 +615,9 @@ function extractFlaskRouteDetails(
   const decoratorLineContent = lines[decoratorLine];
   const methodsMatch = decoratorLineContent.match(/methods\s*=\s*\[(.+?)\]/);
   if (methodsMatch) {
-    const methods = methodsMatch[1].split(",").map((m) => m.trim().replace(/["']/g, ""));
+    const methods = methodsMatch[1]
+      .split(",")
+      .map((m) => m.trim().replace(/["']/g, ""));
     if (methods.length > 0) {
       method = methods[0].toUpperCase();
     }
@@ -557,7 +682,9 @@ function extractRoutesFromExpressContent(
     // Check if the handler is a named function reference on the same line
     // Pattern: router.get("/", requireAuth, getEmployees);
     // The handler is the last non-middleware argument
-    const argsAfterPath = line.substring(line.indexOf(routeMatch[2]) + routeMatch[2].length + 1);
+    const argsAfterPath = line.substring(
+      line.indexOf(routeMatch[2]) + routeMatch[2].length + 1,
+    );
     const namedHandlerMatch = argsAfterPath.match(/,\s*(\w+)\s*\)\s*;?\s*$/);
     if (namedHandlerMatch) {
       handler = namedHandlerMatch[1];
@@ -609,7 +736,9 @@ function extractRoutesFromExpressContent(
  * Extract router prefixes from main.py/app.py (Python) or app.ts/server.ts (Express)
  * This maps router module names to their URL prefixes
  */
-async function extractRouterPrefixes(backendPath: string): Promise<Map<string, string>> {
+async function extractRouterPrefixes(
+  backendPath: string,
+): Promise<Map<string, string>> {
   const prefixes = new Map<string, string>();
 
   // Try to find the main entry file
@@ -680,7 +809,9 @@ async function extractRouterPrefixes(backendPath: string): Promise<Map<string, s
           const varName = importMatch[1];
           const importPath = importMatch[2];
           // Extract basename without extension: "./routes/scan.routes" -> "scan.routes"
-          const basename = path.basename(importPath).replace(/\.(ts|js|mjs)$/, "");
+          const basename = path
+            .basename(importPath)
+            .replace(/\.(ts|js|mjs)$/, "");
           importMap.set(varName, basename);
         }
       }
@@ -689,14 +820,12 @@ async function extractRouterPrefixes(backendPath: string): Promise<Map<string, s
         // Match: app.use("/api/scans", scanRoutes);
         // Match: app.use("/api/auth", authLimiter, authRoutes);
         // The route variable is the LAST identifier before the closing paren
-        const useMatch = line.match(
-          /app\.use\(\s*["']([^"']+)["']\s*,(.+)\)/,
-        );
+        const useMatch = line.match(/app\.use\(\s*["']([^"']+)["']\s*,(.+)\)/);
         if (useMatch) {
           const mountPrefix = useMatch[1];
           const argsStr = useMatch[2].trim();
           // The route handler is the last argument: split by comma, take last, trim
-          const args = argsStr.split(",").map(a => a.trim());
+          const args = argsStr.split(",").map((a) => a.trim());
           const routeVar = args[args.length - 1];
 
           if (routeVar && /^\w+$/.test(routeVar)) {
@@ -705,7 +834,9 @@ async function extractRouterPrefixes(backendPath: string): Promise<Map<string, s
             const sourceBasename = importMap.get(routeVar);
             if (sourceBasename) {
               prefixes.set(sourceBasename, mountPrefix);
-              logger.debug(`Found Express router prefix: ${sourceBasename} -> ${mountPrefix}`);
+              logger.debug(
+                `Found Express router prefix: ${sourceBasename} -> ${mountPrefix}`,
+              );
             }
             // Also store by variable name as fallback
             prefixes.set(routeVar, mountPrefix);
@@ -720,13 +851,18 @@ async function extractRouterPrefixes(backendPath: string): Promise<Map<string, s
   return prefixes;
 }
 
-async function extractBackendModels(context: ProjectContext, backendPath: string, framework?: string): Promise<ApiModelDefinition[]> {
+async function extractBackendModels(
+  context: ProjectContext,
+  backendPath: string,
+  framework?: string,
+): Promise<ApiModelDefinition[]> {
   const models: ApiModelDefinition[] = [];
 
   if (framework === "express" || framework === "nestjs") {
     // For TS backends, extract types/interfaces from type definition files, schema files, etc.
     const modelFiles = Array.from(context.files.values()).filter(
-      (f) => f.path.startsWith(backendPath) &&
+      (f) =>
+        f.path.startsWith(backendPath) &&
         (f.path.endsWith(".ts") || f.path.endsWith(".js")) &&
         (f.path.includes("/types/") ||
           f.path.includes("/models/") ||
@@ -745,7 +881,7 @@ async function extractBackendModels(context: ProjectContext, backendPath: string
         for (const t of fileTypes) {
           models.push({
             name: t.name,
-            fields: t.fields.map(f => ({
+            fields: t.fields.map((f) => ({
               name: f.name,
               type: f.type,
               required: f.required,
@@ -778,12 +914,18 @@ async function extractBackendModels(context: ProjectContext, backendPath: string
   return models;
 }
 
-function extractModelsFromPythonContent(content: string, filePath: string): ApiModelDefinition[] {
+function extractModelsFromPythonContent(
+  content: string,
+  filePath: string,
+): ApiModelDefinition[] {
   const lines = content.split("\n");
 
   // Pass 1: Extract all classes with their directly declared fields and base class names
-  const rawModels: (Partial<ApiModelDefinition> & { parentName?: string })[] = [];
-  let currentModel: (Partial<ApiModelDefinition> & { parentName?: string }) | null = null;
+  const rawModels: (Partial<ApiModelDefinition> & { parentName?: string })[] =
+    [];
+  let currentModel:
+    | (Partial<ApiModelDefinition> & { parentName?: string })
+    | null = null;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -825,7 +967,9 @@ function extractModelsFromPythonContent(content: string, filePath: string): ApiM
       }
 
       // Extract field: name: str or email: str = Field(...)
-      const fieldMatch = line.match(/^(?:\s+)(\w+)\s*:\s*([\w\[\],\s]+?)(?:\s*=\s*(.+))?$/);
+      const fieldMatch = line.match(
+        /^(?:\s+)(\w+)\s*:\s*([\w\[\],\s]+?)(?:\s*=\s*(.+))?$/,
+      );
       if (fieldMatch) {
         const fieldName = fieldMatch[1];
         const fieldType = fieldMatch[2].trim();
@@ -836,7 +980,11 @@ function extractModelsFromPythonContent(content: string, filePath: string): ApiM
         if (fieldType.includes("Optional")) {
           required = false;
         } else if (fieldDefault) {
-          if (fieldDefault === "None" || fieldDefault.startsWith('"') || fieldDefault.startsWith("'")) {
+          if (
+            fieldDefault === "None" ||
+            fieldDefault.startsWith('"') ||
+            fieldDefault.startsWith("'")
+          ) {
             required = false;
           } else if (!fieldDefault.includes("...")) {
             required = false;
@@ -860,13 +1008,16 @@ function extractModelsFromPythonContent(content: string, filePath: string): ApiM
   // Pass 2: Resolve Pydantic inheritance
   // Build a map of class names to their raw models for lookup
   const PYDANTIC_BASES = ["BaseModel", "BaseConfig", "RootModel"];
-  const modelMap = new Map<string, typeof rawModels[0]>();
+  const modelMap = new Map<string, (typeof rawModels)[0]>();
   for (const m of rawModels) {
     if (m.name) modelMap.set(m.name, m);
   }
 
   // Check if a class is a Pydantic model (directly or transitively)
-  function isPydanticModel(className: string, visited = new Set<string>()): boolean {
+  function isPydanticModel(
+    className: string,
+    visited = new Set<string>(),
+  ): boolean {
     if (PYDANTIC_BASES.includes(className)) return true;
     if (visited.has(className)) return false;
     visited.add(className);
@@ -876,16 +1027,21 @@ function extractModelsFromPythonContent(content: string, filePath: string): ApiM
   }
 
   // Collect inherited fields by walking up the chain
-  function getInheritedFields(className: string, visited = new Set<string>()): ApiModelDefinition["fields"] {
+  function getInheritedFields(
+    className: string,
+    visited = new Set<string>(),
+  ): ApiModelDefinition["fields"] {
     if (PYDANTIC_BASES.includes(className) || visited.has(className)) return [];
     visited.add(className);
     const model = modelMap.get(className);
     if (!model) return [];
     // Get parent fields first, then own fields (own fields override parent)
-    const parentFields = model.parentName ? getInheritedFields(model.parentName, visited) : [];
-    const ownFieldNames = new Set((model.fields || []).map(f => f.name));
+    const parentFields = model.parentName
+      ? getInheritedFields(model.parentName, visited)
+      : [];
+    const ownFieldNames = new Set((model.fields || []).map((f) => f.name));
     // Include parent fields that aren't overridden
-    const inherited = parentFields.filter(f => !ownFieldNames.has(f.name));
+    const inherited = parentFields.filter((f) => !ownFieldNames.has(f.name));
     return [...inherited, ...(model.fields || [])];
   }
 
@@ -935,21 +1091,21 @@ function buildContractMappings(
       const score = calculateEndpointMatchScore(service, matchResult.route);
       // If it's a method mismatch, reduce the score significantly
       const finalScore = matchResult.isMethodMismatch ? 50 : score;
-      
+
       // Check if there are multiple backend routes with the same path (different methods)
-      const samePathRoutes = backendRoutes.filter(r => {
+      const samePathRoutes = backendRoutes.filter((r) => {
         const normalizedRoute = normalizePath(r.path);
         const normalizedService = normalizePath(service.endpoint);
         return normalizedRoute === normalizedService;
       });
-      
+
       const mapKey = `${service.method} ${service.endpoint}`;
       endpointMappings.set(mapKey, {
         frontend: service,
         backend: matchResult.route,
         score: finalScore,
         hasMultipleMethods: samePathRoutes.length > 1,
-        availableMethods: samePathRoutes.map(r => r.method),
+        availableMethods: samePathRoutes.map((r) => r.method),
       });
     } else {
       unmatchedFrontend.push(service);
@@ -958,7 +1114,9 @@ function buildContractMappings(
 
   // Find unmatched backend routes
   for (const route of backendRoutes) {
-    const isMatched = Array.from(endpointMappings.values()).some((m) => m.backend === route);
+    const isMatched = Array.from(endpointMappings.values()).some(
+      (m) => m.backend === route,
+    );
     if (!isMatched) {
       unmatchedBackend.push(route);
     }
@@ -977,7 +1135,12 @@ function buildContractMappings(
     }
   }
 
-  return { endpointMappings, typeMappings, unmatchedFrontend, unmatchedBackend };
+  return {
+    endpointMappings,
+    typeMappings,
+    unmatchedFrontend,
+    unmatchedBackend,
+  };
 }
 
 function findMatchingRoute(
@@ -985,7 +1148,9 @@ function findMatchingRoute(
   routes: ApiRouteDefinition[],
 ): { route: ApiRouteDefinition; isMethodMismatch: boolean } | undefined {
   const normalizedEndpoint = normalizePath(service.endpoint);
-  const normalizedEndpointForMismatch = normalizePathForMethodMismatch(service.endpoint);
+  const normalizedEndpointForMismatch = normalizePathForMethodMismatch(
+    service.endpoint,
+  );
   const frontendMethod = service.method.toUpperCase();
 
   // First try exact match (path + method)
@@ -1015,11 +1180,12 @@ function findMatchingRoute(
 
   // Try matching with path parameters (normalize all param formats to {param})
   const paramMatch = routes.find((route) => {
-    if (route.method.toUpperCase() !== service.method.toUpperCase()) return false;
-    
+    if (route.method.toUpperCase() !== service.method.toUpperCase())
+      return false;
+
     const normalizedRoute = normalizePath(route.path);
     const normalizedServiceEndpoint = normalizePath(service.endpoint);
-    
+
     // Replace all param formats with generic {param}:
     // - Python/FastAPI: {id}, {project_id}
     // - Express: :id, :projectId
@@ -1034,7 +1200,7 @@ function findMatchingRoute(
       .replace(/<[^>]+>/g, "{param}")
       .replace(/\$\{\w+\}/g, "{param}")
       .replace(/:([a-zA-Z_]\w*)/g, "{param}");
-    
+
     return endpointWithGenericParams === routeWithGenericParams;
   });
 
@@ -1042,11 +1208,14 @@ function findMatchingRoute(
 
   // Try matching with API prefix stripped AND path parameters normalized
   const prefixParamMatch = routes.find((route) => {
-    if (route.method.toUpperCase() !== service.method.toUpperCase()) return false;
-    
+    if (route.method.toUpperCase() !== service.method.toUpperCase())
+      return false;
+
     const normalizedRoute = removeApiPrefix(normalizePath(route.path));
-    const normalizedServiceEndpoint = removeApiPrefix(normalizePath(service.endpoint));
-    
+    const normalizedServiceEndpoint = removeApiPrefix(
+      normalizePath(service.endpoint),
+    );
+
     const routeWithGenericParams = normalizedRoute
       .replace(/\{[^}]+\}/g, "{param}")
       .replace(/<[^>]+>/g, "{param}")
@@ -1056,18 +1225,21 @@ function findMatchingRoute(
       .replace(/<[^>]+>/g, "{param}")
       .replace(/\$\{\w+\}/g, "{param}")
       .replace(/:([a-zA-Z_]\w*)/g, "{param}");
-    
+
     return endpointWithGenericParams === routeWithGenericParams;
   });
 
-  if (prefixParamMatch) return { route: prefixParamMatch, isMethodMismatch: false };
+  if (prefixParamMatch)
+    return { route: prefixParamMatch, isMethodMismatch: false };
 
   // Check if there's a route with same path but DIFFERENT method.
   // Run this AFTER same-method fuzzy/param matching so we don't misclassify
   // equivalent routes that use different path-param syntaxes.
   const samePathDifferentMethods = routes.filter((route) => {
     const normalizedRoute = normalizePath(route.path);
-    const normalizedRouteForMismatch = normalizePathForMethodMismatch(route.path);
+    const normalizedRouteForMismatch = normalizePathForMethodMismatch(
+      route.path,
+    );
     return (
       (normalizedRoute === normalizedEndpoint ||
         normalizedRouteForMismatch === normalizedEndpointForMismatch) &&
@@ -1076,11 +1248,19 @@ function findMatchingRoute(
   });
 
   if (samePathDifferentMethods.length > 0) {
-    const preferredMismatchRoute = samePathDifferentMethods.reduce((best, candidate) => {
-      const bestScore = scoreMethodMismatchCandidate(frontendMethod, best.method);
-      const candidateScore = scoreMethodMismatchCandidate(frontendMethod, candidate.method);
-      return candidateScore > bestScore ? candidate : best;
-    });
+    const preferredMismatchRoute = samePathDifferentMethods.reduce(
+      (best, candidate) => {
+        const bestScore = scoreMethodMismatchCandidate(
+          frontendMethod,
+          best.method,
+        );
+        const candidateScore = scoreMethodMismatchCandidate(
+          frontendMethod,
+          candidate.method,
+        );
+        return candidateScore > bestScore ? candidate : best;
+      },
+    );
 
     return { route: preferredMismatchRoute, isMethodMismatch: true };
   }
@@ -1088,7 +1268,10 @@ function findMatchingRoute(
   return undefined;
 }
 
-function scoreMethodMismatchCandidate(frontendMethodRaw: string, backendMethodRaw: string): number {
+function scoreMethodMismatchCandidate(
+  frontendMethodRaw: string,
+  backendMethodRaw: string,
+): number {
   const frontendMethod = frontendMethodRaw.toUpperCase();
   const backendMethod = backendMethodRaw.toUpperCase();
 
@@ -1115,12 +1298,16 @@ function scoreMethodMismatchCandidate(frontendMethodRaw: string, backendMethodRa
   if (frontendMethod === "GET" && backendMethod === "HEAD") return 95;
   if (frontendMethod === "HEAD" && backendMethod === "GET") return 95;
 
-  if (writeMethods.has(frontendMethod) && writeMethods.has(backendMethod)) return 80;
+  if (writeMethods.has(frontendMethod) && writeMethods.has(backendMethod))
+    return 80;
   if (frontendMethod === "DELETE" && writeMethods.has(backendMethod)) return 70;
   if (writeMethods.has(frontendMethod) && backendMethod === "DELETE") return 70;
-  if (readMethods.has(frontendMethod) && readMethods.has(backendMethod)) return 60;
-  if (writeMethods.has(frontendMethod) && readMethods.has(backendMethod)) return 40;
-  if (readMethods.has(frontendMethod) && writeMethods.has(backendMethod)) return 35;
+  if (readMethods.has(frontendMethod) && readMethods.has(backendMethod))
+    return 60;
+  if (writeMethods.has(frontendMethod) && readMethods.has(backendMethod))
+    return 40;
+  if (readMethods.has(frontendMethod) && writeMethods.has(backendMethod))
+    return 35;
 
   return 30;
 }
@@ -1133,7 +1320,10 @@ function normalizePathForMethodMismatch(pathValue: string): string {
     .replace(/:([a-zA-Z_]\w*)/g, "{param}");
 }
 
-function calculateEndpointMatchScore(service: ApiServiceDefinition, route: ApiRouteDefinition): number {
+function calculateEndpointMatchScore(
+  service: ApiServiceDefinition,
+  route: ApiRouteDefinition,
+): number {
   let score = 100;
 
   if (service.method.toUpperCase() !== route.method.toUpperCase()) {
@@ -1145,7 +1335,9 @@ function calculateEndpointMatchScore(service: ApiServiceDefinition, route: ApiRo
 
   if (normalizedService === normalizedRoute) {
     score += 10;
-  } else if (removeApiPrefix(normalizedService) === removeApiPrefix(normalizedRoute)) {
+  } else if (
+    removeApiPrefix(normalizedService) === removeApiPrefix(normalizedRoute)
+  ) {
     score += 5;
   }
 
@@ -1159,14 +1351,21 @@ function calculateEndpointMatchScore(service: ApiServiceDefinition, route: ApiRo
   return Math.max(0, Math.min(100, score));
 }
 
-function findMatchingModel(type: ApiTypeDefinition, models: ApiModelDefinition[]): ApiModelDefinition | undefined {
+function findMatchingModel(
+  type: ApiTypeDefinition,
+  models: ApiModelDefinition[],
+): ApiModelDefinition | undefined {
   // Try exact name match first, but validate field overlap to avoid
   // matching types that share a name but are semantically different
   // (e.g., FE TimeEntryResponse = action response vs BE TimeEntryResponse = data model)
   const exactMatch = models.find((m) => m.name === type.name);
   if (exactMatch) {
     const fieldOverlap = calculateFieldSimilarity(type, exactMatch);
-    if (type.fields.length > 0 && exactMatch.fields.length > 0 && fieldOverlap < 0.10) {
+    if (
+      type.fields.length > 0 &&
+      exactMatch.fields.length > 0 &&
+      fieldOverlap < 0.1
+    ) {
       // Very low overlap despite same name — likely different concepts, skip
     } else {
       return exactMatch;
@@ -1175,11 +1374,17 @@ function findMatchingModel(type: ApiTypeDefinition, models: ApiModelDefinition[]
 
   // Try normalized name match with same field overlap guard
   const normalizedTypeName = normalizeName(type.name);
-  const normalizedMatch = models.find((m) => normalizeName(m.name) === normalizedTypeName);
+  const normalizedMatch = models.find(
+    (m) => normalizeName(m.name) === normalizedTypeName,
+  );
 
   if (normalizedMatch) {
     const fieldOverlap = calculateFieldSimilarity(type, normalizedMatch);
-    if (type.fields.length > 0 && normalizedMatch.fields.length > 0 && fieldOverlap < 0.10) {
+    if (
+      type.fields.length > 0 &&
+      normalizedMatch.fields.length > 0 &&
+      fieldOverlap < 0.1
+    ) {
       // Very low overlap despite similar name — skip
     } else {
       return normalizedMatch;
@@ -1211,7 +1416,9 @@ function calculateTypeCompatibility(
   // Check for missing required fields in frontend
   for (const modelField of model.fields) {
     if (modelField.required) {
-      const frontendField = type.fields.find((f) => normalizeName(f.name) === normalizeName(modelField.name));
+      const frontendField = type.fields.find(
+        (f) => normalizeName(f.name) === normalizeName(modelField.name),
+      );
 
       if (!frontendField) {
         score -= 15;
@@ -1222,24 +1429,35 @@ function calculateTypeCompatibility(
 
   // Check for naming convention mismatches
   for (const frontendField of type.fields) {
-    const backendField = model.fields.find((f) => normalizeName(f.name) === normalizeName(frontendField.name));
+    const backendField = model.fields.find(
+      (f) => normalizeName(f.name) === normalizeName(frontendField.name),
+    );
 
     if (backendField && frontendField.name !== backendField.name) {
       score -= 5;
-      issues.push(`Naming convention mismatch: ${frontendField.name} vs ${backendField.name}`);
+      issues.push(
+        `Naming convention mismatch: ${frontendField.name} vs ${backendField.name}`,
+      );
     }
   }
 
   return { score: Math.max(0, score), issues };
 }
 
-function calculateFieldSimilarity(type: ApiTypeDefinition, model: ApiModelDefinition): number {
+function calculateFieldSimilarity(
+  type: ApiTypeDefinition,
+  model: ApiModelDefinition,
+): number {
   if (type.fields.length === 0 || model.fields.length === 0) return 0;
 
   const typeFieldNames = new Set(type.fields.map((f) => normalizeName(f.name)));
-  const modelFieldNames = new Set(model.fields.map((f) => normalizeName(f.name)));
+  const modelFieldNames = new Set(
+    model.fields.map((f) => normalizeName(f.name)),
+  );
 
-  const intersection = new Set([...typeFieldNames].filter((x) => modelFieldNames.has(x)));
+  const intersection = new Set(
+    [...typeFieldNames].filter((x) => modelFieldNames.has(x)),
+  );
   const union = new Set([...typeFieldNames, ...modelFieldNames]);
 
   return intersection.size / union.size;

@@ -693,6 +693,14 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 // ==========================================================================
 
 describe("Python False Positive Fixes - Import Usage Tracking", () => {
+  it("should not include module path itself as imported symbol for from...import", () => {
+    const imports = getImports("from app.core.config import settings");
+
+    expect(imports).toHaveLength(1);
+    expect(imports[0].module).toBe("app.core.config");
+    expect(imports[0].names).toEqual([{ imported: "settings", local: "settings" }]);
+  });
+
   it("should extract imports used as method call objects as usages", () => {
     const code = `
 import os
