@@ -3258,6 +3258,16 @@ function validateUnmatchedFrontend(
 ): ApiContractIssue[] {
   const issues: ApiContractIssue[] = [];
 
+  if (apiContract.unmatchedFrontend.length === 0) return issues;
+
+  // If no backend routes were found at all, this is a frontend-only project
+  // (guardian was started on the frontend directory without a paired backend).
+  // Flagging every frontend service call as "endpoint not found in backend"
+  // produces 100% false positives in this case, so we skip the check entirely.
+  if (apiContract.backendRoutes.length === 0) {
+    return issues;
+  }
+
   for (const service of apiContract.unmatchedFrontend) {
     // Skip ignored endpoints (webhooks, admin, internal, etc.)
     if (shouldIgnoreEndpoint(service.endpoint)) {
