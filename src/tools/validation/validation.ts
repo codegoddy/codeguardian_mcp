@@ -58,6 +58,39 @@ import { checkPackageRegistry } from "./registry.js";
 // Optional Prisma model delegate validation (monorepo-friendly, sync)
 // =============================================================================
 
+/**
+ * Exhaustive list of methods exposed on every Prisma Client delegate (model accessor).
+ * Source: https://www.prisma.io/docs/orm/reference/prisma-client-reference
+ *
+ * Used to catch hallucinated Prisma methods like `prisma.user.bulkUpdate()` —
+ * the delegate (user) may be valid, but the method name is fabricated.
+ * Update this set when Prisma releases new delegate-level operations.
+ */
+const PRISMA_DELEGATE_METHODS = new Set([
+  // Reads
+  "findUnique",
+  "findUniqueOrThrow",
+  "findFirst",
+  "findFirstOrThrow",
+  "findMany",
+  // Writes
+  "create",
+  "createMany",
+  "createManyAndReturn",
+  "update",
+  "updateMany",
+  "updateManyAndReturn",
+  "upsert",
+  "delete",
+  "deleteMany",
+  // Aggregation
+  "count",
+  "aggregate",
+  "groupBy",
+  // Field references (Prisma 5+)
+  "fields",
+]);
+
 type PrismaDelegateCache = {
   rootPath: string;
   schemaPath: string;
@@ -147,6 +180,78 @@ function loadPrismaDelegatesSync(projectPath: string): Set<string> {
   } catch {
     return new Set();
   }
+}
+
+function hasTypeSuppressionComment(codeLines: string[], line: number): boolean {
+  const prevLine = codeLines[line - 2]; // line is 1-indexed
+  return (
+    !!prevLine &&
+    (prevLine.includes("@ts-ignore") || prevLine.includes("@ts-expect-error"))
+  );
+}
+
+function detectSuppressedPropertyAccessIssues(
+  newCode: string,
+  filePath: string,
+  existingIssues: ValidationIssue[],
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const codeLines = newCode.split("\n");
+  const seen = new Set<string>();
+  const propertyAccessRegex = /\b([A-Za-z_$][\w$]*)\s*(?:\?\.|\.)\s*([A-Za-z_$][\w$]*)/g;
+
+  for (let i = 0; i < codeLines.length - 1; i++) {
+    const line = codeLines[i];
+    if (!line.includes("@ts-ignore") && !line.includes("@ts-expect-error")) {
+      continue;
+    }
+
+    const targetLine = codeLines[i + 1] || "";
+    const lineNumber = i + 2;
+
+    let match: RegExpExecArray | null;
+    while ((match = propertyAccessRegex.exec(targetLine)) !== null) {
+      const objectName = match[1];
+      const propertyName = match[2];
+      if (!objectName || !propertyName) continue;
+
+      const remainder = targetLine
+        .slice(match.index + match[0].length)
+        .trimStart();
+      // Skip method calls like foo.bar() — those are handled in method-call logic.
+      if (remainder.startsWith("(") || remainder.startsWith("?.(")) {
+        continue;
+      }
+
+      const key = `${lineNumber}:${objectName}.${propertyName}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const alreadyReported = existingIssues.some(
+        (issue) =>
+          issue.line === lineNumber &&
+          issue.message.includes(`${objectName}.${propertyName}`),
+      );
+      if (alreadyReported) continue;
+
+      issues.push({
+        type: "undefinedVariable",
+        severity: "high",
+        message: `Suspicious property access: '${objectName}.${propertyName}' uses @ts-ignore to bypass type checking`,
+        line: lineNumber,
+        file: filePath,
+        code: targetLine.trim(),
+        suggestion: `Verify '${objectName}' actually has a '${propertyName}' property, or remove the suppression comment and fix the type mismatch directly.`,
+        confidence: 84,
+        reasoning:
+          "@ts-ignore/@ts-expect-error directly above property access is a strong signal of suppressed type mismatch, often masking a non-existent property.",
+      });
+    }
+
+    propertyAccessRegex.lastIndex = 0;
+  }
+
+  return issues;
 }
 
 // ============================================================================
@@ -552,6 +657,44 @@ export function validateSymbols(
       });
     }
     return out;
+  };
+
+  const isHookReturnMethodLikelyValid = (
+    objectName: string,
+    methodName: string,
+  ): boolean => {
+    if (!context) return false;
+    if (language !== "javascript" && language !== "typescript") return false;
+
+    const originCall = localCallOrigins.get(objectName);
+    if (!originCall || !/^use[A-Z0-9_]/.test(originCall)) return false;
+
+    const hookDefs = context.symbolIndex.get(originCall);
+    if (!hookDefs || hookDefs.length === 0) return false;
+
+    const hookFiles = new Set<string>();
+    for (const def of hookDefs) {
+      const kind = (def as any)?.symbol?.kind;
+      if (kind === "function" || kind === "hook") {
+        hookFiles.add((def as any).file);
+      }
+    }
+    if (hookFiles.size === 0) return false;
+
+    const methodDefs = context.symbolIndex.get(methodName);
+    if (!methodDefs || methodDefs.length === 0) return false;
+
+    for (const def of methodDefs) {
+      const kind = (def as any)?.symbol?.kind;
+      if (
+        (kind === "function" || kind === "method" || kind === "variable") &&
+        hookFiles.has((def as any).file)
+      ) {
+        return true;
+      }
+    }
+
+    return false;
   };
 
   // Build lookup maps for VALID symbols
@@ -1146,12 +1289,34 @@ export function validateSymbols(
     string,
     "array" | "object" | "string" | "json"
   >();
+  const localCallOrigins = new Map<string, string>();
   if (language === "javascript" || language === "typescript") {
     try {
       const tree = parseCodeCached(newCode, language, {
         filePath: filePath || "(new code)",
         useCache: false,
       });
+
+      const extractCallOrigin = (valueNode: any): string | null => {
+        if (!valueNode) return null;
+
+        if (valueNode.type === "await_expression") {
+          return extractCallOrigin(valueNode.childForFieldName("argument"));
+        }
+
+        if (valueNode.type !== "call_expression") {
+          return null;
+        }
+
+        const functionNode = valueNode.childForFieldName("function");
+        if (!functionNode) return null;
+
+        if (functionNode.type === "identifier") {
+          return newCode.slice(functionNode.startIndex, functionNode.endIndex);
+        }
+
+        return null;
+      };
 
       const isJsonLikeInitializer = (valueNode: any): boolean => {
         // const data = await response.json()
@@ -1196,6 +1361,10 @@ export function validateSymbols(
           const valueNode = node.childForFieldName("value");
           if (nameNode?.type === "identifier" && valueNode) {
             const name = newCode.slice(nameNode.startIndex, nameNode.endIndex);
+            const callOrigin = extractCallOrigin(valueNode);
+            if (callOrigin) {
+              localCallOrigins.set(name, callOrigin);
+            }
             if (
               valueNode.type === "array" ||
               valueNode.type === "object" ||
@@ -1625,6 +1794,38 @@ export function validateSymbols(
                     " Prisma delegate names are derived from schema.prisma model names (typically lowerCamelCase).",
                 });
                 continue;
+              } else if (
+                delegates.size > 0 &&
+                !PRISMA_DELEGATE_METHODS.has(used.name)
+              ) {
+                // The model delegate IS valid, but the method called on it does not exist
+                // in Prisma Client's fixed operation set — this is a hallucinated method.
+                // Example: prisma.pantryItem.bulkUpdate() — pantryItem is real, bulkUpdate is not.
+                const { confidence, reasoning } = calculateConfidence({
+                  issueType: "nonExistentMethod",
+                  symbolName: used.name,
+                  similarSymbols: [],
+                  existsInProject: false,
+                  strictMode,
+                });
+
+                issues.push({
+                  type: "nonExistentMethod",
+                  severity: "critical",
+                  message: `Prisma method '${used.name}' does not exist on delegate '${delegate}' — Prisma Client does not expose this operation`,
+                  line: used.line,
+                  file: filePath,
+                  code: used.code,
+                  suggestion:
+                    `Replace '${used.name}' with a real Prisma delegate method. ` +
+                    `For bulk writes use: createMany, updateMany, deleteMany, or upsert inside $transaction. ` +
+                    `Full list: findMany, findUnique, findFirst, create, createMany, update, updateMany, upsert, delete, deleteMany, count, aggregate, groupBy.`,
+                  confidence: Math.max(confidence, 95),
+                  reasoning:
+                    reasoning +
+                    ` Prisma Client delegates expose only a fixed set of CRUD operations. '${used.name}' is not among them — it is a hallucinated method name.`,
+                });
+                continue;
               }
             }
           }
@@ -1688,11 +1889,7 @@ export function validateSymbols(
         if (!STEALTH_HALLUCINATION_GLOBALS.has(rootObject)) {
           // Check for @ts-ignore or @ts-expect-error which indicates intentional bypass
           const codeLines = newCode.split("\n");
-          const prevLine = codeLines[used.line - 2]; // line is 1-indexed
-          if (
-            prevLine?.includes("@ts-ignore") ||
-            prevLine?.includes("@ts-expect-error")
-          ) {
+          if (hasTypeSuppressionComment(codeLines, used.line)) {
             issues.push({
               type: "nonExistentMethod",
               severity: "high",
@@ -1758,11 +1955,7 @@ export function validateSymbols(
               if (!KNOWN_PRISMA_METHODS.has(used.name)) {
                 // Check for @ts-ignore or @ts-expect-error which indicates intentional bypass
                 const codeLines = newCode.split("\n");
-                const prevLine = codeLines[used.line - 2]; // line is 1-indexed
-                if (
-                  prevLine?.includes("@ts-ignore") ||
-                  prevLine?.includes("@ts-expect-error")
-                ) {
+                if (hasTypeSuppressionComment(codeLines, used.line)) {
                   issues.push({
                     type: "nonExistentMethod",
                     severity: "high",
@@ -2446,6 +2639,10 @@ export function validateSymbols(
       }
 
       if (!methodMatches && !funcMatches) {
+        if (isHookReturnMethodLikelyValid(rootObject, used.name)) {
+          continue;
+        }
+
         // Build list of valid methods for this object type
         const objectMethods: string[] = [];
         for (const [name, sym] of validMethods) {
@@ -2655,6 +2852,10 @@ export function validateSymbols(
         });
       }
     }
+  }
+
+  if (language === "typescript" || language === "javascript") {
+    issues.push(...detectSuppressedPropertyAccessIssues(newCode, filePath, issues));
   }
 
   // Tier 3: Unused Import Detection

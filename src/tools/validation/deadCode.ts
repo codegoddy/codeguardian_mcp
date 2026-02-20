@@ -31,8 +31,291 @@ import { minimatch as minimatchFunc } from "minimatch";
 const minimatch = minimatchFunc;
 
 // Import the AST-based unused locals detection
-import { detectUnusedLocals, detectUnusedLocalsAST, shouldSkipFrameworkPattern } from "./unusedLocals.js";
-export { detectUnusedLocals, detectUnusedLocalsAST, shouldSkipFrameworkPattern };
+import {
+  detectUnusedLocals,
+  detectUnusedLocalsAST,
+  shouldSkipFrameworkPattern,
+} from "./unusedLocals.js";
+export {
+  detectUnusedLocals,
+  detectUnusedLocalsAST,
+  shouldSkipFrameworkPattern,
+};
+import { getParser } from "./parser.js";
+
+// ============================================================================
+// Class Method Dead-Code Detection (cross-file, singleton-aware)
+// ============================================================================
+
+interface _ClassMethodInfo {
+  name: string;
+  line: number;
+}
+
+interface _ClassInfo {
+  name: string;
+  line: number;
+  methods: _ClassMethodInfo[];
+}
+
+/**
+ * Detect unused methods on exported class singletons by tracing cross-file usage.
+ *
+ * Strategy:
+ *  1. Parse the file for class definitions and their public methods.
+ *  2. Find exported singleton instances (export const x = new ClassName()).
+ *  3. Use reverseImportGraph to locate every file that imports this module.
+ *  4. Scan those files (and the current file itself) for `instanceName.methodName` calls.
+ *  5. Report methods that are never called anywhere in the project.
+ *
+ * This fills the gap left by:
+ * - detectUnusedLocals   — hard-skips sym.type === "method" (single-file only)
+ * - detectDeadCode       — only tracks top-level exported symbols, not instance methods
+ *
+ * Example: spoonacular.ts exports `spoonacularService = new SpoonacularService()`.
+ * If no file ever calls `spoonacularService.getRecipeNutrition()`, it is dead code.
+ */
+export async function detectUnusedClassMethods(
+  content: string,
+  filePath: string,
+  context: ProjectContext,
+): Promise<DeadCodeIssue[]> {
+  const issues: DeadCodeIssue[] = [];
+
+  // Only applicable to TypeScript / JavaScript
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext !== ".ts" && ext !== ".tsx" && ext !== ".js" && ext !== ".jsx") {
+    return issues;
+  }
+
+  // Step 1: Extract class definitions and their public instance methods
+  const classes = _extractClassesWithMethods(content);
+  if (classes.size === 0) return issues;
+
+  // Step 2: Find exported singleton instances of those classes in this file
+  //   e.g.  export const spoonacularService = new SpoonacularService();
+  const exportedInstances = _extractExportedClassInstances(content, classes);
+  if (exportedInstances.size === 0) return issues;
+
+  // Step 3: Collect all files to search — this file plus every importer
+  const importerPaths: string[] =
+    context.reverseImportGraph?.get(filePath) ?? [];
+  const filesToSearch: string[] = [filePath, ...importerPaths];
+
+  // Step 4: For each exported instance, determine which methods are actually called
+  const usedMethodKeys = new Set<string>(); // "ClassName.methodName"
+
+  for (const searchPath of filesToSearch) {
+    try {
+      const searchContent =
+        searchPath === filePath
+          ? content
+          : await fs.readFile(searchPath, "utf-8");
+
+      for (const [instanceName, className] of exportedInstances) {
+        const classInfo = classes.get(className);
+        if (!classInfo) continue;
+
+        for (const method of classInfo.methods) {
+          const key = `${className}.${method.name}`;
+          if (usedMethodKeys.has(key)) continue; // already confirmed used
+
+          // Match: instanceName.methodName or instanceName?.methodName
+          const pattern = new RegExp(
+            `\\b${_escapeRegex(instanceName)}\\??\\s*\\.\\s*${_escapeRegex(method.name)}\\b`,
+          );
+          if (pattern.test(searchContent)) {
+            usedMethodKeys.add(key);
+          }
+        }
+      }
+    } catch {
+      // Unreadable file — skip
+    }
+  }
+
+  // Step 5: Report methods that were never found in any file
+  for (const [, className] of exportedInstances) {
+    const classInfo = classes.get(className);
+    if (!classInfo) continue;
+
+    for (const method of classInfo.methods) {
+      const key = `${className}.${method.name}`;
+      if (!usedMethodKeys.has(key)) {
+        issues.push({
+          type: "unusedFunction",
+          severity: "medium",
+          name: method.name,
+          file: filePath,
+          line: method.line,
+          message: `Method '${method.name}' on exported class '${className}' is never called anywhere in the project`,
+        } as any);
+      }
+    }
+  }
+
+  return issues;
+}
+
+/** Parse class declarations from TypeScript/JavaScript source using tree-sitter. */
+function _extractClassesWithMethods(content: string): Map<string, _ClassInfo> {
+  const classes = new Map<string, _ClassInfo>();
+
+  try {
+    const parser = getParser("typescript");
+    const tree = parser.parse(content);
+    if (!tree) return classes;
+
+    const visitChildren = (node: any): void => {
+      for (const child of node.children ?? []) visit(child);
+    };
+
+    const visit = (node: any): void => {
+      if (
+        node.type === "class_declaration" ||
+        node.type === "class" // class expression
+      ) {
+        const nameNode = node.childForFieldName("name");
+        if (!nameNode) {
+          visitChildren(node);
+          return;
+        }
+
+        const className = content.slice(nameNode.startIndex, nameNode.endIndex);
+        const line = node.startPosition.row + 1;
+        const methods: _ClassMethodInfo[] = [];
+
+        const body = node.childForFieldName("body");
+        if (body) {
+          for (const child of body.children ?? []) {
+            if (child.type !== "method_definition") continue;
+
+            // Skip JavaScript private fields (#name)
+            const hasPrivateField = child.children?.some(
+              (c: any) => c.type === "private_property_identifier",
+            );
+            if (hasPrivateField) continue;
+
+            // Skip TypeScript `private` accessibility modifier
+            const accessMod = child.children?.find(
+              (c: any) => c.type === "accessibility_modifier",
+            );
+            if (
+              accessMod &&
+              content.slice(accessMod.startIndex, accessMod.endIndex) ===
+                "private"
+            ) {
+              continue;
+            }
+
+            const methodNameNode = child.childForFieldName("name");
+            if (!methodNameNode) continue;
+
+            const methodName = content.slice(
+              methodNameNode.startIndex,
+              methodNameNode.endIndex,
+            );
+
+            // Skip constructor and JS private field syntax
+            if (methodName === "constructor" || methodName.startsWith("#")) {
+              continue;
+            }
+
+            // Skip getters/setters — they behave like properties, not callable methods
+            const kindNode = child.childForFieldName("kind");
+            const kindText = kindNode
+              ? content.slice(kindNode.startIndex, kindNode.endIndex)
+              : "";
+            if (kindText === "get" || kindText === "set") continue;
+
+            methods.push({
+              name: methodName,
+              line: child.startPosition.row + 1,
+            });
+          }
+        }
+
+        if (methods.length > 0) {
+          classes.set(className, { name: className, line, methods });
+        }
+      }
+
+      visitChildren(node);
+    };
+
+    visit(tree.rootNode);
+  } catch {
+    // Best-effort — return whatever was collected before the error
+  }
+
+  return classes;
+}
+
+/**
+ * Find exported singleton instances of the given classes.
+ * Handles:   export const foo = new Foo();
+ */
+function _extractExportedClassInstances(
+  content: string,
+  classes: Map<string, _ClassInfo>,
+): Map<string, string> {
+  // varName → className
+  const instances = new Map<string, string>();
+
+  try {
+    const parser = getParser("typescript");
+    const tree = parser.parse(content);
+    if (!tree) return instances;
+
+    const visit = (node: any): void => {
+      if (node.type === "export_statement") {
+        const decl = node.children?.find(
+          (c: any) =>
+            c.type === "lexical_declaration" ||
+            c.type === "variable_declaration",
+        );
+        if (decl) {
+          for (const child of decl.children ?? []) {
+            if (child.type !== "variable_declarator") continue;
+
+            const nameNode = child.childForFieldName("name");
+            const valueNode = child.childForFieldName("value");
+
+            if (nameNode && valueNode?.type === "new_expression") {
+              const constructorNode =
+                valueNode.childForFieldName("constructor");
+              if (constructorNode) {
+                const varName = content.slice(
+                  nameNode.startIndex,
+                  nameNode.endIndex,
+                );
+                const className = content.slice(
+                  constructorNode.startIndex,
+                  constructorNode.endIndex,
+                );
+                if (classes.has(className)) {
+                  instances.set(varName, className);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      for (const child of node.children ?? []) visit(child);
+    };
+
+    visit(tree.rootNode);
+  } catch {
+    // Best-effort
+  }
+
+  return instances;
+}
+
+function _escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 // ============================================================================
 // Caches for Performance
@@ -134,7 +417,10 @@ export async function isSymbolTypeReferenced(
   // This is faster than parsing AST for type references
   for (const [filePath, fileInfo] of context.files) {
     for (const imp of fileInfo.imports) {
-      if (imp.namedImports.includes(symbolName) || imp.defaultImport === symbolName) {
+      if (
+        imp.namedImports.includes(symbolName) ||
+        imp.defaultImport === symbolName
+      ) {
         return true;
       }
     }
@@ -205,7 +491,7 @@ export async function isSymbolCalledOrInstantiated(
     // Check for direct function calls or instantiations
     for (const usage of usages) {
       if (usage.name === symbolName) {
-        // If symbol has a scope (e.g., it's a method of an object), 
+        // If symbol has a scope (e.g., it's a method of an object),
         // verify that the usage is via that object
         if (symbolScope && usage.type === "methodCall" && usage.object) {
           if (usage.object === symbolScope) {
@@ -216,12 +502,19 @@ export async function isSymbolCalledOrInstantiated(
           if (fi) {
             const allFileKeys = Array.from(context.files.keys());
             for (const imp of fi.imports) {
-              const resolvedPath = resolveImport(imp.source, filePath, allFileKeys);
+              const resolvedPath = resolveImport(
+                imp.source,
+                filePath,
+                allFileKeys,
+              );
               if (resolvedPath) {
                 const defFileInfo = context.files.get(resolvedPath);
                 if (defFileInfo) {
                   const matchingSymbol = defFileInfo.symbols.find(
-                    s => s.name === symbolName && s.scope === symbolScope && s.exported
+                    (s) =>
+                      s.name === symbolName &&
+                      s.scope === symbolScope &&
+                      s.exported,
                   );
                   if (matchingSymbol) {
                     return true;
@@ -236,7 +529,11 @@ export async function isSymbolCalledOrInstantiated(
         }
       }
       // Check for method calls on objects (e.g., api.symbolName())
-      if (usage.type === "methodCall" && usage.name === symbolName && !symbolScope) {
+      if (
+        usage.type === "methodCall" &&
+        usage.name === symbolName &&
+        !symbolScope
+      ) {
         return true;
       }
     }
@@ -273,10 +570,10 @@ export async function isSymbolUsedInSameFileExports(
 
   // Check if this symbol is a method/property of an exported parent object
   // e.g., startNewConversation is a method of supportChatService which is exported
-  const symbol = fileInfo.symbols.find(s => s.name === symbolName);
+  const symbol = fileInfo.symbols.find((s) => s.name === symbolName);
   if (symbol?.scope) {
     // This symbol has a scope (parent object) - check if the parent is exported
-    const parentSymbol = fileInfo.symbols.find(s => s.name === symbol.scope);
+    const parentSymbol = fileInfo.symbols.find((s) => s.name === symbol.scope);
     if (parentSymbol?.exported) {
       // The parent object is exported, so this method is accessible via the parent
       return true;
@@ -394,7 +691,7 @@ async function isSymbolUsedAnywhere(
   // Check 3: Is it called or instantiated anywhere?
   // Look up the symbol to get its scope (for method detection)
   const fileInfo = context.files.get(definedInFile);
-  const symbol = fileInfo?.symbols.find(s => s.name === symbolName);
+  const symbol = fileInfo?.symbols.find((s) => s.name === symbolName);
   if (await isSymbolCalledOrInstantiated(symbolName, context, symbol?.scope)) {
     symbolUsageCache.set(cacheKey, true);
     return true;
@@ -581,11 +878,15 @@ export async function detectDeadCode(
   const filesToPreload = new Set<string>();
   for (const [filePath, fileInfo] of context.files) {
     if (fileInfo.isTest || fileInfo.isConfig || fileInfo.isEntryPoint) continue;
-    if (fileInfo.exports.length === 0 && !fileInfo.symbols.some((s) => s.exported)) continue;
+    if (
+      fileInfo.exports.length === 0 &&
+      !fileInfo.symbols.some((s) => s.exported)
+    )
+      continue;
 
     // Only deep-analyze if exports aren't in import graph
-    const hasUnimportedExports = fileInfo.exports.some(exp =>
-      !isSymbolImported(exp.name, filePath, symbolsImportedFromFile)
+    const hasUnimportedExports = fileInfo.exports.some(
+      (exp) => !isSymbolImported(exp.name, filePath, symbolsImportedFromFile),
     );
     if (hasUnimportedExports) {
       filesToPreload.add(filePath);
@@ -613,7 +914,8 @@ export async function detectDeadCode(
     // the guardian scans from a project root where detectRootSourceDirs
     // falls back to ".", excluded dirs can leak into context.files.
     // Also handles cases where relative paths (../../) bypass glob patterns.
-    if (shouldExcludeFile(filePath) || shouldExcludeFile(fileInfo.relativePath)) continue;
+    if (shouldExcludeFile(filePath) || shouldExcludeFile(fileInfo.relativePath))
+      continue;
 
     // Check against ignore patterns
     if (isIgnored(fileInfo.relativePath, ignorePatterns)) continue;
@@ -721,8 +1023,9 @@ export async function detectDeadCode(
 
   if (potentiallyUnused.length > MAX_DEEP_ANALYSIS) {
     const deepLimitWarning = `Limited deep analysis to ${MAX_DEEP_ANALYSIS} of ${potentiallyUnused.length} potentially unused exports.`;
-    limitWarning =
-      limitWarning ? `${limitWarning} ${deepLimitWarning}` : deepLimitWarning;
+    limitWarning = limitWarning
+      ? `${limitWarning} ${deepLimitWarning}`
+      : deepLimitWarning;
     logger.warn(deepLimitWarning);
   }
 
@@ -738,15 +1041,15 @@ export async function detectDeadCode(
         const cacheKey = `${exp.file}:${exp.name}`;
         const cached = symbolUsageCache.get(cacheKey);
         if (cached !== undefined) {
-          return cached ? null : (
-            {
-              type: "unusedExport" as const,
-              severity: "low" as const, // Downgrade from medium to low
-              name: exp.name,
-              file: exp.relativePath,
-              message: `Export '${exp.name}' is never used anywhere in the codebase`,
-            }
-          );
+          return cached
+            ? null
+            : {
+                type: "unusedExport" as const,
+                severity: "low" as const, // Downgrade from medium to low
+                name: exp.name,
+                file: exp.relativePath,
+                message: `Export '${exp.name}' is never used anywhere in the codebase`,
+              };
         }
 
         // Check same-file usage first (fastest - uses cached file content)
@@ -773,7 +1076,11 @@ export async function detectDeadCode(
         }
 
         // Finally check function calls (most expensive)
-        const isCalled = await isSymbolCalledOrInstantiated(exp.name, context, exp.scope);
+        const isCalled = await isSymbolCalledOrInstantiated(
+          exp.name,
+          context,
+          exp.scope,
+        );
         if (isCalled) {
           symbolUsageCache.set(cacheKey, true);
           return null;
@@ -818,7 +1125,10 @@ export async function detectDeadCode(
     if (importers.length === 0 && hasExports) {
       // Python standalone scripts with a __main__ entrypoint are intentionally
       // runnable modules and should not be treated as orphaned files.
-      if (context.language === "python" && await isPythonCliScript(filePath)) {
+      if (
+        context.language === "python" &&
+        (await isPythonCliScript(filePath))
+      ) {
         continue;
       }
 
@@ -838,7 +1148,7 @@ export async function detectDeadCode(
               imp.source === moduleName ||
               imp.source.endsWith(`.${moduleName}`) ||
               imp.namedImports.some((n) =>
-                fileInfo.symbols.some((s) => s.name === n && s.exported)
+                fileInfo.symbols.some((s) => s.name === n && s.exported),
               ),
           );
           if (isReExported) continue; // Not orphaned — re-exported via __init__.py
@@ -909,7 +1219,10 @@ export async function detectDeadCode(
       // and are always up-to-date.
       if (!anyExportUsed) {
         for (const exp of fileInfo.exports) {
-          if (jsxUsedComponents.has(exp.name) || allRawImportedNames.has(exp.name)) {
+          if (
+            jsxUsedComponents.has(exp.name) ||
+            allRawImportedNames.has(exp.name)
+          ) {
             anyExportUsed = true;
             break;
           }
@@ -917,7 +1230,11 @@ export async function detectDeadCode(
         // Also check symbols (some exports are tracked as symbols, not in exports array)
         if (!anyExportUsed) {
           for (const sym of fileInfo.symbols) {
-            if (sym.exported && (jsxUsedComponents.has(sym.name) || allRawImportedNames.has(sym.name))) {
+            if (
+              sym.exported &&
+              (jsxUsedComponents.has(sym.name) ||
+                allRawImportedNames.has(sym.name))
+            ) {
               anyExportUsed = true;
               break;
             }
@@ -944,14 +1261,29 @@ export async function detectDeadCode(
 
   // Check for unused functions in new code
   if (newCode) {
-    const definedSymbols = new Set<{ name: string; type: "function" | "constant" }>();
+    const definedSymbols = new Set<{
+      name: string;
+      type: "function" | "constant";
+    }>();
     const usedSymbols = new Set<string>();
 
     const defPatterns = [
-      { pattern: /function\s+([a-zA-Z0-9_$]+)\s*\(/g, type: "function" as const },
-      { pattern: /(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*(?:async\s*)?\(/g, type: "function" as const },
-      { pattern: /(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*.*=>/g, type: "function" as const },
-      { pattern: /(?:const|let|var)\s+([A-Z0-9_$]{3,})\s*=/g, type: "constant" as const },
+      {
+        pattern: /function\s+([a-zA-Z0-9_$]+)\s*\(/g,
+        type: "function" as const,
+      },
+      {
+        pattern: /(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*(?:async\s*)?\(/g,
+        type: "function" as const,
+      },
+      {
+        pattern: /(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*.*=>/g,
+        type: "function" as const,
+      },
+      {
+        pattern: /(?:const|let|var)\s+([A-Z0-9_$]{3,})\s*=/g,
+        type: "constant" as const,
+      },
       { pattern: /def\s+([a-zA-Z0-9_$]+)\s*\(/g, type: "function" as const },
       { pattern: /([A-Z0-9_$]{3,})\s*=\s*/g, type: "constant" as const }, // Python constants
     ];
@@ -970,9 +1302,10 @@ export async function detectDeadCode(
     }
 
     for (const sym of definedSymbols) {
-      // For each defined symbol, we expect at least 2 occurrences of the name 
+      // For each defined symbol, we expect at least 2 occurrences of the name
       // (one for definition, one for usage).
-      const count = (newCode.match(new RegExp(`\\b${sym.name}\\b`, "g")) || []).length;
+      const count = (newCode.match(new RegExp(`\\b${sym.name}\\b`, "g")) || [])
+        .length;
       if (count <= 1) {
         issues.push({
           type: sym.type === "function" ? "unusedFunction" : "unusedExport",
@@ -996,8 +1329,8 @@ export async function detectDeadCode(
   // Separate orphanedFile issues from other dead code issues.
   // Limit non-orphan issues (unusedExport, unusedFunction) to 30 for performance,
   // but always include ALL orphanedFile entries — they are high-signal and cheap.
-  const orphanIssues = issues.filter(i => i.type === "orphanedFile");
-  const otherIssues = issues.filter(i => i.type !== "orphanedFile");
+  const orphanIssues = issues.filter((i) => i.type === "orphanedFile");
+  const otherIssues = issues.filter((i) => i.type !== "orphanedFile");
   return [...otherIssues.slice(0, 30), ...orphanIssues];
 }
 
@@ -1037,7 +1370,12 @@ async function loadIgnorePatterns(projectPath: string): Promise<string[]> {
   try {
     const ignoreFile = path.join(projectPath, ".vibeguardignore");
     const content = await fs.readFile(ignoreFile, "utf-8");
-    patterns.push(...content.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#")));
+    patterns.push(
+      ...content
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l && !l.startsWith("#")),
+    );
   } catch {
     // Fallback to basic patterns if file doesn't exist
   }
@@ -1049,5 +1387,7 @@ async function loadIgnorePatterns(projectPath: string): Promise<string[]> {
  * Check if a file is ignored
  */
 function isIgnored(relativePath: string, patterns: string[]): boolean {
-  return patterns.some((pattern) => minimatch(relativePath, pattern, { dot: true }));
+  return patterns.some((pattern) =>
+    minimatch(relativePath, pattern, { dot: true }),
+  );
 }

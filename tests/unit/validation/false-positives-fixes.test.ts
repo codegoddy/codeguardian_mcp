@@ -10,6 +10,7 @@
 import { extractSymbolsAST, extractUsagesAST, extractImportsAST } from "../../../src/tools/validation/extractors/index.js";
 import { validateSymbols } from "../../../src/tools/validation/validation.js";
 import type { ASTImport, ProjectSymbol } from "../../../src/tools/validation/types.js";
+import type { ProjectContext } from "../../../src/context/projectContext.js";
 
 describe("False Positive Fixes", () => {
   describe("Destructured Function Parameters", () => {
@@ -304,6 +305,130 @@ async function fetchData() {
       expect(methodCalls.some(u => u.name === "getAll")).toBe(true);
       expect(methodCalls.some(u => u.name === "then")).toBe(true);
       expect(methodCalls.some(u => u.name === "json")).toBe(true);
+    });
+
+    it("should not flag hook-return object methods when hook file defines them", () => {
+      const code = `
+import { usePantry } from './hooks/useApi';
+
+function App() {
+  const pantry = usePantry();
+  pantry.addItem({ name: 'Rice' });
+}
+      `;
+
+      const imports = extractImportsAST(code, "typescript");
+      const usages = extractUsagesAST(code, "typescript", imports, {
+        filePath: "/project/src/App.tsx",
+      });
+
+      const symbolTable: ProjectSymbol[] = [
+        { name: "usePantry", type: "function", file: "/project/src/hooks/useApi.ts", line: 1 },
+      ];
+
+      const context: ProjectContext = {
+        projectPath: "/project",
+        language: "typescript",
+        buildTime: new Date().toISOString(),
+        totalFiles: 2,
+        files: new Map([
+          [
+            "/project/src/App.tsx",
+            {
+              path: "/project/src/App.tsx",
+              relativePath: "src/App.tsx",
+              language: "typescript",
+              size: code.length,
+              symbols: [],
+              imports: [
+                {
+                  source: "./hooks/useApi",
+                  isRelative: true,
+                  isExternal: false,
+                  namedImports: ["usePantry"],
+                  line: 1,
+                },
+              ],
+              exports: [],
+              keywords: [],
+              isTest: false,
+              isConfig: false,
+              isEntryPoint: false,
+            },
+          ],
+          [
+            "/project/src/hooks/useApi.ts",
+            {
+              path: "/project/src/hooks/useApi.ts",
+              relativePath: "src/hooks/useApi.ts",
+              language: "typescript",
+              size: 0,
+              symbols: [],
+              imports: [],
+              exports: [{ name: "usePantry", kind: "function", isDefault: false, line: 1 }],
+              keywords: [],
+              isTest: false,
+              isConfig: false,
+              isEntryPoint: false,
+            },
+          ],
+        ]),
+        symbolIndex: new Map([
+          [
+            "usePantry",
+            [
+              {
+                file: "/project/src/hooks/useApi.ts",
+                symbol: {
+                  name: "usePantry",
+                  kind: "hook",
+                  line: 1,
+                  exported: true,
+                },
+              },
+            ],
+          ],
+          [
+            "addItem",
+            [
+              {
+                file: "/project/src/hooks/useApi.ts",
+                symbol: {
+                  name: "addItem",
+                  kind: "function",
+                  line: 20,
+                  exported: false,
+                },
+              },
+            ],
+          ],
+        ]),
+        dependencies: [],
+        importGraph: new Map(),
+        reverseImportGraph: new Map(),
+        keywordIndex: new Map(),
+        externalDependencies: new Set(),
+        entryPoints: [],
+        frameworks: [],
+      };
+
+      const issues = validateSymbols(
+        usages,
+        symbolTable,
+        code,
+        "typescript",
+        true,
+        imports,
+        new Map(),
+        context,
+        "/project/src/App.tsx",
+        new Set(),
+      );
+
+      const methodIssues = issues.filter(
+        (i) => i.type === "nonExistentMethod" && i.message.includes("addItem"),
+      );
+      expect(methodIssues.length).toBe(0);
     });
   });
 

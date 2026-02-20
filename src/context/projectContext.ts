@@ -664,9 +664,17 @@ export async function getProjectContext(
 export async function refreshFileContext(
   projectPath: string,
   filePath: string,
-  options: { language?: string; includeTests?: boolean } = {}
+  options: {
+    language?: string;
+    includeTests?: boolean;
+    deferGraphRebuild?: boolean;
+  } = {}
 ): Promise<ProjectContext> {
-  const { language = "all", includeTests = true } = options;
+  const {
+    language = "all",
+    includeTests = true,
+    deferGraphRebuild = false,
+  } = options;
   
   // Get git info
   const gitInfo = await getGitInfo(projectPath);
@@ -700,7 +708,16 @@ export async function refreshFileContext(
   }
 
   // Update the file in the context
-  await updateFileInContext(cached.context, filePath, projectPath);
+  await updateFileInContext(
+    cached.context,
+    filePath,
+    projectPath,
+    deferGraphRebuild,
+  );
+
+  if (deferGraphRebuild) {
+    scheduleDebouncedSymbolGraphRebuild(projectPath, cached.context, cached);
+  }
 
   // If the changed file is relevant to API contracts (services, routes, schemas),
   // rebuild the API contract context so all tools see fresh data
@@ -2687,6 +2704,72 @@ async function loadContextFromDisk(
   } catch (error) {
     logger.warn(`Failed to load context from disk: ${error instanceof Error ? error.message : String(error)}`);
     return null;
+  }
+}
+
+/**
+ * Debounced symbol-graph rebuild for high-frequency refreshes.
+ * During rapid multi-file edits, rebuilding graph on every file change creates
+ * heavy CPU churn and blocks realtime validation. We coalesce to one rebuild.
+ */
+const pendingGraphRebuildTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+const graphRebuildInFlight = new Set<string>();
+const graphRebuildDirty = new Set<string>();
+const GRAPH_REBUILD_DEBOUNCE_MS = 450;
+
+function scheduleDebouncedSymbolGraphRebuild(
+  projectPath: string,
+  context: ProjectContext,
+  cachedContext: CachedContext,
+): void {
+  graphRebuildDirty.add(projectPath);
+
+  const existingTimer = pendingGraphRebuildTimers.get(projectPath);
+  if (existingTimer) {
+    clearTimeout(existingTimer);
+  }
+
+  const timer = setTimeout(() => {
+    pendingGraphRebuildTimers.delete(projectPath);
+    void runDeferredSymbolGraphRebuild(projectPath, context, cachedContext);
+  }, GRAPH_REBUILD_DEBOUNCE_MS);
+
+  pendingGraphRebuildTimers.set(projectPath, timer);
+}
+
+async function runDeferredSymbolGraphRebuild(
+  projectPath: string,
+  context: ProjectContext,
+  cachedContext: CachedContext,
+): Promise<void> {
+  if (graphRebuildInFlight.has(projectPath)) {
+    graphRebuildDirty.add(projectPath);
+    return;
+  }
+
+  graphRebuildInFlight.add(projectPath);
+  graphRebuildDirty.delete(projectPath);
+
+  try {
+    context.symbolGraph = await buildSymbolGraph(context as any, {
+      includeCallRelationships: true,
+      includeCoOccurrence: true,
+      minCoOccurrenceCount: 2,
+    });
+    context.buildTime = new Date().toISOString();
+    context.totalFiles = context.files.size;
+    cachedContext.timestamp = Date.now();
+    debouncedSaveContextToDisk(projectPath, cachedContext);
+  } catch (err) {
+    logger.warn(
+      `Deferred symbol graph rebuild failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  } finally {
+    graphRebuildInFlight.delete(projectPath);
+
+    if (graphRebuildDirty.has(projectPath)) {
+      scheduleDebouncedSymbolGraphRebuild(projectPath, context, cachedContext);
+    }
   }
 }
 

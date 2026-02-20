@@ -181,6 +181,37 @@ describe("API Contract Guardian - Service Extraction", () => {
       }
     });
 
+    it("should ignore fully dynamic fetch wrappers like `${BASE_URL}${endpoint}`", async () => {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+      const os = await import("os");
+
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "api-contract-test-"));
+      const tmpFile = path.join(tmpDir, "api.ts");
+      await fs.writeFile(
+        tmpFile,
+        `
+        const BASE_URL = 'http://localhost:3001/api';
+
+        async function fetchApi(endpoint: string, options?: RequestInit) {
+          return fetch(\`${"${BASE_URL}"}${"${endpoint}"}\`, options);
+        }
+
+        export const pantryApi = {
+          getAll: () => fetchApi('/pantry'),
+        };
+      `,
+      );
+
+      try {
+        const services = await extractServicesFromFileAST(tmpFile);
+        expect(services).toHaveLength(1);
+        expect(services[0].endpoint).toBe("/pantry");
+      } finally {
+        await fs.rm(tmpDir, { recursive: true });
+      }
+    });
+
     it("should strip URL origin for fetch() absolute URLs", async () => {
       const fs = await import("fs/promises");
       const path = await import("path");
@@ -936,6 +967,201 @@ describe("API Contract Guardian - Validation", () => {
         expect(result.issues.some((i) => i.type === "apiMissingRequiredField" && i.message.includes("status"))).toBe(true);
         // phone extra in request
         expect(result.issues.some((i) => i.type === "apiExtraField" && i.message.includes("phone"))).toBe(true);
+      } finally {
+        await fs.rm(tmpDir, { recursive: true });
+      }
+    });
+
+    it("should detect request type coercion mismatches and Prisma write payload hallucinated fields", async () => {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+      const os = await import("os");
+
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "api-contract-prisma-write-"));
+      const frontendDir = path.join(tmpDir, "frontend");
+      const backendDir = path.join(tmpDir, "backend");
+      await fs.mkdir(frontendDir);
+      await fs.mkdir(backendDir);
+
+      const feFile = path.join(frontendDir, "api.ts");
+      const beRoutesFile = path.join(backendDir, "routes.ts");
+      const beControllerFile = path.join(backendDir, "pantryController.ts");
+
+      await fs.writeFile(
+        feFile,
+        `
+        type PantryItem = {
+          id: string;
+          name: string;
+          quantity: number;
+        };
+
+        export async function updatePantryItem(id: string, data: Omit<PantryItem, 'id'>) {
+          return fetch(\`http://localhost:3000/api/pantry/\${id}\`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...data, quantity: String(data.quantity) }),
+          });
+        }
+        `,
+      );
+
+      await fs.writeFile(
+        beRoutesFile,
+        `
+        import { Router } from 'express';
+        import { updatePantryItem } from './pantryController';
+
+        const router = Router();
+        router.put('/:id', updatePantryItem);
+        export default router;
+        `,
+      );
+
+      await fs.writeFile(
+        beControllerFile,
+        `
+        declare const prisma: any;
+
+        export const updatePantryItem = async (req: any, res: any) => {
+          const { name, quantity } = req.body;
+          const parsedQuantity = Number(quantity);
+
+          const updated = await prisma.pantryItem.update({
+            where: { id: req.params.id },
+            data: {
+              name,
+              quantity: parsedQuantity,
+              calories: 150,
+            },
+          });
+
+          return res.json(updated);
+        };
+        `,
+      );
+
+      const ctx: ProjectContext = {
+        projectPath: tmpDir,
+        language: "typescript",
+        buildTime: new Date().toISOString(),
+        totalFiles: 0,
+        files: new Map(),
+        symbolIndex: new Map(),
+        dependencies: [],
+        importGraph: new Map(),
+        reverseImportGraph: new Map(),
+        keywordIndex: new Map(),
+        externalDependencies: new Set(),
+        entryPoints: [],
+        frameworks: [],
+        apiContract: {
+          projectStructure: {
+            relationship: "separate",
+            frontend: {
+              path: frontendDir,
+              framework: "react",
+              apiPattern: "rest",
+              httpClient: "fetch",
+            },
+            backend: {
+              path: backendDir,
+              framework: "express",
+              apiPattern: "rest",
+              apiPrefix: "/api",
+            },
+          },
+          frontendServices: [
+            {
+              name: "updatePantryItem",
+              method: "PUT",
+              endpoint: "/pantry/{id}",
+              file: feFile,
+              line: 8,
+            },
+          ],
+          frontendTypes: [
+            {
+              name: "PantryItem",
+              fields: [
+                { name: "id", type: "string", required: true },
+                { name: "name", type: "string", required: true },
+                { name: "quantity", type: "number", required: true },
+              ],
+              file: feFile,
+              line: 2,
+              kind: "type",
+            },
+          ],
+          backendRoutes: [
+            {
+              method: "PUT",
+              path: "/api/pantry/:id",
+              handler: "updatePantryItem",
+              file: beRoutesFile,
+              line: 6,
+            },
+          ],
+          backendModels: [
+            {
+              name: "PantryItem",
+              file: beControllerFile,
+              line: 1,
+              fields: [
+                { name: "id", type: "string", required: true },
+                { name: "name", type: "string", required: true },
+                { name: "quantity", type: "int", required: true },
+              ],
+            },
+          ],
+          endpointMappings: new Map([
+            [
+              "PUT /pantry/{id}",
+              {
+                frontend: {
+                  name: "updatePantryItem",
+                  method: "PUT",
+                  endpoint: "/pantry/{id}",
+                  file: feFile,
+                  line: 8,
+                },
+                backend: {
+                  method: "PUT",
+                  path: "/api/pantry/:id",
+                  handler: "updatePantryItem",
+                  file: beRoutesFile,
+                  line: 6,
+                },
+                score: 100,
+              },
+            ],
+          ]),
+          typeMappings: new Map(),
+          unmatchedFrontend: [],
+          unmatchedBackend: [],
+          lastUpdated: new Date().toISOString(),
+        },
+      };
+
+      try {
+        const result = validateApiContractsFromContext(ctx);
+
+        expect(
+          result.issues.some(
+            (issue) =>
+              issue.type === "apiTypeMismatch" &&
+              issue.message.toLowerCase().includes("frontend uses string"),
+          ),
+        ).toBe(true);
+
+        expect(
+          result.issues.some(
+            (issue) =>
+              issue.type === "apiContractMismatch" &&
+              issue.message.includes("calories") &&
+              issue.message.includes("does not exist on model"),
+          ),
+        ).toBe(true);
       } finally {
         await fs.rm(tmpDir, { recursive: true });
       }

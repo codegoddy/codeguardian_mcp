@@ -104,6 +104,8 @@ describe("Validation Module", () => {
     it("should build symbol table from project context", () => {
       const context: ProjectContext = {
         projectPath: "/test",
+        language: "typescript",
+        buildTime: new Date().toISOString(),
         totalFiles: 1,
         files: new Map(),
         symbolIndex: new Map([
@@ -137,9 +139,13 @@ describe("Validation Module", () => {
             ],
           ],
         ]),
+        dependencies: [],
         importGraph: new Map(),
-        exportGraph: new Map(),
-        framework: undefined,
+        reverseImportGraph: new Map(),
+        keywordIndex: new Map(),
+        externalDependencies: new Set(),
+        entryPoints: [],
+        frameworks: [],
       };
 
       const symbolTable = buildSymbolTable(context);
@@ -350,6 +356,36 @@ describe("Validation Module", () => {
       );
 
       expect(issues).toHaveLength(0);
+    });
+
+    it("should flag @ts-ignore suppressed property access", () => {
+      const newCode = `
+        function renderItem(item: { name: string }) {
+          // @ts-ignore
+          return item.expirationDate?.toLocaleDateString();
+        }
+      `;
+
+      const issues = validateSymbols(
+        [],
+        [],
+        newCode,
+        "typescript",
+        false,
+        [],
+        new Map(),
+        null,
+        "src/components/ShoppingList.tsx",
+      );
+
+      expect(
+        issues.some(
+          (issue) =>
+            issue.type === "undefinedVariable" &&
+            issue.message.includes("item.expirationDate") &&
+            issue.severity === "high",
+        ),
+      ).toBe(true);
     });
   });
 });

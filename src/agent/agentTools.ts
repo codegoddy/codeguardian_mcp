@@ -25,6 +25,13 @@ const fileAlerts = new Map<string, ValidationAlert>();
 
 // Debounced alert persistence — avoid writing to disk on every single alert change
 let alertPersistTimer: ReturnType<typeof setTimeout> | null = null;
+let lastAlertPersistAt = 0;
+let alertPersistInFlight = false;
+let alertPersistDirty = false;
+let alertPersistPromise: Promise<void> | null = null;
+
+const ALERT_PERSIST_MIN_INTERVAL_MS = 300;
+const ALERT_PERSIST_MAX_INTERVAL_MS = 1000;
 
 function getActiveGuardianProjectPaths(): string[] {
   return Array.from(activeGuardians.values())
@@ -32,16 +39,163 @@ function getActiveGuardianProjectPaths(): string[] {
     .filter((projectPath): projectPath is string => !!projectPath);
 }
 
-function scheduleAlertPersist(): void {
-  if (alertPersistTimer) clearTimeout(alertPersistTimer);
-  alertPersistTimer = setTimeout(() => {
-    const projectPaths = getActiveGuardianProjectPaths();
+function normalizeProjectPath(projectPath?: string): string | null {
+  if (!projectPath || !projectPath.trim()) return null;
+  return path.resolve(projectPath);
+}
 
-    guardianPersistence.saveAlerts(fileAlerts, projectPaths).catch((err) => {
+function getProjectPathFromStorageKey(storageKey: string): string | null {
+  const separatorIndex = storageKey.indexOf("::");
+  if (separatorIndex <= 0) return null;
+  const projectPath = storageKey.slice(0, separatorIndex);
+  return normalizeProjectPath(projectPath);
+}
+
+function getAlertStorageKey(alert: ValidationAlert): string {
+  const normalizedProjectPath = normalizeProjectPath(alert.projectPath);
+  return normalizedProjectPath
+    ? `${normalizedProjectPath}::${alert.file}`
+    : alert.file;
+}
+
+function countPendingAlertsForScope(projectPath: string, agentName: string): number {
+  const normalizedTargetProject = path.resolve(projectPath);
+  let count = 0;
+
+  for (const [storageKey, alert] of fileAlerts.entries()) {
+    if (!Array.isArray(alert.issues) || alert.issues.length === 0) continue;
+
+    if (alert.agentName && alert.agentName !== agentName) continue;
+
+    const alertProjectPath = normalizeProjectPath(alert.projectPath);
+    if (alertProjectPath) {
+      if (alertProjectPath !== normalizedTargetProject) continue;
+      count++;
+      continue;
+    }
+
+    // Legacy fallback: infer project from composite storage key.
+    const keyProjectPath = getProjectPathFromStorageKey(storageKey);
+    if (keyProjectPath) {
+      if (keyProjectPath !== normalizedTargetProject) continue;
+      count++;
+      continue;
+    }
+
+    if (
+      isApiContractScanAlertKey(alert.file) &&
+      alert.file !== `API_CONTRACT_SCAN:${agentName}`
+    ) {
+      continue;
+    }
+
+    count++;
+  }
+
+  return count;
+}
+
+function removeAlertsForGuardianScope(projectPath: string, agentName: string): number {
+  const normalizedTargetProject = path.resolve(projectPath);
+  let removed = 0;
+
+  for (const [key, alert] of fileAlerts.entries()) {
+    const alertProjectPath = normalizeProjectPath(alert.projectPath);
+    const alertAgentName = alert.agentName;
+    const hasAgentMetadata = Boolean(alertAgentName);
+    const matchesProjectWithoutAgent =
+      !alertAgentName && alertProjectPath === normalizedTargetProject;
+    const matchesAgent = alert.agentName === agentName;
+    const matchesLegacyApiKey = alert.file === `API_CONTRACT_SCAN:${agentName}`;
+    const matchesLegacyCompositeKey = key.startsWith(
+      `${normalizedTargetProject}::`,
+    );
+    const matchesLegacyCompositeKeyWithoutAgent =
+      !hasAgentMetadata && matchesLegacyCompositeKey;
+
+    if (
+      matchesProjectWithoutAgent ||
+      matchesAgent ||
+      matchesLegacyApiKey ||
+      matchesLegacyCompositeKeyWithoutAgent
+    ) {
+      fileAlerts.delete(key);
+      removed++;
+    }
+  }
+
+  return removed;
+}
+
+function getHydratedAlertStorageKey(
+  persistedKey: string,
+  alert: ValidationAlert,
+): string {
+  const computedKey = getAlertStorageKey(alert);
+  if (computedKey !== alert.file) {
+    return computedKey;
+  }
+
+  // If this was stored with composite-key format but missing metadata,
+  // preserve that key to avoid collisions on hydration.
+  if (persistedKey.includes("::")) {
+    return persistedKey;
+  }
+
+  return computedKey;
+}
+
+async function persistAlertsNow(): Promise<void> {
+  if (alertPersistInFlight) {
+    alertPersistDirty = true;
+    if (alertPersistPromise) {
+      await alertPersistPromise;
+    }
+    return;
+  }
+
+  alertPersistInFlight = true;
+  alertPersistPromise = (async () => {
+    lastAlertPersistAt = Date.now();
+    try {
+      const projectPaths = getActiveGuardianProjectPaths();
+      await guardianPersistence.saveAlerts(fileAlerts, projectPaths);
+    } catch (err) {
       logger.warn("Failed to persist alerts:", err);
-    });
+    } finally {
+      alertPersistInFlight = false;
+      alertPersistPromise = null;
+
+      if (alertPersistDirty) {
+        alertPersistDirty = false;
+        scheduleAlertPersist(true);
+      }
+    }
+  })();
+
+  await alertPersistPromise;
+}
+
+function scheduleAlertPersist(forceImmediate: boolean = false): void {
+  const now = Date.now();
+  const elapsed = now - lastAlertPersistAt;
+  const shouldFlushNow = forceImmediate || elapsed >= ALERT_PERSIST_MAX_INTERVAL_MS;
+
+  if (shouldFlushNow) {
+    cancelScheduledAlertPersist();
+    void persistAlertsNow();
+    return;
+  }
+
+  if (alertPersistTimer) {
+    return;
+  }
+
+  const delay = Math.max(ALERT_PERSIST_MIN_INTERVAL_MS - elapsed, 25);
+  alertPersistTimer = setTimeout(() => {
     alertPersistTimer = null;
-  }, 2000);
+    void persistAlertsNow();
+  }, delay);
 }
 
 function cancelScheduledAlertPersist(): void {
@@ -58,7 +212,7 @@ async function flushAlertPersistenceNow(): Promise<void> {
   }
 
   cancelScheduledAlertPersist();
-  await guardianPersistence.saveAlerts(fileAlerts, getActiveGuardianProjectPaths());
+  await persistAlertsNow();
 }
 
 function collectAlertsWithIssues(alertMap: Map<string, ValidationAlert>): ValidationAlert[] {
@@ -84,10 +238,17 @@ function isApiContractScanAlertKey(alertKey: string): boolean {
  * a UI notification to hint the user/LLM that alerts are available.
  */
 function handleAlert(alert: ValidationAlert): void {
+  const storageKey = getAlertStorageKey(alert);
+
   // Initial scan notifications can be useful UX hints but should not be tracked
   // as pending issues when they carry zero findings.
   if (alert.issues.length === 0 && alert.isInitialScan) {
-    fileAlerts.delete(alert.file);
+    const hadInitialAlert = fileAlerts.delete(storageKey);
+    if (hadInitialAlert) {
+      // Persist immediately so stale initial-scan artifacts do not keep bouncing
+      // in codeguardian-alerts.json while live edits are being processed.
+      scheduleAlertPersist(true);
+    }
 
     pushValidationAlert(alert).catch((err) => {
       logger.warn("Failed to send UI notification:", err);
@@ -98,14 +259,13 @@ function handleAlert(alert: ValidationAlert): void {
   // Update state for this file
   if (alert.issues.length === 0 && !alert.isInitialScan) {
     // Clear issues for this file
-    const hadIssues = fileAlerts.has(alert.file);
-    fileAlerts.delete(alert.file);
+    const hadIssues = fileAlerts.delete(storageKey);
     
     // Also scrub initial scan alerts that referenced this file.
     // Initial scans (INITIAL_FILE_SCAN, INITIAL_SCAN, API_CONTRACT_SCAN) store
     // issues from startup. When a file is re-validated and passes clean,
     // those stale initial issues should be removed.
-    const scrubbed = scrubInitialScanIssuesForFile(alert.file);
+    const scrubbed = scrubInitialScanIssuesForFile(alert.file, alert.projectPath);
     
     // Only log if we actually cleared something
     if (hadIssues || scrubbed) {
@@ -119,11 +279,21 @@ function handleAlert(alert: ValidationAlert): void {
     // replace only that specific scan key.
     // This handles re-validation of service/route files updating the contract scan.
     if (isApiContractScanAlertKey(alert.file)) {
-      fileAlerts.set(alert.file, alert);
+      fileAlerts.set(storageKey, alert);
       // Migration: once guardian-scoped keys are flowing, drop the old shared key
       // so stale cross-guardian messages don't keep showing up.
       if (alert.file !== "API_CONTRACT_SCAN") {
-        fileAlerts.delete("API_CONTRACT_SCAN");
+        const alertProjectPath = normalizeProjectPath(alert.projectPath);
+        for (const [key, existingAlert] of fileAlerts.entries()) {
+          if (key === storageKey) continue;
+          if (existingAlert.file !== "API_CONTRACT_SCAN") continue;
+
+          const existingProjectPath = normalizeProjectPath(existingAlert.projectPath);
+          if (alertProjectPath && existingProjectPath && existingProjectPath !== alertProjectPath) {
+            continue;
+          }
+          fileAlerts.delete(key);
+        }
       }
       logger.info(`API Contract scan updated: ${alert.issues.length} issues`);
       scheduleAlertPersist();
@@ -131,7 +301,7 @@ function handleAlert(alert: ValidationAlert): void {
     }
 
     // Store new issues for LLM to retrieve via get_guardian_alerts
-    fileAlerts.set(alert.file, alert);
+    fileAlerts.set(storageKey, alert);
     logger.info(`Alert stored for: ${alert.file} (${alert.issues.length} issues) - use get_guardian_alerts to retrieve`);
     scheduleAlertPersist();
     
@@ -151,53 +321,59 @@ function handleAlert(alert: ValidationAlert): void {
  *
  * @returns true if any initial scan issues were removed
  */
-function scrubInitialScanIssuesForFile(cleanFile: string): boolean {
+function scrubInitialScanIssuesForFile(cleanFile: string, projectPath?: string): boolean {
   let scrubbed = false;
-  const INITIAL_SCAN_KEYS = [
-    "INITIAL_FILE_SCAN",
-    "INITIAL_SCAN",
-    // Legacy key support
-    "API_CONTRACT_SCAN",
-    // Guardian-scoped API contract scans
-    ...Array.from(fileAlerts.keys()).filter((key) => isApiContractScanAlertKey(key)),
-  ];
+  const normalizedProjectPath = normalizeProjectPath(projectPath);
+  const normalizedClean = cleanFile.replace(/^(\.\.\/)+/, "").replace(/\\/g, "/");
 
-  for (const key of new Set(INITIAL_SCAN_KEYS)) {
-    const scanAlert = fileAlerts.get(key);
-    if (!scanAlert) continue;
+  for (const [key, scanAlert] of fileAlerts.entries()) {
+    if (!scanAlert.isInitialScan || !Array.isArray(scanAlert.issues) || scanAlert.issues.length === 0) {
+      continue;
+    }
+
+    if (normalizedProjectPath) {
+      const scanProjectPath = normalizeProjectPath(scanAlert.projectPath);
+      const keyProjectPath = getProjectPathFromStorageKey(key);
+      const matchesProject =
+        (scanProjectPath && scanProjectPath === normalizedProjectPath) ||
+        (keyProjectPath && keyProjectPath === normalizedProjectPath);
+
+      if (!matchesProject) {
+        continue;
+      }
+    }
 
     const originalCount = scanAlert.issues.length;
-
-    // Remove issues that reference the now-clean file.
-    // Issues may have a `file` field (from the per-file scan) or the message
-    // may contain the file path. Check both.
-    // Normalize paths for comparison (strip leading ../ segments and path separators)
-    const normalizedClean = cleanFile.replace(/^(\.\.\/)+/, "").replace(/\\/g, "/");
     scanAlert.issues = scanAlert.issues.filter((issue: any) => {
       if (issue.file) {
-        const normalizedIssueFile = issue.file.replace(/^(\.\.\/)+/, "").replace(/\\/g, "/");
-        // Match by normalized paths (handles ../../ frontend/src/... vs frontend/src/...)
-        if (normalizedIssueFile === normalizedClean ||
-            normalizedIssueFile.endsWith(normalizedClean) ||
-            normalizedClean.endsWith(normalizedIssueFile)) {
+        const normalizedIssueFile = issue.file
+          .replace(/^(\.\.\/)+/, "")
+          .replace(/\\/g, "/");
+        if (
+          normalizedIssueFile === normalizedClean ||
+          normalizedIssueFile.endsWith(normalizedClean) ||
+          normalizedClean.endsWith(normalizedIssueFile)
+        ) {
           return false;
         }
       }
-      // Check if the message references this file
+
       if (issue.message && issue.message.includes(normalizedClean)) {
         return false;
       }
+
       return true;
     });
 
     if (scanAlert.issues.length < originalCount) {
       scrubbed = true;
-      logger.debug(`Scrubbed ${originalCount - scanAlert.issues.length} stale issues from ${key} for file: ${cleanFile}`);
+      logger.debug(
+        `Scrubbed ${originalCount - scanAlert.issues.length} stale issues from ${scanAlert.file} for file: ${cleanFile}`,
+      );
 
-      // If no issues remain, remove the entire alert
       if (scanAlert.issues.length === 0) {
         fileAlerts.delete(key);
-        logger.debug(`Removed empty ${key} alert`);
+        logger.debug(`Removed empty ${scanAlert.file} alert`);
       }
     }
   }
@@ -241,30 +417,79 @@ Each Guardian watches its own path and language.`,
   },
 
   async handler(args: any) {
-    const { projectPath, language = "typescript", mode = "auto", agent_name = "VibeGuard" } = args;
+    const {
+      projectPath,
+      language = "typescript",
+      mode = "auto",
+      agent_name = "VibeGuard",
+    } = args;
 
     // Resolve relative paths (user-friendly)
     const absolutePath = path.resolve(projectPath);
 
-    if (activeGuardians.has(agent_name)) {
-      const existingStatus = activeGuardians.get(agent_name)?.getStatus();
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              success: true,
-              alreadyRunning: true,
-              message: `Guardian '${agent_name}' is already active (auto-restored from previous session). No action needed — it's watching your code.`,
-              status: existingStatus,
-              pendingAlerts: fileAlerts.size,
-              hint: fileAlerts.size > 0
-                ? "There are pending alerts from the previous session. Use get_guardian_alerts to review them."
-                : "No pending alerts. The guardian is watching for changes.",
-            }),
-          },
-        ],
-      };
+    let replacedPreviousProjectPath: string | null = null;
+
+    const existingGuardian = activeGuardians.get(agent_name);
+    if (existingGuardian) {
+      const existingStatus = existingGuardian.getStatus();
+      const existingProjectPath = path.resolve(existingStatus.projectPath);
+
+      // Same guardian name + same path => no-op (already running as requested)
+      if (existingProjectPath === absolutePath) {
+        const pendingAlerts = countPendingAlertsForScope(absolutePath, agent_name);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                alreadyRunning: true,
+                message: `Guardian '${agent_name}' is already active for ${absolutePath}.`,
+                status: existingStatus,
+                pendingAlerts,
+                hint:
+                  pendingAlerts > 0
+                    ? "There are pending alerts from the previous session. Use get_guardian_alerts to review them."
+                    : "No pending alerts. The guardian is watching for changes.",
+              }),
+            },
+          ],
+        };
+      }
+
+      // Same guardian name + different path => replace existing guardian with requested path.
+      logger.info(
+        `Guardian '${agent_name}' is active for ${existingProjectPath}; replacing with ${absolutePath}`,
+      );
+      replacedPreviousProjectPath = existingStatus.projectPath;
+      existingGuardian.stop();
+      activeGuardians.delete(agent_name);
+
+      // Remove old persisted config so the previous project isn't auto-restored.
+      try {
+        await guardianPersistence.removeGuardianFull(
+          agent_name,
+          existingStatus.projectPath,
+        );
+      } catch (err) {
+        logger.warn(
+          `Failed to remove previous persisted guardian config for '${agent_name}':`,
+          err,
+        );
+      }
+
+      // Remove in-memory alerts from the previous guardian scope to avoid
+      // carrying stale findings into the new project path.
+      const removedAlerts = removeAlertsForGuardianScope(
+        existingStatus.projectPath,
+        agent_name,
+      );
+      if (removedAlerts > 0) {
+        logger.info(
+          `Removed ${removedAlerts} stale alert(s) for replaced guardian '${agent_name}'`,
+        );
+        scheduleAlertPersist();
+      }
     }
 
     try {
@@ -297,7 +522,9 @@ Each Guardian watches its own path and language.`,
             type: "text",
             text: JSON.stringify({
               success: true,
-              message: `Started ${agent_name} at ${absolutePath} (${language}). Initialization running in background.`,
+              message: replacedPreviousProjectPath
+                ? `Restarted ${agent_name} at ${absolutePath} (${language}). Previous path (${replacedPreviousProjectPath}) was replaced. Initialization running in background.`
+                : `Started ${agent_name} at ${absolutePath} (${language}). Initialization running in background.`,
               alertsFile: alertsFilePath,
               status: {
                   ...guardian.getStatus(),
@@ -384,6 +611,14 @@ export const stopGuardianTool: ToolDefinition = {
         logger.warn("Failed to remove persisted guardian config:", err);
       }
 
+      const removedAlerts = removeAlertsForGuardianScope(
+        guardian.getStatus().projectPath,
+        agent_name,
+      );
+      if (removedAlerts > 0) {
+        scheduleAlertPersist();
+      }
+
       return {
         content: [
           {
@@ -462,8 +697,10 @@ export const getGuardianAlertsTool: ToolDefinition = {
     // If memory is empty (e.g., very early after restart), hydrate from persisted alerts.
     if (alerts.length === 0) {
       const persistedAlerts = await guardianPersistence.loadAlerts();
-      for (const [file, alert] of persistedAlerts.entries()) {
-        fileAlerts.set(file, alert as ValidationAlert);
+      for (const [persistedKey, persistedAlert] of persistedAlerts.entries()) {
+        const alert = persistedAlert as ValidationAlert;
+        const storageKey = getHydratedAlertStorageKey(persistedKey, alert);
+        fileAlerts.set(storageKey, alert);
       }
       alerts = collectAlertsWithIssues(fileAlerts);
     }
@@ -823,8 +1060,10 @@ export async function restoreGuardians(): Promise<number> {
 
     // Load persisted alerts first so they're available immediately
     const persistedAlerts = await guardianPersistence.loadAlerts();
-    for (const [file, alert] of persistedAlerts) {
-      fileAlerts.set(file, alert);
+    for (const [persistedKey, persistedAlert] of persistedAlerts) {
+      const alert = persistedAlert as ValidationAlert;
+      const storageKey = getHydratedAlertStorageKey(persistedKey, alert);
+      fileAlerts.set(storageKey, alert);
     }
     if (persistedAlerts.size > 0) {
       logger.info(`Restored ${persistedAlerts.size} persisted alerts`);

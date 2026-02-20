@@ -257,6 +257,14 @@ describe("LLM-Readable Report Files", () => {
       expect(parsed.summary.totalIssues).toBe(2);
       expect(parsed.summary.bySeverity.critical).toBe(1);
       expect(parsed.summary.bySeverity.high).toBe(1);
+      expect(parsed.scanStatus).toBeDefined();
+      expect(parsed.scanStatus.phase).toBe("watch_only");
+      expect(parsed.scanStatus.initialCoverage).toBe("none");
+      expect(parsed.scanStatus.initialSignals).toEqual({
+        apiContract: false,
+        projectDeadCode: false,
+        perFile: false,
+      });
       expect(parsed.alerts["src/app.ts"]).toBeDefined();
       expect(parsed.alerts["src/app.ts"].issues).toHaveLength(2);
 
@@ -328,6 +336,40 @@ describe("LLM-Readable Report Files", () => {
       expect(parsed.alerts["src/api.ts"]).toBeDefined();
     });
 
+    it("should mark scanStatus as partial when only some initial scan alert categories exist", async () => {
+      const alerts = new Map<string, any>();
+      alerts.set("API_CONTRACT_SCAN:RootGuardian", {
+        file: "API_CONTRACT_SCAN:RootGuardian",
+        issues: [{ type: "apiEndpointNotFound", severity: "critical", message: "missing endpoint" }],
+        timestamp: Date.now(),
+        llmMessage: "api scan",
+        isInitialScan: true,
+      });
+      alerts.set("INITIAL_SCAN", {
+        file: "INITIAL_SCAN",
+        issues: [{ type: "deadCode", severity: "medium", message: "unused export" }],
+        timestamp: Date.now(),
+        llmMessage: "dead code scan",
+        isInitialScan: true,
+      });
+
+      await guardianPersistence.saveAlerts(alerts, [tempDir]);
+
+      const content = await fs.readFile(
+        path.join(tempDir, LLM_ALERTS_FILENAME),
+        "utf-8",
+      );
+      const parsed = JSON.parse(content);
+
+      expect(parsed.scanStatus.phase).toBe("initial_partial");
+      expect(parsed.scanStatus.initialCoverage).toBe("partial");
+      expect(parsed.scanStatus.initialSignals).toEqual({
+        apiContract: true,
+        projectDeadCode: true,
+        perFile: false,
+      });
+    });
+
     it("should scope guardian-specific API contract scans to the owning project root", async () => {
       const otherProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "llm-alert-scope-test-"));
 
@@ -391,6 +433,133 @@ describe("LLM-Readable Report Files", () => {
       } finally {
         await guardianPersistence.removeGuardianFull("FrontendGuard", tempDir);
         await guardianPersistence.removeGuardianFull("BackendGuard", otherProjectDir);
+        await fs.rm(otherProjectDir, { recursive: true, force: true });
+      }
+    });
+
+    it("should isolate same relative file alerts across project roots using alert metadata", async () => {
+      const otherProjectDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "llm-alert-file-scope-"),
+      );
+
+      try {
+        const alerts = new Map<string, any>();
+        const relFile = "frontend/src/components/RecipeDiscovery.tsx";
+
+        alerts.set(`${path.resolve(tempDir)}::${relFile}`, {
+          file: relFile,
+          issues: [
+            {
+              type: "unusedFunction",
+              severity: "medium",
+              message: "temp-project-only issue",
+            },
+          ],
+          timestamp: Date.now(),
+          llmMessage: "temp project alert",
+          projectPath: path.resolve(tempDir),
+          agentName: "TempScopeGuard",
+        });
+
+        alerts.set(`${path.resolve(otherProjectDir)}::${relFile}`, {
+          file: relFile,
+          issues: [
+            {
+              type: "unusedFunction",
+              severity: "medium",
+              message: "other-project-only issue",
+            },
+          ],
+          timestamp: Date.now(),
+          llmMessage: "other project alert",
+          projectPath: path.resolve(otherProjectDir),
+          agentName: "OtherScopeGuard",
+        });
+
+        await guardianPersistence.saveAlerts(alerts, [tempDir, otherProjectDir]);
+
+        const tempParsed = JSON.parse(
+          await fs.readFile(path.join(tempDir, LLM_ALERTS_FILENAME), "utf-8"),
+        );
+        const otherParsed = JSON.parse(
+          await fs.readFile(
+            path.join(otherProjectDir, LLM_ALERTS_FILENAME),
+            "utf-8",
+          ),
+        );
+
+        expect(tempParsed.alerts[relFile]).toBeDefined();
+        expect(tempParsed.alerts[relFile].issues).toHaveLength(1);
+        expect(tempParsed.alerts[relFile].issues[0].message).toContain(
+          "temp-project-only issue",
+        );
+
+        expect(otherParsed.alerts[relFile]).toBeDefined();
+        expect(otherParsed.alerts[relFile].issues).toHaveLength(1);
+        expect(otherParsed.alerts[relFile].issues[0].message).toContain(
+          "other-project-only issue",
+        );
+      } finally {
+        await fs.rm(otherProjectDir, { recursive: true, force: true });
+      }
+    });
+
+    it("should isolate same relative file alerts across project roots using legacy composite keys", async () => {
+      const otherProjectDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "llm-alert-legacy-scope-"),
+      );
+
+      try {
+        const alerts = new Map<string, any>();
+        const relFile = "frontend/src/components/ShoppingList.tsx";
+
+        // No projectPath metadata on purpose: validates fallback behavior for
+        // legacy persisted in-memory key format.
+        alerts.set(`${path.resolve(tempDir)}::${relFile}`, {
+          file: relFile,
+          issues: [
+            {
+              type: "unusedFunction",
+              severity: "medium",
+              message: "legacy-temp issue",
+            },
+          ],
+          timestamp: Date.now(),
+          llmMessage: "legacy temp",
+        });
+
+        alerts.set(`${path.resolve(otherProjectDir)}::${relFile}`, {
+          file: relFile,
+          issues: [
+            {
+              type: "unusedFunction",
+              severity: "medium",
+              message: "legacy-other issue",
+            },
+          ],
+          timestamp: Date.now(),
+          llmMessage: "legacy other",
+        });
+
+        await guardianPersistence.saveAlerts(alerts, [tempDir, otherProjectDir]);
+
+        const tempParsed = JSON.parse(
+          await fs.readFile(path.join(tempDir, LLM_ALERTS_FILENAME), "utf-8"),
+        );
+        const otherParsed = JSON.parse(
+          await fs.readFile(
+            path.join(otherProjectDir, LLM_ALERTS_FILENAME),
+            "utf-8",
+          ),
+        );
+
+        expect(tempParsed.alerts[relFile].issues[0].message).toContain(
+          "legacy-temp issue",
+        );
+        expect(otherParsed.alerts[relFile].issues[0].message).toContain(
+          "legacy-other issue",
+        );
+      } finally {
         await fs.rm(otherProjectDir, { recursive: true, force: true });
       }
     });
@@ -459,6 +628,42 @@ describe("LLM-Readable Report Files", () => {
       expect(data.success).toBe(true);
       // Should NOT include full alerts array when using summaryOnly (no alerts case)
       expect(data.hasAlerts).toBe(false);
+    });
+
+    it("start_guardian with same agent_name but different path should replace the old guardian", async () => {
+      const otherDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "llm-report-switch-path-"),
+      );
+
+      try {
+        await startGuardianTool.handler({
+          projectPath: tempDir,
+          language: "typescript",
+          agent_name: "SwitchPathTest",
+          mode: "auto",
+        });
+
+        const result = await startGuardianTool.handler({
+          projectPath: otherDir,
+          language: "typescript",
+          agent_name: "SwitchPathTest",
+          mode: "auto",
+        });
+
+        const data = JSON.parse(result.content[0].text);
+        expect(data.success).toBe(true);
+        expect(data.alreadyRunning).not.toBe(true);
+        expect(data.message).toContain("Restarted SwitchPathTest");
+        expect(data.status.projectPath).toBe(path.resolve(otherDir));
+
+        const persistedConfigs = await guardianPersistence.loadAllGuardians();
+        const switched = persistedConfigs.find(
+          (c) => c.agentName === "SwitchPathTest",
+        );
+        expect(switched?.projectPath).toBe(path.resolve(otherDir));
+      } finally {
+        await fs.rm(otherDir, { recursive: true, force: true });
+      }
     });
   });
 

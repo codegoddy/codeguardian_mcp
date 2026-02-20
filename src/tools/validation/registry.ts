@@ -7,6 +7,8 @@
 
 import { logger } from "../../utils/logger.js";
 
+const REGISTRY_TIMEOUT_MS = 700;
+
 // Cache registry results to avoid redundant network requests
 const registryCache = new Map<string, boolean>();
 
@@ -88,7 +90,7 @@ async function checkNPM(pkgName: string): Promise<boolean> {
   const url = `https://registry.npmjs.org/${encodeURIComponent(pkgName)}`;
   
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 2000); // 2s timeout
+  const timeoutId = setTimeout(() => controller.abort(), REGISTRY_TIMEOUT_MS);
   
   try {
     const response = await fetch(url, {
@@ -149,7 +151,7 @@ async function checkPyPI(pkgName: string): Promise<boolean> {
     const url = `https://pypi.org/pypi/${name}/json`;
     
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2000);
+    const timeoutId = setTimeout(() => controller.abort(), REGISTRY_TIMEOUT_MS);
 
     try {
       const response = await fetch(url, {
@@ -170,7 +172,7 @@ async function checkGoProxy(pkgName: string): Promise<boolean> {
   const url = `https://proxy.golang.org/${pkgName}/@v/list`;
   
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 2000); // 2s timeout
+  const timeoutId = setTimeout(() => controller.abort(), REGISTRY_TIMEOUT_MS);
 
   try {
     const response = await fetch(url, {

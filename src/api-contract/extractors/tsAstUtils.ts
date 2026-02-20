@@ -116,10 +116,15 @@ export function extractStringValue(
   if (node?.type === "template_string") {
     const parts: string[] = [];
     const inferredQueryParams = new Set<string>();
+    let hasStaticPathFragment = false;
 
     for (const child of node.children || []) {
       if (child?.type === "string_fragment") {
-        parts.push(getNodeText(child, content));
+        const fragment = getNodeText(child, content);
+        if (fragment.includes("/")) {
+          hasStaticPathFragment = true;
+        }
+        parts.push(fragment);
         continue;
       }
 
@@ -152,7 +157,23 @@ export function extractStringValue(
 
     if (parts.length === 0) return null;
 
-    const fullUrl = stripUrlOrigin(parts.join(""));
+    // Dynamic wrappers like `${BASE_URL}${endpoint}` do not provide a stable
+    // path segment for contract matching. Skip extraction rather than emitting
+    // placeholder endpoints that create false positives.
+    if (!hasStaticPathFragment) {
+      return null;
+    }
+
+    let fullUrl = stripUrlOrigin(parts.join(""));
+
+    // If the template starts with dynamic placeholders (e.g., `${BASE_URL}/api/...`),
+    // trim everything before the first concrete slash and keep the stable path.
+    if (fullUrl.startsWith("{")) {
+      const firstSlash = fullUrl.indexOf("/");
+      if (firstSlash === -1) return null;
+      fullUrl = fullUrl.slice(firstSlash);
+    }
+
     const queryParams = extractQueryParamsFromUrl(fullUrl);
     for (const name of inferredQueryParams) {
       if (!queryParams.some((p) => p.name === name)) {

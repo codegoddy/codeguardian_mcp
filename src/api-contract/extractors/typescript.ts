@@ -27,7 +27,14 @@ import type {
   BackendFramework,
 } from "../types.js";
 
-type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" | "HEAD";
+type HttpMethod =
+  | "GET"
+  | "POST"
+  | "PUT"
+  | "PATCH"
+  | "DELETE"
+  | "OPTIONS"
+  | "HEAD";
 
 // ============================================================================
 // Service Extraction
@@ -69,7 +76,17 @@ export async function extractRoutesFromTypeScript(
     for (const file of files) {
       try {
         const content = await fs.readFile(file, "utf-8");
-        const fileRoutes = extractRoutesFromFileRegex(content, file);
+        let fileRoutes: RouteDefinition[];
+        try {
+          fileRoutes = extractRoutesFromFileAST(content, file);
+          // Trust AST result unconditionally — even an empty array means no routes.
+        } catch {
+          // AST parser threw (e.g. severely malformed file) — fall back to regex.
+          logger.debug(
+            `AST route extraction failed for ${file}, falling back to regex`,
+          );
+          fileRoutes = extractRoutesFromFileRegex(content, file);
+        }
         routes.push(...fileRoutes);
       } catch (err) {
         logger.debug(`Failed to extract routes from ${file}`);
@@ -82,20 +99,147 @@ export async function extractRoutesFromTypeScript(
 }
 
 /**
- * Extract Express/NestJS routes using regex
+ * Strip single-line and block comments from TypeScript/JavaScript source
+ * content, preserving newlines so that line numbers remain accurate.
+ *
+ * This prevents route-like patterns inside comments from being picked up by
+ * the regex scanner — the same guard applied to Python docstrings.
  */
-function extractRoutesFromFileRegex(content: string, filePath: string): RouteDefinition[] {
+function stripTSComments(content: string): string {
+  return (
+    content
+      // Single-line comments: replace everything after // up to (but not including)
+      // the newline with spaces so column positions are preserved.
+      .replace(/\/\/[^\n]*/g, (m) => " ".repeat(m.length))
+      // Block comments: replace every non-newline character with a space so that
+      // multi-line blocks don't collapse line numbers.
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+  );
+}
+
+/**
+ * Extract Express/NestJS routes from a single file using the tree-sitter AST.
+ *
+ * Handles:
+ *   router.get('/path', handler)
+ *   app.post('/path', async (req, res) => { ... })
+ *   Router().put('/path', handler)
+ *
+ * Returns an empty array when the file has no matching route definitions —
+ * this is intentional and must NOT be treated as a parse failure by the caller.
+ *
+ * Throws only when tree-sitter itself cannot parse the file, allowing the
+ * caller to fall back to the regex path.
+ */
+export function extractRoutesFromFileAST(
+  content: string,
+  filePath: string,
+): RouteDefinition[] {
+  const parser = getParser("typescript");
+  const tree = parser.parse(content);
+  if (!tree) throw new Error("tree-sitter returned null tree");
+
   const routes: RouteDefinition[] = [];
-  
+
+  const HTTP_METHODS = new Set(["get", "post", "put", "patch", "delete"]);
+
+  function visit(node: any): void {
+    if (node.type === "call_expression") {
+      const fnNode = node.childForFieldName("function");
+      const argsNode = node.childForFieldName("arguments");
+
+      if (fnNode?.type === "member_expression" && argsNode) {
+        const objectNode = fnNode.childForFieldName("object");
+        const propertyNode = fnNode.childForFieldName("property");
+
+        if (objectNode && propertyNode) {
+          const objectName = getNodeText(objectNode, content);
+          const methodName = getNodeText(propertyNode, content).toLowerCase();
+
+          // Only handle router.* / app.* calls with a known HTTP verb
+          const isRouterLike =
+            objectName === "router" ||
+            objectName === "app" ||
+            objectName.toLowerCase().endsWith("router");
+
+          if (isRouterLike && HTTP_METHODS.has(methodName)) {
+            const httpMethod = mapToHttpMethod(methodName);
+            if (!httpMethod) return;
+
+            const extracted = extractEndpointFromArgumentsTS(argsNode, content);
+            if (!extracted) return;
+
+            // Try to get the handler name from the second/last argument
+            const argChildren = argsNode.children.filter(
+              (c: any) => c.type !== "," && c.type !== "(" && c.type !== ")",
+            );
+            // argChildren[0] is the path string; argChildren[1..] are middleware/handler
+            const lastArg = argChildren[argChildren.length - 1];
+            let handler = "";
+            if (lastArg?.type === "identifier") {
+              handler = getNodeText(lastArg, content);
+            } else if (
+              lastArg?.type === "arrow_function" ||
+              lastArg?.type === "function" ||
+              lastArg?.type === "function_expression"
+            ) {
+              // Inline handler — use the enclosing named function if available
+              handler = findEnclosingFunctionName(node, content) ?? "(inline)";
+            }
+
+            routes.push({
+              method: httpMethod,
+              path: extracted.endpoint,
+              handler,
+              file: filePath,
+              line: node.startPosition.row + 1,
+            });
+          }
+        }
+      }
+    }
+
+    for (const child of node.children ?? []) {
+      visit(child);
+    }
+  }
+
+  visit(tree.rootNode);
+  return routes;
+}
+
+/**
+ * Extract Express/NestJS routes using regex.
+ *
+ * Strips comments from the content first so that lines like:
+ *   // router.get('/old-route', handler)
+ * are not mistaken for live route definitions.
+ */
+function extractRoutesFromFileRegex(
+  content: string,
+  filePath: string,
+): RouteDefinition[] {
+  const routes: RouteDefinition[] = [];
+
+  // Strip comments before scanning so commented-out routes are ignored.
+  const strippedContent = stripTSComments(content);
+
   // Match: router.get('/path', ...) or app.get('/path', ...)
-  const routeRegex = /(?:router|app)\.(get|post|put|patch|delete)\s*\(\s*['"`]([^'"`]+)['"`]/g;
-  
+  const routeRegex =
+    /(?:router|app)\.(get|post|put|patch|delete)\s*\(\s*['"`]([^'"`]+)['"`]/g;
+
   let match;
-  while ((match = routeRegex.exec(content)) !== null) {
-    const method = match[1].toUpperCase() as "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  while ((match = routeRegex.exec(strippedContent)) !== null) {
+    const method = match[1].toUpperCase() as
+      | "GET"
+      | "POST"
+      | "PUT"
+      | "PATCH"
+      | "DELETE";
     const path = match[2];
-    const line = content.substring(0, match.index).split('\n').length;
-    
+    // Derive line number from the original content so the reported line is correct.
+    const line = content.substring(0, match.index).split("\n").length;
+
     routes.push({
       method,
       path,
@@ -104,7 +248,7 @@ function extractRoutesFromFileRegex(content: string, filePath: string): RouteDef
       line,
     });
   }
-  
+
   return routes;
 }
 
@@ -207,9 +351,9 @@ function traverseNode(
  * Common patterns for direct API helper function names
  */
 const API_HELPER_PATTERNS = [
-  /^fetch/i,          // fetchApi, fetchData, fetchJson
-  /^api(?:Call|Request|Fetch)?$/i,   // api, apiCall, apiRequest, apiFetch
-  /^(?:make|do|send)Request$/i,      // makeRequest, doRequest, sendRequest
+  /^fetch/i, // fetchApi, fetchData, fetchJson
+  /^api(?:Call|Request|Fetch)?$/i, // api, apiCall, apiRequest, apiFetch
+  /^(?:make|do|send)Request$/i, // makeRequest, doRequest, sendRequest
   /^request$/i,
   /^http(?:Client|Request)?$/i,
 ];
@@ -270,12 +414,15 @@ function extractServiceFromCall(
     );
 
     return {
-      name: enclosingFunction || `${methodName}_${endpoint.replace(/[^a-zA-Z0-9]/g, "_")}`,
+      name:
+        enclosingFunction ||
+        `${methodName}_${endpoint.replace(/[^a-zA-Z0-9]/g, "_")}`,
       method: httpMethod,
       endpoint,
       requestType,
       responseType,
-      queryParams: extracted.queryParams.length > 0 ? extracted.queryParams : undefined,
+      queryParams:
+        extracted.queryParams.length > 0 ? extracted.queryParams : undefined,
       file: filePath,
       line: node.startPosition.row + 1,
     };
@@ -287,7 +434,7 @@ function extractServiceFromCall(
     const funcName = getNodeText(functionNode, content);
 
     // Check if the function name matches common API helper patterns
-    const isApiHelper = API_HELPER_PATTERNS.some(p => p.test(funcName));
+    const isApiHelper = API_HELPER_PATTERNS.some((p) => p.test(funcName));
     if (!isApiHelper) return null;
 
     // Extract arguments
@@ -299,7 +446,8 @@ function extractServiceFromCall(
     const endpoint = extracted.endpoint;
 
     // Try to detect HTTP method from the options argument (e.g., { method: 'POST' })
-    const httpMethod = extractHttpMethodFromArgumentsTS(argumentsNode, content) || "GET";
+    const httpMethod =
+      extractHttpMethodFromArgumentsTS(argumentsNode, content) || "GET";
 
     // Try to find the enclosing function/method name
     const enclosingFunction = findEnclosingFunctionName(node, content);
@@ -311,12 +459,15 @@ function extractServiceFromCall(
     );
 
     return {
-      name: enclosingFunction || `${funcName}_${endpoint.replace(/[^a-zA-Z0-9]/g, "_")}`,
+      name:
+        enclosingFunction ||
+        `${funcName}_${endpoint.replace(/[^a-zA-Z0-9]/g, "_")}`,
       method: httpMethod,
       endpoint,
       requestType,
       responseType,
-      queryParams: extracted.queryParams.length > 0 ? extracted.queryParams : undefined,
+      queryParams:
+        extracted.queryParams.length > 0 ? extracted.queryParams : undefined,
       file: filePath,
       line: node.startPosition.row + 1,
     };
@@ -345,7 +496,9 @@ function extractTypesFromEnclosingFunction(
       // Response type
       const returnTypeNode = current.childForFieldName?.("return_type");
       if (returnTypeNode) {
-        const returnTypeText = normalizeTypeText(getNodeText(returnTypeNode, content));
+        const returnTypeText = normalizeTypeText(
+          getNodeText(returnTypeNode, content),
+        );
         result.responseType = unwrapCommonGenerics(returnTypeText);
       }
 
@@ -370,7 +523,9 @@ function extractTypesFromEnclosingFunction(
     if (current.type === "method_definition") {
       const returnTypeNode = current.childForFieldName?.("return_type");
       if (returnTypeNode) {
-        const returnTypeText = normalizeTypeText(getNodeText(returnTypeNode, content));
+        const returnTypeText = normalizeTypeText(
+          getNodeText(returnTypeNode, content),
+        );
         result.responseType = unwrapCommonGenerics(returnTypeText);
       }
 
@@ -394,7 +549,9 @@ function extractTypesFromEnclosingFunction(
     if (current.type === "function_declaration") {
       const returnTypeNode = current.childForFieldName?.("return_type");
       if (returnTypeNode) {
-        const returnTypeText = normalizeTypeText(getNodeText(returnTypeNode, content));
+        const returnTypeText = normalizeTypeText(
+          getNodeText(returnTypeNode, content),
+        );
         result.responseType = unwrapCommonGenerics(returnTypeText);
       }
 
@@ -491,7 +648,10 @@ function isPrimitiveType(typeName: string): boolean {
   if (/^[0-9]+(?:\.[0-9]+)?$/.test(raw)) return true;
 
   // Union: only primitive if all parts are primitive
-  const unionParts = raw.split("|").map((p) => p.trim()).filter(Boolean);
+  const unionParts = raw
+    .split("|")
+    .map((p) => p.trim())
+    .filter(Boolean);
   if (unionParts.length > 1) {
     return unionParts.every((p) => isPrimitiveType(p));
   }
@@ -549,13 +709,17 @@ function extractServicesFromFileRegex(
     );
 
     if (apiCallMatch) {
-      const method = apiCallMatch[1].toUpperCase() as ServiceDefinition["method"];
+      const method =
+        apiCallMatch[1].toUpperCase() as ServiceDefinition["method"];
       const endpoint = apiCallMatch[2];
 
       // Try to find function name
       const funcMatch =
         line.match(/(?:export\s+)?(?:async\s+)?(?:function|const)\s+(\w+)/) ||
-        lines.slice(Math.max(0, i - 5), i).join(" ").match(/(\w+)\s*[:=]\s*(?:async\s*)?\(/);
+        lines
+          .slice(Math.max(0, i - 5), i)
+          .join(" ")
+          .match(/(\w+)\s*[:=]\s*(?:async\s*)?\(/);
 
       const funcName = funcMatch ? funcMatch[1] : `api_${method.toLowerCase()}`;
 
@@ -627,7 +791,10 @@ export async function extractTypes(
 /**
  * Extract types/interfaces from a single file using AST
  */
-export function extractTypesFromFile(content: string, filePath: string): TypeDefinition[] {
+export function extractTypesFromFile(
+  content: string,
+  filePath: string,
+): TypeDefinition[] {
   const types: TypeDefinition[] = [];
 
   try {
@@ -735,7 +902,10 @@ function extractFieldsFromBody(bodyNode: any, content: string): TypeField[] {
   const fields: TypeField[] = [];
 
   for (const child of bodyNode.children || []) {
-    if (child.type === "property_signature" || child.type === "field_definition") {
+    if (
+      child.type === "property_signature" ||
+      child.type === "field_definition"
+    ) {
       const nameNode = child.childForFieldName("name");
       const typeNode = child.childForFieldName("type");
 
@@ -764,7 +934,10 @@ function extractFieldsFromBody(bodyNode: any, content: string): TypeField[] {
 /**
  * Fallback regex-based type extraction
  */
-function extractTypesFromFileRegex(content: string, filePath: string): TypeDefinition[] {
+function extractTypesFromFileRegex(
+  content: string,
+  filePath: string,
+): TypeDefinition[] {
   const types: TypeDefinition[] = [];
   const lines = content.split("\n");
 
@@ -847,9 +1020,7 @@ function extractTypesFromFileRegex(content: string, filePath: string): TypeDefin
 /**
  * Extract API configuration from a project
  */
-export async function extractApiConfig(
-  projectPath: string,
-): Promise<{
+export async function extractApiConfig(projectPath: string): Promise<{
   apiBaseUrl: string;
   httpClient: HttpClient;
 }> {
@@ -874,7 +1045,10 @@ export async function extractApiConfig(
         // Detect HTTP client
         if (content.includes("axios")) {
           httpClient = "axios";
-        } else if (content.includes("react-query") || content.includes("useQuery")) {
+        } else if (
+          content.includes("react-query") ||
+          content.includes("useQuery")
+        ) {
           httpClient = "react-query";
         } else if (content.includes("swr")) {
           httpClient = "swr";

@@ -844,6 +844,9 @@ function validateInlineRequestResponseFields(
   const feRequestFields = feFnNode
     ? extractRequestBodyFieldsUsed(feFnNode, feContent)
     : new Set<string>();
+  const feRequestFieldTypes = feFnNode
+    ? extractRequestBodyFieldTypes(feFnNode, feContent, apiContract.frontendTypes)
+    : new Map<string, string>();
   const feRequestTypeFields = feFnNode
     ? inferRequestBodyFieldsFromTypedParams(
         feFnNode,
@@ -970,6 +973,63 @@ function validateInlineRequestResponseFields(
   }
 
   if (backendHandler) {
+    const prismaPayloadAnalysis = detectPrismaWritePayloadIssues(
+      backendHandler.node,
+      backendHandler.content,
+      backendHandler.filePath,
+      apiContract.backendModels,
+      endpoint,
+      mapping?.backend?.line,
+    );
+    issues.push(...prismaPayloadAnalysis.issues);
+
+    if (
+      feRequestFieldTypes.size > 0 &&
+      prismaPayloadAnalysis.modelFieldTypesByField.size > 0
+    ) {
+      const seenTypeIssues = new Set<string>();
+      for (const [fieldName, frontendType] of feRequestFieldTypes) {
+        if (!frontendType || normalizeType(frontendType) === "any") continue;
+
+        const backendTypes = Array.from(
+          prismaPayloadAnalysis.modelFieldTypesByField.get(
+            normalizeName(fieldName),
+          ) || new Set<string>(),
+        ).filter((type: string) => type && normalizeType(type) !== "any");
+        if (backendTypes.length === 0) continue;
+
+        const compatibility = backendTypes.map((backendType) => ({
+          backendType,
+          result: areTypesCompatible(frontendType, backendType),
+        }));
+        if (compatibility.some((entry) => entry.result.compatible)) continue;
+
+        const issueKey = `${normalizeName(fieldName)}:${normalizeType(frontendType)}:${backendTypes
+          .map((t) => normalizeType(t))
+          .sort()
+          .join("|")}`;
+        if (seenTypeIssues.has(issueKey)) continue;
+        seenTypeIssues.add(issueKey);
+
+        const strongest = compatibility[0]?.result;
+        issues.push({
+          type: "apiTypeMismatch",
+          severity:
+            (strongest?.severity as "high" | "medium" | "low") || "high",
+          message:
+            strongest?.reason ||
+            `Request field type mismatch: frontend sends '${fieldName}' as '${frontendType}', but backend persistence expects ${backendTypes.join(" or ")}`,
+          file: frontendFile,
+          line: mapping.frontend.line,
+          endpoint,
+          suggestion:
+            strongest?.suggestion ||
+            `Align '${fieldName}' with backend type (${backendTypes.join(" or ")}) before sending the request`,
+          confidence: 82,
+        });
+      }
+    }
+
     issues.push(
       ...detectBackendPropertyHallucinations(
         backendHandler.node,
@@ -1255,6 +1315,180 @@ function extractPrismaModelReference(
   if (!model || !method) return null;
 
   return { model, method };
+}
+
+function detectPrismaWritePayloadIssues(
+  handlerNode: any,
+  content: string,
+  handlerFilePath: string,
+  backendModels: Array<{ name: string; fields: Array<{ name: string; type?: string }> }>,
+  endpoint: string,
+  fallbackLine?: number,
+): {
+  issues: ApiContractIssue[];
+  modelFieldTypesByField: Map<string, Set<string>>;
+} {
+  const issues: ApiContractIssue[] = [];
+  const modelFieldTypesByField = new Map<string, Set<string>>();
+  if (!handlerNode || backendModels.length === 0) {
+    return { issues, modelFieldTypesByField };
+  }
+
+  const modelsByNormalizedName = new Map<
+    string,
+    { displayName: string; fields: Map<string, { name: string; type: string }> }
+  >();
+  for (const model of backendModels) {
+    const fieldMap = new Map<string, { name: string; type: string }>();
+    for (const field of model.fields || []) {
+      fieldMap.set(normalizeName(field.name), {
+        name: field.name,
+        type: field.type || "any",
+      });
+    }
+    modelsByNormalizedName.set(normalizeName(model.name), {
+      displayName: model.name,
+      fields: fieldMap,
+    });
+  }
+
+  const prismaWriteMethods = new Set([
+    "create",
+    "createmany",
+    "update",
+    "upsert",
+    "updatemany",
+  ]);
+  const seen = new Set<string>();
+
+  const addBackendFieldType = (fieldName: string, fieldType: string) => {
+    const normalizedField = normalizeName(fieldName);
+    const existing = modelFieldTypesByField.get(normalizedField);
+    if (existing) {
+      existing.add(fieldType);
+      return;
+    }
+    modelFieldTypesByField.set(normalizedField, new Set([fieldType]));
+  };
+
+  const analyzeDataObject = (
+    dataObject: any,
+    modelName: string,
+    modelFields: Map<string, { name: string; type: string }>,
+    lineHint: number,
+  ) => {
+    if (!dataObject || dataObject.type !== "object") return;
+
+    for (const child of dataObject.children || []) {
+      if (
+        child.type !== "pair" &&
+        child.type !== "shorthand_property_identifier" &&
+        child.type !== "shorthand_property_identifier_pattern"
+      ) {
+        continue;
+      }
+
+      const keyNode =
+        child.type === "pair" ? child.childForFieldName?.("key") : child;
+      const keyText = extractPropertyKeyText(keyNode, content);
+      if (!keyText) continue;
+
+      const normalizedKey = normalizeName(keyText);
+      const knownField = modelFields.get(normalizedKey);
+      if (knownField) {
+        addBackendFieldType(knownField.name, knownField.type || "any");
+        continue;
+      }
+
+      const issueLine =
+        typeof child?.startPosition?.row === "number"
+          ? child.startPosition.row + 1
+          : lineHint;
+      const issueKey = `${normalizeName(modelName)}:${normalizedKey}:${issueLine}`;
+      if (seen.has(issueKey)) continue;
+      seen.add(issueKey);
+
+      issues.push({
+        type: "apiContractMismatch",
+        severity: "high",
+        message: `Potential Prisma write-field hallucination: '${keyText}' is passed to prisma.${modelName}.<write>({ data: ... }) but field does not exist on model '${modelName}'`,
+        file: handlerFilePath,
+        line: issueLine,
+        endpoint,
+        suggestion: `Remove '${keyText}' from prisma.${modelName} write payload or add the field to the '${modelName}' schema`,
+        confidence: 85,
+      });
+    }
+  };
+
+  const analyzeDataValue = (
+    dataValueNode: any,
+    modelName: string,
+    modelFields: Map<string, { name: string; type: string }>,
+    lineHint: number,
+  ) => {
+    if (!dataValueNode) return;
+
+    if (dataValueNode.type === "object") {
+      analyzeDataObject(dataValueNode, modelName, modelFields, lineHint);
+      return;
+    }
+
+    if (dataValueNode.type === "array") {
+      for (const child of dataValueNode.namedChildren || dataValueNode.children || []) {
+        if (child?.type === "object") {
+          analyzeDataObject(child, modelName, modelFields, lineHint);
+        }
+      }
+    }
+  };
+
+  const visit = (node: any) => {
+    if (!node) return;
+
+    if (node.type === "call_expression") {
+      const functionNode = node.childForFieldName?.("function");
+      const prismaRef = extractPrismaModelReference(functionNode, content);
+      if (prismaRef && prismaWriteMethods.has(prismaRef.method.toLowerCase())) {
+        const modelInfo = modelsByNormalizedName.get(normalizeName(prismaRef.model));
+        if (modelInfo) {
+          const argsNode = node.childForFieldName?.("arguments");
+          if (argsNode) {
+            for (const arg of argsNode.children || []) {
+              if (arg.type !== "object") continue;
+
+              for (const pair of arg.children || []) {
+                if (pair.type !== "pair") continue;
+
+                const keyNode = pair.childForFieldName?.("key");
+                const valueNode = pair.childForFieldName?.("value");
+                if (!keyNode || !valueNode) continue;
+
+                const keyText = extractPropertyKeyText(keyNode, content);
+                if (keyText !== "data") continue;
+
+                const issueLine =
+                  typeof pair?.startPosition?.row === "number"
+                    ? pair.startPosition.row + 1
+                    : fallbackLine || 1;
+                analyzeDataValue(
+                  valueNode,
+                  modelInfo.displayName,
+                  modelInfo.fields,
+                  issueLine,
+                );
+              }
+            }
+          }
+        }
+      }
+    }
+
+    for (const child of node.children || []) visit(child);
+  };
+
+  visit(handlerNode);
+  return { issues, modelFieldTypesByField };
 }
 
 function findFunctionLikeByName(
@@ -1761,10 +1995,229 @@ function extractResponseFieldsUsed(
   return fields;
 }
 
+function extractRequestBodyFieldTypes(
+  functionNode: any,
+  content: string,
+  frontendTypes: Array<{ name: string; fields: Array<{ name: string; type?: string }> }>,
+): Map<string, string> {
+  const fieldTypes = new Map<string, string>();
+  if (!functionNode) return fieldTypes;
+
+  const typedParamFieldTypes = extractTypedParamObjectFieldTypes(
+    functionNode,
+    content,
+    frontendTypes,
+  );
+
+  const mergeTypedObjectFields = (objectName: string) => {
+    const typedFields = typedParamFieldTypes.get(objectName);
+    if (!typedFields) return;
+    for (const [fieldName, fieldType] of typedFields) {
+      if (!fieldType || normalizeType(fieldType) === "any") continue;
+      fieldTypes.set(fieldName, fieldType);
+    }
+  };
+
+  const collectObjectFieldTypes = (objectNode: any) => {
+    if (!objectNode || objectNode.type !== "object") return;
+
+    for (const child of objectNode.children || []) {
+      if (child.type === "pair") {
+        const keyNode = child.childForFieldName?.("key");
+        const valNode = child.childForFieldName?.("value");
+        if (!keyNode || !valNode) continue;
+
+        const keyText = extractPropertyKeyText(keyNode, content);
+        if (!keyText) continue;
+
+        const inferredType = inferNodePrimitiveType(
+          valNode,
+          content,
+          typedParamFieldTypes,
+        );
+        if (inferredType && normalizeType(inferredType) !== "any") {
+          fieldTypes.set(keyText, inferredType);
+        }
+        continue;
+      }
+
+      if (child.type === "spread_element") {
+        const argNode =
+          child.childForFieldName?.("argument") ||
+          (child.namedChildren ? child.namedChildren[0] : null);
+        if (argNode?.type !== "identifier") continue;
+        const spreadName = content.slice(argNode.startIndex, argNode.endIndex);
+        if (spreadName) mergeTypedObjectFields(spreadName);
+      }
+    }
+  };
+
+  const collectBodyNode = (bodyNode: any) => {
+    if (!bodyNode) return;
+
+    if (bodyNode.type === "object") {
+      collectObjectFieldTypes(bodyNode);
+      return;
+    }
+
+    if (bodyNode.type === "identifier") {
+      const bodyVar = content.slice(bodyNode.startIndex, bodyNode.endIndex);
+      if (bodyVar) mergeTypedObjectFields(bodyVar);
+      return;
+    }
+
+    const jsonArg = extractJsonStringifyArgument(bodyNode, content);
+    if (!jsonArg) return;
+    if (jsonArg.type === "object") {
+      collectObjectFieldTypes(jsonArg);
+    } else if (jsonArg.type === "identifier") {
+      const id = content.slice(jsonArg.startIndex, jsonArg.endIndex);
+      if (id) mergeTypedObjectFields(id);
+    }
+  };
+
+  const visit = (node: any) => {
+    if (!node) return;
+
+    if (node.type === "call_expression") {
+      const args = node.childForFieldName?.("arguments");
+      if (args) {
+        for (const arg of args.children || []) {
+          if (arg.type !== "object") continue;
+
+          for (const pair of arg.children || []) {
+            if (pair.type !== "pair") continue;
+            const keyNode = pair.childForFieldName?.("key");
+            const valNode = pair.childForFieldName?.("value");
+            if (!keyNode || !valNode) continue;
+
+            const keyText = extractPropertyKeyText(keyNode, content);
+            if (keyText !== "body") continue;
+            collectBodyNode(valNode);
+          }
+        }
+      }
+    }
+
+    for (const child of node.children || []) visit(child);
+  };
+
+  visit(functionNode);
+  return fieldTypes;
+}
+
+function extractTypedParamObjectFieldTypes(
+  functionNode: any,
+  content: string,
+  frontendTypes: Array<{ name: string; fields: Array<{ name: string; type?: string }> }>,
+): Map<string, Map<string, string>> {
+  const typedParams = new Map<string, Map<string, string>>();
+  const paramsNode = functionNode.childForFieldName?.("parameters");
+  if (!paramsNode) return typedParams;
+
+  for (const param of paramsNode.children || []) {
+    const nameNode =
+      param.childForFieldName?.("pattern") ||
+      param.childForFieldName?.("name") ||
+      (param.namedChildren
+        ? param.namedChildren.find((c: any) => c.type === "identifier")
+        : null);
+    if (!nameNode) continue;
+
+    const typeNode =
+      param.childForFieldName?.("type") ||
+      (param.namedChildren
+        ? param.namedChildren.find((c: any) => c.type === "type_annotation")
+        : null);
+    if (!typeNode) continue;
+
+    const paramName = content.slice(nameNode.startIndex, nameNode.endIndex);
+    const typeText = content.slice(typeNode.startIndex, typeNode.endIndex);
+    const fieldTypes = resolveNamedTypeFieldTypes(typeText, frontendTypes);
+    if (paramName && fieldTypes.size > 0) {
+      typedParams.set(paramName, fieldTypes);
+    }
+  }
+
+  return typedParams;
+}
+
+function inferNodePrimitiveType(
+  node: any,
+  content: string,
+  typedParamFieldTypes: Map<string, Map<string, string>>,
+): string | null {
+  if (!node) return null;
+
+  if (
+    node.type === "string" ||
+    node.type === "string_fragment" ||
+    node.type === "template_string"
+  ) {
+    return "string";
+  }
+  if (node.type === "number") return "number";
+  if (node.type === "true" || node.type === "false") return "boolean";
+
+  if (node.type === "member_expression") {
+    const objectNode = node.childForFieldName?.("object");
+    const propertyNode = node.childForFieldName?.("property");
+    if (objectNode?.type === "identifier" && propertyNode) {
+      const objectName = content.slice(objectNode.startIndex, objectNode.endIndex);
+      const propertyName = content.slice(
+        propertyNode.startIndex,
+        propertyNode.endIndex,
+      );
+      const objectFields = typedParamFieldTypes.get(objectName);
+      if (objectFields) {
+        const byExactName = objectFields.get(propertyName);
+        if (byExactName) return byExactName;
+
+        const normalizedProperty = normalizeName(propertyName);
+        for (const [fieldName, fieldType] of objectFields) {
+          if (normalizeName(fieldName) === normalizedProperty) return fieldType;
+        }
+      }
+    }
+    return null;
+  }
+
+  if (node.type === "call_expression") {
+    const fnNode = node.childForFieldName?.("function");
+    if (fnNode?.type === "identifier") {
+      const fnName = content.slice(fnNode.startIndex, fnNode.endIndex);
+      if (fnName === "String") return "string";
+      if (fnName === "Number" || fnName === "parseInt" || fnName === "parseFloat") {
+        return "number";
+      }
+      if (fnName === "Boolean") return "boolean";
+    }
+
+    if (fnNode?.type === "member_expression") {
+      const propertyNode = fnNode.childForFieldName?.("property");
+      if (propertyNode) {
+        const propertyName = content.slice(
+          propertyNode.startIndex,
+          propertyNode.endIndex,
+        );
+        if (propertyName === "toString") return "string";
+      }
+    }
+  }
+
+  const nodeText = content.slice(node.startIndex, node.endIndex).trim();
+  if (nodeText.startsWith("+")) return "number";
+  if (/^['"`]/.test(nodeText)) return "string";
+  if (/^(true|false)$/.test(nodeText)) return "boolean";
+  if (/^\d+(?:\.\d+)?$/.test(nodeText)) return "number";
+
+  return null;
+}
+
 function inferRequestBodyFieldsFromTypedParams(
   functionNode: any,
   content: string,
-  frontendTypes: Array<{ name: string; fields: Array<{ name: string }> }>,
+  frontendTypes: Array<{ name: string; fields: Array<{ name: string; type?: string }> }>,
 ): Set<string> {
   const inferred = new Set<string>();
   if (!functionNode || frontendTypes.length === 0) return inferred;
@@ -1877,17 +2330,29 @@ function extractRequestBodyVariableNames(
 
 function resolveNamedTypeFieldNames(
   typeText: string,
-  frontendTypes: Array<{ name: string; fields: Array<{ name: string }> }>,
+  frontendTypes: Array<{ name: string; fields: Array<{ name: string; type?: string }> }>,
 ): Set<string> {
-  const cleaned = typeText.replace(/^\s*:\s*/, "").trim();
-  if (!cleaned) return new Set<string>();
+  return new Set(
+    Array.from(resolveNamedTypeFieldTypes(typeText, frontendTypes).keys()),
+  );
+}
 
-  const lookupTypeFields = (rawTypeName: string): Set<string> => {
+function resolveNamedTypeFieldTypes(
+  typeText: string,
+  frontendTypes: Array<{ name: string; fields: Array<{ name: string; type?: string }> }>,
+): Map<string, string> {
+  const cleaned = typeText.replace(/^\s*:\s*/, "").trim();
+  if (!cleaned) return new Map<string, string>();
+
+  const lookupTypeFields = (rawTypeName: string): Map<string, string> => {
     const typeName = rawTypeName.split(".").pop() || rawTypeName;
     const target = frontendTypes.find(
       (typeDef) => normalizeName(typeDef.name) === normalizeName(typeName),
     );
-    return new Set((target?.fields || []).map((field) => field.name));
+
+    return new Map(
+      (target?.fields || []).map((field) => [field.name, field.type || "any"]),
+    );
   };
 
   const unwrapArray = (text: string): string =>
@@ -1898,12 +2363,12 @@ function resolveNamedTypeFieldNames(
     /^(?:Partial|Required|Readonly|NonNullable|Promise|Array)<\s*([^>]+)\s*>$/,
   );
   if (passthroughWrapper) {
-    return resolveNamedTypeFieldNames(passthroughWrapper[1], frontendTypes);
+    return resolveNamedTypeFieldTypes(passthroughWrapper[1], frontendTypes);
   }
 
   const omitMatch = baseText.match(/^Omit<\s*([^,>]+)\s*,\s*(.+)\s*>$/);
   if (omitMatch) {
-    const fields = resolveNamedTypeFieldNames(omitMatch[1], frontendTypes);
+    const fieldTypes = resolveNamedTypeFieldTypes(omitMatch[1], frontendTypes);
     const omitted = new Set<string>();
     const keyRegex = /['"`]([A-Za-z_][A-Za-z0-9_]*)['"`]/g;
     let match: RegExpExecArray | null;
@@ -1912,16 +2377,17 @@ function resolveNamedTypeFieldNames(
       omitted.add(normalizeName(match[1]));
     }
 
-    return new Set(
-      Array.from(fields).filter(
-        (field) => !omitted.has(field) && !omitted.has(normalizeName(field)),
+    return new Map(
+      Array.from(fieldTypes.entries()).filter(
+        ([field]) =>
+          !omitted.has(field) && !omitted.has(normalizeName(field)),
       ),
     );
   }
 
   const pickMatch = baseText.match(/^Pick<\s*([^,>]+)\s*,\s*(.+)\s*>$/);
   if (pickMatch) {
-    const fields = resolveNamedTypeFieldNames(pickMatch[1], frontendTypes);
+    const fieldTypes = resolveNamedTypeFieldTypes(pickMatch[1], frontendTypes);
     const picked = new Set<string>();
     const keyRegex = /['"`]([A-Za-z_][A-Za-z0-9_]*)['"`]/g;
     let match: RegExpExecArray | null;
@@ -1930,14 +2396,31 @@ function resolveNamedTypeFieldNames(
       picked.add(normalizeName(match[1]));
     }
 
-    return new Set(
-      Array.from(fields).filter(
-        (field) => picked.has(field) || picked.has(normalizeName(field)),
+    return new Map(
+      Array.from(fieldTypes.entries()).filter(
+        ([field]) => picked.has(field) || picked.has(normalizeName(field)),
       ),
     );
   }
 
   return lookupTypeFields(baseText);
+}
+
+function extractPropertyKeyText(keyNode: any, content: string): string {
+  if (!keyNode) return "";
+
+  if (
+    keyNode.type === "property_identifier" ||
+    keyNode.type === "shorthand_property_identifier" ||
+    keyNode.type === "identifier"
+  ) {
+    return content.slice(keyNode.startIndex, keyNode.endIndex);
+  }
+
+  return content
+    .slice(keyNode.startIndex, keyNode.endIndex)
+    .replace(/^['"`]/, "")
+    .replace(/['"`]$/, "");
 }
 
 function requestBodyHasSpreadLiteral(

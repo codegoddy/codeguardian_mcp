@@ -55,8 +55,8 @@ export class FileWatcher extends EventEmitter {
       persistent: true,
       ignoreInitial: true,
       awaitWriteFinish: {
-        stabilityThreshold: 300,
-        pollInterval: 100,
+        stabilityThreshold: 35,
+        pollInterval: 20,
       },
     });
 
@@ -72,7 +72,10 @@ export class FileWatcher extends EventEmitter {
       });
   }
 
-  private handleChange(type: "add" | "change" | "unlink", filePath: string): void {
+  private handleChange(
+    type: "add" | "change" | "unlink",
+    filePath: string,
+  ): void {
     // Only process code files
     const isCodeFile = CODE_EXTENSIONS.some((ext) => filePath.endsWith(ext));
     if (!isCodeFile) return;

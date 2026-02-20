@@ -24,12 +24,19 @@ import {
   buildSymbolTable,
 } from "../tools/validation/validation.js";
 import { getRelevantSymbolsForValidation } from "../analyzers/relevanceScorer.js";
-import { detectDeadCode, detectUnusedLocals } from "../tools/validation/deadCode.js";
+import {
+  detectDeadCode,
+  detectUnusedLocals,
+  detectUnusedClassMethods,
+} from "../tools/validation/deadCode.js";
 import {
   calculateScore,
   generateRecommendation,
 } from "../tools/validation/scoring.js";
-import { enrichIssuesWithAntiPatterns, generateAntiPatternContext } from "../analyzers/antiPatterns.js";
+import {
+  enrichIssuesWithAntiPatterns,
+  generateAntiPatternContext,
+} from "../analyzers/antiPatterns.js";
 import {
   verifyFindingsAutomatically,
   getConfirmedFindings,
@@ -184,7 +191,10 @@ async function handleValidationJob(
   });
 
   // Load manifests — for "all" (full-stack), load both TS and Python manifests
-  const manifest = await loadManifestDependencies(projectPath, language === "all" ? "typescript" : language);
+  const manifest = await loadManifestDependencies(
+    projectPath,
+    language === "all" ? "typescript" : language,
+  );
 
   let pythonExports = new Map<string, Set<string>>();
   if (language === "python" || language === "all") {
@@ -197,11 +207,11 @@ async function handleValidationJob(
 
   // Phase 2.5: Build symbol table with relevance filtering
   const relevantSymbols =
-    recentlyEditedFiles.length > 0 ?
-      getRelevantSymbolsForValidation(projectContext, {
-        recentFiles: recentlyEditedFiles,
-      })
-    : undefined;
+    recentlyEditedFiles.length > 0
+      ? getRelevantSymbolsForValidation(projectContext, {
+          recentFiles: recentlyEditedFiles,
+        })
+      : undefined;
 
   const symbolTable = buildSymbolTable(projectContext, relevantSymbols);
 
@@ -289,7 +299,10 @@ async function handleValidationJob(
     }, DEAD_CODE_TIMEOUT);
   });
 
-  const projectWideDeadCode = await Promise.race([deadCodePromise, timeoutPromise]);
+  const projectWideDeadCode = await Promise.race([
+    deadCodePromise,
+    timeoutPromise,
+  ]);
   // Merge project-wide dead code with per-file dead code (unused locals)
   const deadCodeIssues = [...projectWideDeadCode, ...perFileDeadCode];
   const deadCodeTime = Date.now() - deadCodeStartTime;
@@ -310,7 +323,7 @@ async function handleValidationJob(
 
   const verificationStartTime = Date.now();
   const VERIFICATION_TIMEOUT = 120000; // 120 seconds max (2x expected for large projects)
-  
+
   const verificationPromise = verifyFindingsAutomatically(
     allIssues,
     deadCodeIssues,
@@ -319,10 +332,15 @@ async function handleValidationJob(
     language,
     (progress: VerificationProgress) => {
       // Report progress every few files
-      if (progress.processedFiles % 5 === 0 || progress.processedFiles === progress.totalFiles) {
+      if (
+        progress.processedFiles % 5 === 0 ||
+        progress.processedFiles === progress.totalFiles
+      ) {
         updateProgress({
           phase: "verification",
-          percent: 90 + Math.floor((progress.processedFiles / progress.totalFiles) * 4),
+          percent:
+            90 +
+            Math.floor((progress.processedFiles / progress.totalFiles) * 4),
           message: `Verifying findings... ${progress.processedFiles}/${progress.totalFiles} files (${progress.processedFindings}/${progress.totalFindings} findings)`,
           details: {
             filesProcessed: progress.processedFiles,
@@ -332,48 +350,56 @@ async function handleValidationJob(
           },
         });
       }
-    }
+    },
   );
-  
-  const verificationTimeoutPromise = new Promise<VerificationResult>((resolve) => {
-    setTimeout(() => {
-      logger.warn(`Verification timed out after ${VERIFICATION_TIMEOUT}ms`);
-      // Return empty result - we'll use original findings
-      resolve({
-        confirmed: [],
-        falsePositives: [],
-        uncertain: [],
-        stats: {
-          totalAnalyzed: allIssues.length + deadCodeIssues.length,
-          confirmedCount: 0,
-          falsePositiveCount: 0,
-          uncertainCount: allIssues.length + deadCodeIssues.length,
-        },
-      });
-    }, VERIFICATION_TIMEOUT);
-  });
-  
-  const verificationResult = await Promise.race([verificationPromise, verificationTimeoutPromise]);
+
+  const verificationTimeoutPromise = new Promise<VerificationResult>(
+    (resolve) => {
+      setTimeout(() => {
+        logger.warn(`Verification timed out after ${VERIFICATION_TIMEOUT}ms`);
+        // Return empty result - we'll use original findings
+        resolve({
+          confirmed: [],
+          falsePositives: [],
+          uncertain: [],
+          stats: {
+            totalAnalyzed: allIssues.length + deadCodeIssues.length,
+            confirmedCount: 0,
+            falsePositiveCount: 0,
+            uncertainCount: allIssues.length + deadCodeIssues.length,
+          },
+        });
+      }, VERIFICATION_TIMEOUT);
+    },
+  );
+
+  const verificationResult = await Promise.race([
+    verificationPromise,
+    verificationTimeoutPromise,
+  ]);
   const verificationTime = Date.now() - verificationStartTime;
 
   // Check if verification timed out (no findings processed)
-  const verificationTimedOut = verificationResult.stats.totalAnalyzed > 0 && 
-    verificationResult.stats.confirmedCount === 0 && 
+  const verificationTimedOut =
+    verificationResult.stats.totalAnalyzed > 0 &&
+    verificationResult.stats.confirmedCount === 0 &&
     verificationResult.stats.falsePositiveCount === 0 &&
     allIssues.length + deadCodeIssues.length > 0;
 
   // Get filtered findings (only confirmed, no false positives)
   // If verification timed out, fall back to using all findings
-  const { hallucinations: confirmedHallucinations, deadCode: confirmedDeadCode } = 
-    verificationTimedOut 
-      ? { hallucinations: allIssues, deadCode: deadCodeIssues }
-      : getConfirmedFindings(verificationResult);
+  const {
+    hallucinations: confirmedHallucinations,
+    deadCode: confirmedDeadCode,
+  } = verificationTimedOut
+    ? { hallucinations: allIssues, deadCode: deadCodeIssues }
+    : getConfirmedFindings(verificationResult);
 
   updateProgress({
     phase: "verification",
     percent: 95,
     message: `Verification complete: ${verificationResult.stats.confirmedCount} confirmed, ${verificationResult.stats.falsePositiveCount} filtered`,
-    details: { 
+    details: {
       confirmed: verificationResult.stats.confirmedCount,
       falsePositives: verificationResult.stats.falsePositiveCount,
       uncertain: verificationResult.stats.uncertainCount,
@@ -395,7 +421,10 @@ async function handleValidationJob(
   });
 
   // Enrich only CONFIRMED issues with anti-pattern context
-  const enrichedConfirmedIssues = await enrichIssuesWithAntiPatterns(confirmedHallucinations, language);
+  const enrichedConfirmedIssues = await enrichIssuesWithAntiPatterns(
+    confirmedHallucinations,
+    language,
+  );
 
   const score = calculateScore(enrichedConfirmedIssues, confirmedDeadCode);
   const recommendation = generateRecommendation(
@@ -431,9 +460,15 @@ async function handleValidationJob(
     recommendation,
     summary: {
       totalIssues: enrichedConfirmedIssues.length + confirmedDeadCode.length,
-      criticalIssues: enrichedConfirmedIssues.filter((i) => (i.confidence ?? 0) >= 85).length,
-      highIssues: enrichedConfirmedIssues.filter((i) => (i.confidence ?? 0) >= 70 && (i.confidence ?? 0) < 85).length,
-      mediumIssues: enrichedConfirmedIssues.filter((i) => (i.confidence ?? 0) >= 50 && (i.confidence ?? 0) < 70).length,
+      criticalIssues: enrichedConfirmedIssues.filter(
+        (i) => (i.confidence ?? 0) >= 85,
+      ).length,
+      highIssues: enrichedConfirmedIssues.filter(
+        (i) => (i.confidence ?? 0) >= 70 && (i.confidence ?? 0) < 85,
+      ).length,
+      mediumIssues: enrichedConfirmedIssues.filter(
+        (i) => (i.confidence ?? 0) >= 50 && (i.confidence ?? 0) < 70,
+      ).length,
       deadCodeIssues: deadCodeIssues.length,
     },
     stats: {
@@ -454,9 +489,15 @@ async function handleValidationJob(
      * Automated verification results - shows what was filtered and why
      */
     verification: {
-      confirmedCount: verificationTimedOut ? allIssues.length + deadCodeIssues.length : verificationResult.stats.confirmedCount,
-      falsePositiveCount: verificationTimedOut ? 0 : verificationResult.stats.falsePositiveCount,
-      uncertainCount: verificationTimedOut ? 0 : verificationResult.stats.uncertainCount,
+      confirmedCount: verificationTimedOut
+        ? allIssues.length + deadCodeIssues.length
+        : verificationResult.stats.confirmedCount,
+      falsePositiveCount: verificationTimedOut
+        ? 0
+        : verificationResult.stats.falsePositiveCount,
+      uncertainCount: verificationTimedOut
+        ? 0
+        : verificationResult.stats.uncertainCount,
       timedOut: verificationTimedOut,
       details: verificationResult,
     },
@@ -493,12 +534,18 @@ export async function processBatch(
       const content = await fs.readFile(filePath, "utf-8");
 
       const imports = extractImportsAST(content, fileLang);
-      const manifestIssues = await validateManifest(imports, manifest, content, fileLang, filePath);
+      const manifestIssues = await validateManifest(
+        imports,
+        manifest,
+        content,
+        fileLang,
+        filePath,
+      );
       batchIssues.push(...manifestIssues);
 
       const usages = extractUsagesAST(content, fileLang, imports);
       const typeReferences = extractTypeReferencesAST(content, fileLang);
-      
+
       const missingPackages = new Set<string>();
       for (const issue of manifestIssues) {
         if (issue.type === "dependencyHallucination") {
@@ -527,6 +574,18 @@ export async function processBatch(
       // The project-wide detectDeadCode only checks exported symbols and orphaned files.
       const localDeadCode = detectUnusedLocals(content, filePath);
       batchDeadCode.push(...localDeadCode);
+
+      // Class method dead code — catches instance methods on exported singletons
+      // that are never called across the project
+      // (e.g. spoonacularService.getRecipeNutrition(), spoonacularService.autocompleteIngredient()).
+      // detectUnusedLocals hard-skips sym.type === "method"; detectDeadCode only walks
+      // top-level exported symbols — this cross-file, instance-origin-tracked check fills the gap.
+      const classMethodDeadCode = await detectUnusedClassMethods(
+        content,
+        filePath,
+        context,
+      );
+      batchDeadCode.push(...classMethodDeadCode);
     } catch (error) {
       logger.warn(`Error processing file ${filePath}:`, error);
     }
@@ -554,13 +613,26 @@ async function getSourceFiles(
   };
 
   const exts = extensions[language] || extensions.typescript;
-  
+
   // Intelligence: Auto-detect source roots (src, app, pages, etc.)
-  const commonDirs = language === "python" ? ["app", "src", "server"] 
-    : language === "all" ? ["app", "src", "server", "pages", "lib", "components", "frontend", "backend", "client"]
-    : ["src", "app", "pages", "lib", "components"];
+  const commonDirs =
+    language === "python"
+      ? ["app", "src", "server"]
+      : language === "all"
+        ? [
+            "app",
+            "src",
+            "server",
+            "pages",
+            "lib",
+            "components",
+            "frontend",
+            "backend",
+            "client",
+          ]
+        : ["src", "app", "pages", "lib", "components"];
   const foundDirs: string[] = [];
-  
+
   for (const dir of commonDirs) {
     const fullPath = path.join(projectPath, dir);
     try {
@@ -573,7 +645,7 @@ async function getSourceFiles(
 
   const sourceDirs = foundDirs.length > 0 ? foundDirs : ["."];
   const patterns: string[] = [];
-  
+
   for (const dir of sourceDirs) {
     for (const ext of exts) {
       patterns.push(path.join(projectPath, dir, `**/*${ext}`));

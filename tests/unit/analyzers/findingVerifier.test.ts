@@ -365,7 +365,7 @@ describe("Finding Verifier Module", () => {
       expect(result.confirmed[0].verificationMethod).toBe("dead_code_detector_trust");
     });
 
-    it("should treat unused exports in actively-consumed modules as false positives", async () => {
+    it("should keep unused exports confirmed in non-barrel modules even when siblings are imported", async () => {
       const mockContext = createMockContext();
 
       const modulePath = "/project/src/features/sops/sopQueries.ts";
@@ -436,8 +436,88 @@ describe("Finding Verifier Module", () => {
         "typescript",
       );
 
+      expect(result.confirmed).toHaveLength(1);
+      expect(result.confirmed[0].verificationMethod).toBe(
+        "dead_code_detector_trust",
+      );
+      expect(result.falsePositives).toHaveLength(0);
+    });
+
+    it("should treat unused exports in barrel modules as module-surface false positives", async () => {
+      const mockContext = createMockContext();
+
+      const modulePath = "/project/src/features/sops/index.ts";
+      const consumerPath = "/project/src/pages/SOPs.tsx";
+
+      mockContext.files.set(modulePath, {
+        path: modulePath,
+        relativePath: "src/features/sops/index.ts",
+        language: "typescript",
+        size: 300,
+        symbols: [
+          { name: "useSopsQuery", kind: "function", line: 1, exported: true },
+          { name: "useSopQuery", kind: "function", line: 2, exported: true },
+        ],
+        imports: [],
+        exports: [
+          { name: "useSopsQuery", kind: "function", isDefault: false, line: 1 },
+          { name: "useSopQuery", kind: "function", isDefault: false, line: 2 },
+        ],
+        keywords: [],
+        isTest: false,
+        isConfig: false,
+        isEntryPoint: false,
+      });
+
+      mockContext.files.set(consumerPath, {
+        path: consumerPath,
+        relativePath: "src/pages/SOPs.tsx",
+        language: "typescript",
+        size: 200,
+        symbols: [],
+        imports: [
+          {
+            source: "../features/sops",
+            isRelative: true,
+            isExternal: false,
+            namedImports: ["useSopsQuery"],
+            line: 1,
+          },
+        ],
+        exports: [],
+        keywords: [],
+        isTest: false,
+        isConfig: false,
+        isEntryPoint: false,
+      });
+
+      mockContext.dependencies.push({
+        from: consumerPath,
+        to: modulePath,
+        importedSymbols: ["useSopsQuery"],
+      });
+      mockContext.reverseImportGraph.set(modulePath, [consumerPath]);
+
+      const deadCode: DeadCodeIssue = {
+        type: "unusedExport",
+        severity: "low",
+        name: "useSopQuery",
+        file: "src/features/sops/index.ts",
+        message: "Export 'useSopQuery' is never used",
+      };
+
+      const result = await verifyFindingsAutomatically(
+        [],
+        [deadCode],
+        mockContext,
+        "/project",
+        "typescript",
+      );
+
       expect(result.falsePositives).toHaveLength(1);
-      expect(result.falsePositives[0].verificationMethod).toBe("module_surface_analysis");
+      expect(result.falsePositives[0].verificationMethod).toBe(
+        "module_surface_analysis",
+      );
       expect(result.confirmed).toHaveLength(0);
     });
 

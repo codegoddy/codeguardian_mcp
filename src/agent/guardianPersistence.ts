@@ -54,6 +54,20 @@ export interface PersistedAlert {
   timestamp: number;
   llmMessage: string;
   isInitialScan?: boolean;
+  projectPath?: string;
+  agentName?: string;
+}
+
+interface AlertsScanStatus {
+  phase: "none" | "watch_only" | "initial_partial" | "initial_full";
+  initialCoverage: "none" | "partial" | "full";
+  initialSignals: {
+    apiContract: boolean;
+    projectDeadCode: boolean;
+    perFile: boolean;
+  };
+  hasNonInitialAlerts: boolean;
+  note: string;
 }
 
 // ============================================================================
@@ -62,6 +76,78 @@ export interface PersistedAlert {
 
 const GUARDIANS_DIR = ".codeguardian/guardians";
 const ALERTS_FILE = "alerts.json";
+
+function normalizeProjectPath(projectPath?: string): string | null {
+  if (!projectPath || !projectPath.trim()) return null;
+  return path.resolve(projectPath);
+}
+
+function getProjectPathFromStorageKey(storageKey: string): string | null {
+  const separatorIndex = storageKey.indexOf("::");
+  if (separatorIndex <= 0) return null;
+  const projectPath = storageKey.slice(0, separatorIndex);
+  return normalizeProjectPath(projectPath);
+}
+
+function buildAlertsScanStatus(
+  alerts: Map<string, PersistedAlert>,
+): AlertsScanStatus {
+  let hasApiContractInitial = false;
+  let hasInitialDeadCode = false;
+  let hasInitialPerFile = false;
+  let hasNonInitialAlerts = false;
+
+  for (const alert of alerts.values()) {
+    const fileKey = alert.file || "";
+
+    if (fileKey === "INITIAL_SCAN") {
+      hasInitialDeadCode = true;
+    } else if (fileKey === "INITIAL_FILE_SCAN") {
+      hasInitialPerFile = true;
+    } else if (
+      fileKey === "API_CONTRACT_SCAN" ||
+      fileKey.startsWith("API_CONTRACT_SCAN:")
+    ) {
+      hasApiContractInitial = true;
+    }
+
+    if (!alert.isInitialScan) {
+      hasNonInitialAlerts = true;
+    }
+  }
+
+  const initialSignals = {
+    apiContract: hasApiContractInitial,
+    projectDeadCode: hasInitialDeadCode,
+    perFile: hasInitialPerFile,
+  };
+
+  const signalCount = Object.values(initialSignals).filter(Boolean).length;
+  const initialCoverage: AlertsScanStatus["initialCoverage"] =
+    signalCount === 0 ? "none" : signalCount === 3 ? "full" : "partial";
+
+  let phase: AlertsScanStatus["phase"] = "none";
+  if (initialCoverage === "full") {
+    phase = "initial_full";
+  } else if (initialCoverage === "partial") {
+    phase = "initial_partial";
+  } else if (hasNonInitialAlerts) {
+    phase = "watch_only";
+  }
+
+  const note =
+    phase === "initial_full"
+      ? "Initial scan alerts are present for API contract, project dead code, and per-file checks."
+      : "Alert set may be partial. Missing initial-scan alert categories can mean either scans are still in progress or that category produced no issues.";
+
+  return {
+    phase,
+    initialCoverage,
+    initialSignals,
+    hasNonInitialAlerts,
+    note,
+  };
+}
 
 class GuardianPersistence {
   private guardiansDir: string;
@@ -269,23 +355,61 @@ class GuardianPersistence {
       // Write to each project root
       for (const projectPath of projectPaths) {
         try {
-          // Scope API contract scan alerts to the owning guardian project.
-          // Other alert types keep current behavior (shared map) for backward compatibility.
+          const resolvedProjectPath = path.resolve(projectPath);
+
+          // Scope alerts to the owning guardian project.
+          // Priority:
+          // 1) alert.projectPath metadata
+          // 2) composite storage key prefix (<projectPath>::<file>)
+          // 3) agentName -> persisted guardian config mapping
+          // 4) API_CONTRACT_SCAN:<agent> guardian mapping
+          // 5) fallback: include only when a single project is being written
           const scopedAlerts = new Map<string, PersistedAlert>();
-          for (const [key, alert] of alerts.entries()) {
-            if (key.startsWith("API_CONTRACT_SCAN:")) {
-              const guardianName = key.slice("API_CONTRACT_SCAN:".length);
-              const ownerProjectPath = guardianProjectByName.get(guardianName);
-              if (ownerProjectPath && ownerProjectPath !== projectPath) {
+
+          for (const [storageKey, alert] of alerts.entries()) {
+            const alertProjectPath = normalizeProjectPath(alert.projectPath);
+            if (alertProjectPath) {
+              if (alertProjectPath !== resolvedProjectPath) continue;
+              scopedAlerts.set(storageKey, alert);
+              continue;
+            }
+
+            const keyProjectPath = getProjectPathFromStorageKey(storageKey);
+            if (keyProjectPath) {
+              if (keyProjectPath !== resolvedProjectPath) continue;
+              scopedAlerts.set(storageKey, alert);
+              continue;
+            }
+
+            if (alert.agentName) {
+              const ownerProjectPath = guardianProjectByName.get(alert.agentName);
+              if (ownerProjectPath) {
+                if (ownerProjectPath !== resolvedProjectPath) continue;
+                scopedAlerts.set(storageKey, alert);
                 continue;
               }
             }
-            scopedAlerts.set(key, alert);
+
+            if (storageKey.startsWith("API_CONTRACT_SCAN:")) {
+              const guardianName = storageKey.slice("API_CONTRACT_SCAN:".length);
+              const ownerProjectPath = guardianProjectByName.get(guardianName);
+              if (ownerProjectPath && ownerProjectPath !== resolvedProjectPath) {
+                continue;
+              }
+              scopedAlerts.set(storageKey, alert);
+              continue;
+            }
+
+            // Legacy fallback: include ambiguous alerts only when there is a
+            // single destination project. This avoids cross-project bleed.
+            if (projectPaths.size === 1) {
+              scopedAlerts.set(storageKey, alert);
+            }
           }
 
           const groupedByFile: Record<string, PersistedAlert> = {};
-          for (const [file, alert] of scopedAlerts.entries()) {
-            groupedByFile[file] = alert;
+          for (const alert of scopedAlerts.values()) {
+            groupedByFile[alert.file] = alert;
           }
 
           const severityCounts: Record<string, number> = { critical: 0, high: 0, medium: 0, low: 0, warning: 0 };
@@ -312,6 +436,7 @@ class GuardianPersistence {
               totalIssues,
               bySeverity: severityCounts,
             },
+            scanStatus: buildAlertsScanStatus(scopedAlerts),
             alerts: groupedByFile,
           };
 

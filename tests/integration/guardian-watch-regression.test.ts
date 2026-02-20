@@ -24,6 +24,57 @@ async function cleanupTempDir(root: string): Promise<void> {
 
 describe("watch mode regression", () => {
   it(
+    "does not emit stale per-file alerts when a newer change version exists",
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "codeguardian-watch-stale-"));
+
+      let guardian: AutoValidator | undefined;
+      const targetFile = path.join(root, "src/index.ts");
+
+      try {
+        await writeFile(
+          path.join(root, "package.json"),
+          JSON.stringify({ name: "stale-regression", private: true, dependencies: {} }),
+        );
+
+        await writeFile(
+          targetFile,
+          `export function run() {
+  // @ts-ignore
+  metricsService.recordHeartbeat("stale-check");
+}
+`,
+        );
+
+        const alerts: any[] = [];
+        guardian = new AutoValidator(root, "typescript", "strict", "StaleRegression");
+        guardian.setAlertHandler((alert) => alerts.push(alert));
+
+        (guardian as any).fileChangeVersions.set(targetFile, 2);
+        (guardian as any).fileValidationVersions.set(targetFile, 2);
+
+        await (guardian as any).validateFile(targetFile, false, 1);
+        expect(alerts.length).toBe(0);
+
+        await (guardian as any).validateFile(targetFile, false, 2);
+        const fileAlert = alerts.find((a) => a.file === "src/index.ts");
+        expect(fileAlert).toBeTruthy();
+        expect(fileAlert.issues.length).toBeGreaterThan(0);
+      } finally {
+        if (guardian) {
+          try {
+            guardian.stop();
+          } catch {
+            // ignore cleanup errors
+          }
+        }
+        await cleanupTempDir(root);
+      }
+    },
+    60_000,
+  );
+
+  it(
     "reports hallucinations and triggers API contract scan on API file change",
     async () => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "codeguardian-watch-"));

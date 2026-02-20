@@ -23,7 +23,11 @@
 import { logger } from "../utils/logger.js";
 import type { ProjectContext } from "../context/projectContext.js";
 import { resolveImport } from "../context/projectContext.js";
-import type { ValidationIssue, DeadCodeIssue, ASTUsage } from "../tools/validation/types.js";
+import type {
+  ValidationIssue,
+  DeadCodeIssue,
+  ASTUsage,
+} from "../tools/validation/types.js";
 import { exec } from "child_process";
 import { promisify } from "util";
 
@@ -34,6 +38,123 @@ import { extractSymbolsAST } from "../tools/validation/extractors/index.js";
 import { checkPackageRegistry } from "../tools/validation/registry.js";
 import { impactAnalyzer, type BlastRadius } from "./impactAnalyzer.js";
 import { shouldExcludeFile } from "../utils/fileFilter.js";
+
+// ============================================================================
+// Git State Cache — shared across concurrent validations
+//
+// In vibe-coding / multi-agent mode, validateFile() fires for many files in
+// rapid succession. Without this cache, every call to verifyFindingsAutomatically
+// spawns three git subprocesses:
+//   1. git rev-parse --git-dir      (~50 ms)
+//   2. git status --porcelain       (~100-200 ms)
+//   3. git branch --show-current    (~50 ms)
+//
+// That is 200-400 ms of pure subprocess overhead added to EVERY file validation,
+// even when there are zero findings. With a 2 s TTL the subprocesses run at most
+// once every 2 seconds across all concurrent validations, dropping the per-file
+// overhead to ~0 ms on cache hits.
+//
+// In-flight deduplication (Promise sharing) ensures that if 4 validations start
+// simultaneously they share one subprocess call rather than spawning 4.
+// ============================================================================
+
+const GIT_CACHE_TTL_MS = 2_000;
+
+interface GitStateCache {
+  available: { value: boolean; expiresAt: number } | null;
+  statusMap: { value: Map<string, GitFileStatus>; expiresAt: number } | null;
+  featureBranch: { value: boolean; expiresAt: number } | null;
+}
+
+// One cache entry per projectPath
+const gitStateCache = new Map<string, GitStateCache>();
+
+// In-flight promise deduplication — prevents N concurrent callers from each
+// spawning their own subprocess when the cache is cold at the same instant.
+const gitInflight = new Map<string, Promise<any>>();
+
+function getOrCreateGitCache(projectPath: string): GitStateCache {
+  let entry = gitStateCache.get(projectPath);
+  if (!entry) {
+    entry = { available: null, statusMap: null, featureBranch: null };
+    gitStateCache.set(projectPath, entry);
+  }
+  return entry;
+}
+
+async function cachedGitAvailable(projectPath: string): Promise<boolean> {
+  const cache = getOrCreateGitCache(projectPath);
+  const now = Date.now();
+  if (cache.available && cache.available.expiresAt > now) {
+    return cache.available.value;
+  }
+
+  const key = `available:${projectPath}`;
+  let inflight = gitInflight.get(key) as Promise<boolean> | undefined;
+  if (!inflight) {
+    inflight = checkGitAvailableRaw(projectPath).then((v) => {
+      getOrCreateGitCache(projectPath).available = {
+        value: v,
+        expiresAt: Date.now() + GIT_CACHE_TTL_MS,
+      };
+      gitInflight.delete(key);
+      return v;
+    });
+    gitInflight.set(key, inflight);
+  }
+  return inflight;
+}
+
+async function cachedBatchGitStatus(
+  projectPath: string,
+): Promise<Map<string, GitFileStatus>> {
+  const cache = getOrCreateGitCache(projectPath);
+  const now = Date.now();
+  if (cache.statusMap && cache.statusMap.expiresAt > now) {
+    return cache.statusMap.value;
+  }
+
+  const key = `status:${projectPath}`;
+  let inflight = gitInflight.get(key) as
+    | Promise<Map<string, GitFileStatus>>
+    | undefined;
+  if (!inflight) {
+    inflight = batchGitStatusRaw(projectPath).then((v) => {
+      getOrCreateGitCache(projectPath).statusMap = {
+        value: v,
+        expiresAt: Date.now() + GIT_CACHE_TTL_MS,
+      };
+      gitInflight.delete(key);
+      return v;
+    });
+    gitInflight.set(key, inflight);
+  }
+  return inflight;
+}
+
+async function cachedFeatureBranch(ctx: VerificationContext): Promise<boolean> {
+  if (!ctx.gitAvailable) return false;
+  const cache = getOrCreateGitCache(ctx.projectPath);
+  const now = Date.now();
+  if (cache.featureBranch && cache.featureBranch.expiresAt > now) {
+    return cache.featureBranch.value;
+  }
+
+  const key = `branch:${ctx.projectPath}`;
+  let inflight = gitInflight.get(key) as Promise<boolean> | undefined;
+  if (!inflight) {
+    inflight = checkFeatureBranchRaw(ctx).then((v) => {
+      getOrCreateGitCache(ctx.projectPath).featureBranch = {
+        value: v,
+        expiresAt: Date.now() + GIT_CACHE_TTL_MS,
+      };
+      gitInflight.delete(key);
+      return v;
+    });
+    gitInflight.set(key, inflight);
+  }
+  return inflight;
+}
 
 // ============================================================================
 // Types
@@ -97,8 +218,13 @@ function getDependencyEvidenceForSymbol(
     }
   }
 
-  const blast = impactAnalyzer.traceBlastRadius(symbolName, graph, Math.min(depth, 5));
-  const isUsed = blast.affectedFiles.length > 0 || blast.impactedSymbols.length > 0;
+  const blast = impactAnalyzer.traceBlastRadius(
+    symbolName,
+    graph,
+    Math.min(depth, 5),
+  );
+  const isUsed =
+    blast.affectedFiles.length > 0 || blast.impactedSymbols.length > 0;
   return { blast, isUsed };
 }
 
@@ -109,10 +235,18 @@ function getDependencyEvidenceForSymbol(
 function detectFileLanguage(filePath: string, fallback: string): string {
   const ext = path.extname(filePath).toLowerCase();
   switch (ext) {
-    case ".py": return "python";
-    case ".ts": case ".tsx": return "typescript";
-    case ".js": case ".jsx": case ".mjs": case ".cjs": return "javascript";
-    default: return fallback === "all" ? "typescript" : fallback;
+    case ".py":
+      return "python";
+    case ".ts":
+    case ".tsx":
+      return "typescript";
+    case ".js":
+    case ".jsx":
+    case ".mjs":
+    case ".cjs":
+      return "javascript";
+    default:
+      return fallback === "all" ? "typescript" : fallback;
   }
 }
 
@@ -167,11 +301,14 @@ export async function verifyFindingsAutomatically(
   language: string,
   onProgress?: (progress: VerificationProgress) => void,
 ): Promise<VerificationResult> {
-  const allFindings: (ValidationIssue | DeadCodeIssue)[] = [...hallucinations, ...deadCode];
+  const allFindings: (ValidationIssue | DeadCodeIssue)[] = [
+    ...hallucinations,
+    ...deadCode,
+  ];
 
   // Defense-in-depth: filter out findings from excluded directories (node_modules, dist, etc.)
   // before spending time verifying them. These are always false positives.
-  const filteredFindings = allFindings.filter(f => {
+  const filteredFindings = allFindings.filter((f) => {
     const file = f.file;
     if (file && shouldExcludeFile(file)) {
       logger.debug(`Skipping finding in excluded dir: ${file}`);
@@ -181,30 +318,35 @@ export async function verifyFindingsAutomatically(
   });
   const excludedCount = allFindings.length - filteredFindings.length;
   if (excludedCount > 0) {
-    logger.info(`Pre-filtered ${excludedCount} findings from excluded directories (node_modules, etc.)`);
+    logger.info(
+      `Pre-filtered ${excludedCount} findings from excluded directories (node_modules, etc.)`,
+    );
   }
 
   logger.info(
     `Starting batched verification of ${filteredFindings.length} findings ` +
-    `(${hallucinations.length} hallucinations, ${deadCode.length} dead code)...`
+      `(${hallucinations.length} hallucinations, ${deadCode.length} dead code)...`,
   );
 
   const ctx: VerificationContext = {
     projectPath,
     projectContext,
     language,
-    gitAvailable: await checkGitAvailable(projectPath),
+    gitAvailable: await cachedGitAvailable(projectPath),
     fileContentCache: new Map(),
   };
 
   // Group findings by file for efficient batch processing
   const fileBatches = groupFindingsByFile(filteredFindings);
-  logger.info(`Grouped into ${fileBatches.length} file batches for concurrent processing`);
+  logger.info(
+    `Grouped into ${fileBatches.length} file batches for concurrent processing`,
+  );
 
-  // Pre-batch git status for ALL files in a single git call (instead of per-file)
+  // Pre-batch git status for ALL files in a single git call (instead of per-file).
+  // Uses the TTL cache so rapid concurrent validations share one subprocess call.
   if (ctx.gitAvailable) {
-    ctx.gitStatusBatch = await batchGitStatus(ctx.projectPath);
-    ctx.featureBranchCached = await checkFeatureBranch(ctx);
+    ctx.gitStatusBatch = await cachedBatchGitStatus(ctx.projectPath);
+    ctx.featureBranchCached = await cachedFeatureBranch(ctx);
   }
 
   const progress: VerificationProgress = {
@@ -232,7 +374,11 @@ export async function verifyFindingsAutomatically(
         // Verify all findings for this file
         const results: VerifiedFinding[] = [];
         for (const finding of fileBatch.findings) {
-          const verified = await verifyFindingWithCache(finding, ctx, fileCache);
+          const verified = await verifyFindingWithCache(
+            finding,
+            ctx,
+            fileCache,
+          );
           results.push(verified);
         }
 
@@ -242,7 +388,7 @@ export async function verifyFindingsAutomatically(
         onProgress?.(progress);
 
         return results;
-      })
+      }),
     );
 
     // Flatten results
@@ -256,13 +402,15 @@ export async function verifyFindingsAutomatically(
 
   // Categorize results
   const confirmed = verifiedResults.filter((v) => v.status === "confirmed");
-  const falsePositives = verifiedResults.filter((v) => v.status === "false_positive");
+  const falsePositives = verifiedResults.filter(
+    (v) => v.status === "false_positive",
+  );
   const uncertain = verifiedResults.filter((v) => v.status === "uncertain");
 
   logger.info(
     `Verification complete: ${confirmed.length} confirmed, ` +
-    `${falsePositives.length} false positives, ${uncertain.length} uncertain ` +
-    `(${fileBatches.length} files processed)`
+      `${falsePositives.length} false positives, ${uncertain.length} uncertain ` +
+      `(${fileBatches.length} files processed)`,
   );
 
   return {
@@ -283,7 +431,7 @@ export async function verifyFindingsAutomatically(
 // ============================================================================
 
 function groupFindingsByFile(
-  findings: (ValidationIssue | DeadCodeIssue)[]
+  findings: (ValidationIssue | DeadCodeIssue)[],
 ): FileBatch[] {
   const fileMap = new Map<string, (ValidationIssue | DeadCodeIssue)[]>();
 
@@ -310,7 +458,10 @@ async function preloadFileCache(
 ): Promise<void> {
   // Use pre-batched git status (single git call for all files)
   if (ctx.gitAvailable && ctx.gitStatusBatch) {
-    cache.gitStatus = ctx.gitStatusBatch.get(filePath) ?? { isNew: false, isModified: false };
+    cache.gitStatus = ctx.gitStatusBatch.get(filePath) ?? {
+      isNew: false,
+      isModified: false,
+    };
   }
 
   // Feature branch is already cached on context during init
@@ -332,7 +483,9 @@ async function verifyFindingWithCache(
   }
 }
 
-function isValidationIssue(finding: ValidationIssue | DeadCodeIssue): finding is ValidationIssue {
+function isValidationIssue(
+  finding: ValidationIssue | DeadCodeIssue,
+): finding is ValidationIssue {
   return "code" in finding && typeof finding.line === "number";
 }
 
@@ -362,7 +515,9 @@ async function verifyHallucinationWithCache(
           status = "false_positive";
           confidence = 95;
           method = "local_scope";
-          reasons.push(`Symbol is defined locally in the file (${localDef.hint})`);
+          reasons.push(
+            `Symbol is defined locally in the file (${localDef.hint})`,
+          );
           reasons.push("Not a hallucination - this is valid local scope");
           break;
         }
@@ -379,7 +534,11 @@ async function verifyHallucinationWithCache(
         reasons.push("This is a missing import, not a hallucination");
       } else {
         // Use cached future feature detection
-        const futureFeatureCheck = await detectFutureFeatureWithCache(issue, ctx, cache);
+        const futureFeatureCheck = await detectFutureFeatureWithCache(
+          issue,
+          ctx,
+          cache,
+        );
 
         if (futureFeatureCheck.isFutureFeature) {
           status = "false_positive";
@@ -387,19 +546,25 @@ async function verifyHallucinationWithCache(
           method = "future_feature_detection";
           reasons.push("This appears to be part of an incomplete/new feature:");
           reasons.push(...futureFeatureCheck.reasons);
-          reasons.push("Not a hallucination - code is for planned functionality");
+          reasons.push(
+            "Not a hallucination - code is for planned functionality",
+          );
         } else {
           // Do NOT auto-dismiss hallucinations just because the file is uncommitted.
           // That heuristic caused watch-mode to drop almost all hallucinations during active development.
           // If we have no strong future-feature signals and the symbol truly doesn't exist in the project,
           // treat it as a real hallucination (slightly lower confidence when the file is uncommitted).
-          const hasUncommittedChanges = Boolean(cache.gitStatus?.isNew || cache.gitStatus?.isModified);
+          const hasUncommittedChanges = Boolean(
+            cache.gitStatus?.isNew || cache.gitStatus?.isModified,
+          );
           status = "confirmed";
           confidence = hasUncommittedChanges ? 90 : 95;
           method = "static_analysis";
           reasons.push("Symbol not found anywhere in project");
           if (hasUncommittedChanges) {
-            reasons.push("File has uncommitted changes, but no strong signals of a planned feature");
+            reasons.push(
+              "File has uncommitted changes, but no strong signals of a planned feature",
+            );
           } else {
             reasons.push("No indicators of planned/incomplete feature");
           }
@@ -436,7 +601,9 @@ async function verifyHallucinationWithCache(
 
     case "dependencyHallucination": {
       const pkgName = extractPackageName(issue.message);
-      const fileLang = issue.file ? detectFileLanguage(issue.file, ctx.language) : ctx.language;
+      const fileLang = issue.file
+        ? detectFileLanguage(issue.file, ctx.language)
+        : ctx.language;
       const existsOnNpm = await checkPackageExistsOnRegistry(pkgName, fileLang);
 
       if (!existsOnNpm) {
@@ -460,12 +627,17 @@ async function verifyHallucinationWithCache(
       // The manifest loader may have already been fixed, but this is a safety net.
       const missingPkgName = extractPackageName(issue.message);
       if (missingPkgName) {
-        const foundInSubdir = await checkPackageInSubdirectoryManifest(missingPkgName, ctx.projectPath);
+        const foundInSubdir = await checkPackageInSubdirectoryManifest(
+          missingPkgName,
+          ctx.projectPath,
+        );
         if (foundInSubdir) {
           status = "false_positive";
           confidence = 98;
           method = "subdirectory_manifest_check";
-          reasons.push(`Package '${missingPkgName}' found in a subdirectory package.json`);
+          reasons.push(
+            `Package '${missingPkgName}' found in a subdirectory package.json`,
+          );
           reasons.push("This is not missing — the manifest loader missed it");
           break;
         }
@@ -475,7 +647,9 @@ async function verifyHallucinationWithCache(
       confidence = 70;
       method = "manifest_check";
       reasons.push("Package not found in any project manifest");
-      reasons.push("This is a missing dependency (not a hallucination — it exists on the registry)");
+      reasons.push(
+        "This is a missing dependency (not a hallucination — it exists on the registry)",
+      );
       break;
     }
 
@@ -487,7 +661,9 @@ async function verifyHallucinationWithCache(
         confidence = 92;
         method = "signature_analysis";
         reasons.push("Parameter count mismatch confirmed");
-        reasons.push(`Expected ${paramCheck.expected}, got ${paramCheck.actual}`);
+        reasons.push(
+          `Expected ${paramCheck.expected}, got ${paramCheck.actual}`,
+        );
       } else {
         status = "false_positive";
         confidence = 88;
@@ -512,7 +688,12 @@ async function verifyHallucinationWithCache(
       ) {
         const symbolName = extractSymbolName(issue);
         if (symbolName) {
-          const dep = getDependencyEvidenceForSymbol(symbolName, ctx, 2, issue.file);
+          const dep = getDependencyEvidenceForSymbol(
+            symbolName,
+            ctx,
+            2,
+            issue.file,
+          );
           if (dep?.isUsed) {
             status = "false_positive";
             confidence = 98;
@@ -525,7 +706,9 @@ async function verifyHallucinationWithCache(
               .map((f) => f)
               .join(", ");
             if (sampleFiles) {
-              reasons.push(`Example consumers: ${sampleFiles}${dep.blast.affectedFiles.length > 4 ? ", …" : ""}`);
+              reasons.push(
+                `Example consumers: ${sampleFiles}${dep.blast.affectedFiles.length > 4 ? ", …" : ""}`,
+              );
             }
             reasons.push(
               "Not an unused local — this symbol is reachable via cross-file consumers",
@@ -564,13 +747,19 @@ async function verifyHallucinationWithCache(
 
       if (methodName) {
         // Check if method exists with matching scope
-        const methodExists = checkMethodExistsInProject(methodName, objectName, ctx);
+        const methodExists = checkMethodExistsInProject(
+          methodName,
+          objectName,
+          ctx,
+        );
 
         if (methodExists.exists) {
           status = "false_positive";
           confidence = 90;
           method = "symbol_lookup";
-          reasons.push(`Method '${methodName}' exists in project at ${methodExists.location}`);
+          reasons.push(
+            `Method '${methodName}' exists in project at ${methodExists.location}`,
+          );
           if (methodExists.scope) {
             reasons.push(`Method is defined on object: ${methodExists.scope}`);
           }
@@ -599,7 +788,8 @@ async function verifyHallucinationWithCache(
     }
 
     default: {
-      status = issue.confidence && issue.confidence > 90 ? "confirmed" : "uncertain";
+      status =
+        issue.confidence && issue.confidence > 90 ? "confirmed" : "uncertain";
       confidence = issue.confidence || 50;
       method = "fallback";
       reasons.push("Using original confidence score");
@@ -650,29 +840,55 @@ async function verifyDeadCodeWithCache(
           `Dependency graph shows '${issue.name}' is used by ${dep.blast.affectedFiles.length} file(s).`,
         );
         if (sampleFiles) {
-          reasons.push(`Example consumers: ${sampleFiles}${dep.blast.affectedFiles.length > 4 ? ", …" : ""}`);
+          reasons.push(
+            `Example consumers: ${sampleFiles}${dep.blast.affectedFiles.length > 4 ? ", …" : ""}`,
+          );
         }
         reasons.push("Not dead code — keep this export or refactor with care");
         break;
       }
 
       // Use cached future feature detection
-      const futureFeatureCheck = await detectFutureFeatureWithCache(issue, ctx, cache);
+      const futureFeatureCheck = await detectFutureFeatureWithCache(
+        issue,
+        ctx,
+        cache,
+      );
       if (futureFeatureCheck.isFutureFeature) {
         status = "false_positive";
         confidence = futureFeatureCheck.confidence;
         method = "future_feature_detection";
-        reasons.push("This export appears to be part of an incomplete/new feature:");
+        reasons.push(
+          "This export appears to be part of an incomplete/new feature:",
+        );
         reasons.push(...futureFeatureCheck.reasons);
-        reasons.push("Not dead code - will likely be used when feature is complete");
+        reasons.push(
+          "Not dead code - will likely be used when feature is complete",
+        );
         break;
       }
 
       const isPublicApi = await checkIfPublicApi(issue, ctx);
-      const isTestFile = issue.file.includes('.test.') || issue.file.includes('.spec.') || issue.file.includes('/test/');
+      const isTestFile =
+        issue.file.includes(".test.") ||
+        issue.file.includes(".spec.") ||
+        issue.file.includes("/test/");
       const moduleUsage = await checkPartiallyUsedModuleExport(issue, ctx);
 
-      if (isPublicApi) {
+      if (
+        moduleUsage.isPartiallyUsed &&
+        isLikelyModuleSurfaceFile(issue.file)
+      ) {
+        status = "false_positive";
+        confidence = 86;
+        method = "module_surface_analysis";
+        reasons.push(
+          `Module is imported by ${moduleUsage.importers.length} file(s) and has other used exports: ${moduleUsage.usedExports.slice(0, 3).join(", ")}${moduleUsage.usedExports.length > 3 ? ", …" : ""}`,
+        );
+        reasons.push(
+          "Unused export may be an intentionally exposed helper/API surface",
+        );
+      } else if (isPublicApi) {
         status = "false_positive";
         confidence = 88;
         method = "api_analysis";
@@ -682,20 +898,21 @@ async function verifyDeadCodeWithCache(
         status = "false_positive";
         confidence = 75;
         method = "test_file_analysis";
-        reasons.push("This is a test file - exports may be used by test runners");
-      } else if (moduleUsage.isPartiallyUsed) {
-        status = "false_positive";
-        confidence = 86;
-        method = "module_surface_analysis";
         reasons.push(
-          `Module is imported by ${moduleUsage.importers.length} file(s) and has other used exports: ${moduleUsage.usedExports.slice(0, 3).join(", ")}${moduleUsage.usedExports.length > 3 ? ", …" : ""}`,
+          "This is a test file - exports may be used by test runners",
         );
-        reasons.push("Unused export may be an intentionally exposed helper/API surface");
       } else {
         status = "confirmed";
         confidence = 92;
         method = "dead_code_detector_trust";
-        reasons.push("Dead code detector performed thorough cross-file analysis");
+        if (moduleUsage.isPartiallyUsed) {
+          reasons.push(
+            "Other exports in this module are used, but this specific export has no imports/usages",
+          );
+        }
+        reasons.push(
+          "Dead code detector performed thorough cross-file analysis",
+        );
         reasons.push("No imports, type references, or runtime usages found");
         reasons.push("No indicators of planned/incomplete feature");
         reasons.push("This is confirmed dead code");
@@ -729,7 +946,9 @@ async function verifyDeadCodeWithCache(
         status = "false_positive";
         confidence = 95;
         method = "import_analysis";
-        reasons.push(`File is imported by ${importCheck.importers.length} file(s)`);
+        reasons.push(
+          `File is imported by ${importCheck.importers.length} file(s)`,
+        );
         reasons.push("This is not an orphaned file");
       } else {
         const isEntryPoint = await checkIfEntryPoint(issue, ctx);
@@ -792,7 +1011,9 @@ async function detectFutureFeatureWithCache(
   if (cache.gitStatus?.isNew || cache.gitStatus?.isModified) {
     signalCount++;
     signals.push("uncommitted changes");
-    reasons.push(`File has uncommitted ${cache.gitStatus.isNew ? "changes (new file)" : "modifications"}`);
+    reasons.push(
+      `File has uncommitted ${cache.gitStatus.isNew ? "changes (new file)" : "modifications"}`,
+    );
   }
 
   // Signal 2: Check for TODO/FIXME comments (lazy load & cache)
@@ -807,12 +1028,19 @@ async function detectFutureFeatureWithCache(
 
   // Signal 3: Check if this is a stub implementation (lazy load & cache)
   if (cache.isStub === undefined) {
-    cache.isStub = await checkIfStubImplementation(issue.file, issue, ctx, cache);
+    cache.isStub = await checkIfStubImplementation(
+      issue.file,
+      issue,
+      ctx,
+      cache,
+    );
   }
   if (cache.isStub) {
     signalCount++;
     signals.push("stub implementation");
-    reasons.push("Code appears to be a stub/placeholder for future implementation");
+    reasons.push(
+      "Code appears to be a stub/placeholder for future implementation",
+    );
   }
 
   // Signal 4: Check feature branch naming (cached)
@@ -831,7 +1059,8 @@ async function detectFutureFeatureWithCache(
   }
 
   // Determine result based on signal strength
-  const isFutureFeature = signalCount >= 2 || (signalCount >= 1 && signals.includes("todo comments"));
+  const isFutureFeature =
+    signalCount >= 2 || (signalCount >= 1 && signals.includes("todo comments"));
   const confidence = Math.min(95, 60 + signalCount * 15);
 
   return {
@@ -845,7 +1074,9 @@ async function detectFutureFeatureWithCache(
 // Git Operations (Optimized)
 // ============================================================================
 
-async function checkGitAvailable(projectPath: string): Promise<boolean> {
+// Raw (uncached) implementations — called only by the cache wrappers above.
+
+async function checkGitAvailableRaw(projectPath: string): Promise<boolean> {
   try {
     await execAsync("git rev-parse --git-dir", { cwd: projectPath });
     return true;
@@ -854,23 +1085,33 @@ async function checkGitAvailable(projectPath: string): Promise<boolean> {
   }
 }
 
+/** @deprecated Use cachedGitAvailable instead */
+async function checkGitAvailable(projectPath: string): Promise<boolean> {
+  return cachedGitAvailable(projectPath);
+}
+
 /**
  * Batch git status for ALL files in a single git call.
  * Replaces per-file `git status --porcelain <file>` which spawned 100+ processes.
+ * Raw (uncached) — call cachedBatchGitStatus for normal use.
  */
-async function batchGitStatus(projectPath: string): Promise<Map<string, GitFileStatus>> {
+async function batchGitStatusRaw(
+  projectPath: string,
+): Promise<Map<string, GitFileStatus>> {
   const statusMap = new Map<string, GitFileStatus>();
   try {
-    const { stdout } = await execAsync(
-      "git status --porcelain",
-      { cwd: projectPath, maxBuffer: 10 * 1024 * 1024 }
-    );
+    const { stdout } = await execAsync("git status --porcelain", {
+      cwd: projectPath,
+      maxBuffer: 10 * 1024 * 1024,
+    });
     for (const line of stdout.split("\n")) {
       if (!line || line.length < 4) continue;
       const statusCode = line.substring(0, 2);
       const filePart = line.substring(3).trim();
       if (!filePart) continue;
-      const absPath = path.isAbsolute(filePart) ? filePart : path.join(projectPath, filePart);
+      const absPath = path.isAbsolute(filePart)
+        ? filePart
+        : path.join(projectPath, filePart);
       statusMap.set(absPath, {
         isNew: statusCode === "??" || statusCode.startsWith("A"),
         isModified: statusCode.includes("M"),
@@ -882,14 +1123,23 @@ async function batchGitStatus(projectPath: string): Promise<Map<string, GitFileS
   return statusMap;
 }
 
-async function checkFeatureBranch(ctx: VerificationContext): Promise<boolean> {
+/** @deprecated Use cachedBatchGitStatus instead */
+async function batchGitStatus(
+  projectPath: string,
+): Promise<Map<string, GitFileStatus>> {
+  return cachedBatchGitStatus(projectPath);
+}
+
+// Raw (uncached) feature-branch check.
+async function checkFeatureBranchRaw(
+  ctx: VerificationContext,
+): Promise<boolean> {
   if (!ctx.gitAvailable) return false;
 
   try {
-    const { stdout } = await execAsync(
-      "git branch --show-current",
-      { cwd: ctx.projectPath }
-    );
+    const { stdout } = await execAsync("git branch --show-current", {
+      cwd: ctx.projectPath,
+    });
     const branchName = stdout.trim();
 
     const featurePatterns = [
@@ -909,6 +1159,11 @@ async function checkFeatureBranch(ctx: VerificationContext): Promise<boolean> {
   }
 }
 
+/** @deprecated Use cachedFeatureBranch instead */
+async function checkFeatureBranch(ctx: VerificationContext): Promise<boolean> {
+  return cachedFeatureBranch(ctx);
+}
+
 // ============================================================================
 // File Content Checks
 // ============================================================================
@@ -925,7 +1180,7 @@ async function checkForTodoComments(
     if (cache && !cache.content) {
       cache.content = await fs.readFile(filePath, "utf-8");
     }
-    const content = cache?.content ?? await fs.readFile(filePath, "utf-8");
+    const content = cache?.content ?? (await fs.readFile(filePath, "utf-8"));
     const todoPatterns = [
       /\/\/\s*TODO/i,
       /\/\/\s*FIXME/i,
@@ -956,7 +1211,7 @@ async function checkIfStubImplementation(
     if (cache && !cache.content) {
       cache.content = await fs.readFile(filePath, "utf-8");
     }
-    const content = cache?.content ?? await fs.readFile(filePath, "utf-8");
+    const content = cache?.content ?? (await fs.readFile(filePath, "utf-8"));
 
     const stubPatterns = [
       /throw\s+new\s+Error\s*\(\s*["']\s*not\s+implemented/i,
@@ -973,7 +1228,9 @@ async function checkIfStubImplementation(
   }
 }
 
-function extractSymbolName(issue: ValidationIssue | DeadCodeIssue): string | null {
+function extractSymbolName(
+  issue: ValidationIssue | DeadCodeIssue,
+): string | null {
   if ("message" in issue) {
     const match = issue.message.match(/'([^']+)'/);
     return match?.[1] || null;
@@ -1020,7 +1277,9 @@ async function checkSymbolDefinedLocally(
     });
 
     const found = symbols.some((s: any) => s.name === symbolName);
-    return found ? { isDefined: true, hint: "local symbol table" } : { isDefined: false };
+    return found
+      ? { isDefined: true, hint: "local symbol table" }
+      : { isDefined: false };
   } catch {
     return { isDefined: false };
   }
@@ -1038,7 +1297,10 @@ function checkSymbolExistsInProject(
   if (!symbolName) return { exists: false };
 
   for (const [name, definitions] of ctx.projectContext.symbolIndex) {
-    if (name === symbolName || name.toLowerCase() === symbolName.toLowerCase()) {
+    if (
+      name === symbolName ||
+      name.toLowerCase() === symbolName.toLowerCase()
+    ) {
       return {
         exists: true,
         location: definitions[0]?.file || "unknown",
@@ -1066,7 +1328,11 @@ function checkMethodExistsInProject(
         // Check if it's a method type
         if (def.symbol.kind === "method") {
           // If object name is provided, check scope matches
-          if (!objectName || !def.symbol.scope || def.symbol.scope === objectName) {
+          if (
+            !objectName ||
+            !def.symbol.scope ||
+            def.symbol.scope === objectName
+          ) {
             return {
               exists: true,
               location: def.file || "unknown",
@@ -1181,9 +1447,13 @@ async function checkModuleExports(
     const isPython = modulePath.endsWith(".py");
 
     const exportPatterns = [
-      new RegExp(`export\\s+(?:const|let|var|function|class|interface|type)\\s+${exportName}\\b`),
+      new RegExp(
+        `export\\s+(?:const|let|var|function|class|interface|type)\\s+${exportName}\\b`,
+      ),
       new RegExp(`export\\s*\\{[^}]*\\b${exportName}\\b`),
-      new RegExp(`export\\s+default\\s+(?:class|function)?\\s*\\b${exportName}\\b`),
+      new RegExp(
+        `export\\s+default\\s+(?:class|function)?\\s*\\b${exportName}\\b`,
+      ),
     ];
 
     if (isPython) {
@@ -1200,39 +1470,97 @@ async function checkModuleExports(
       );
     }
 
-    const exportExists = exportPatterns.some((pattern) => pattern.test(content));
+    const exportExists = exportPatterns.some((pattern) =>
+      pattern.test(content),
+    );
     return { moduleExists: true, exportExists };
   } catch {
     return { moduleExists: true, exportExists: false };
   }
 }
 
-async function checkPackageExistsOnRegistry(pkgName: string, language: string): Promise<boolean> {
+async function checkPackageExistsOnRegistry(
+  pkgName: string,
+  language: string,
+): Promise<boolean> {
   if (!pkgName) return false;
 
   const commonPackages = new Set([
-    "react", "react-dom", "vue", "angular", "svelte",
-    "lodash", "underscore", "ramda",
-    "axios", "fetch", "node-fetch",
-    "express", "koa", "fastify", "hapi",
-    "jest", "mocha", "jasmine", "vitest", "playwright",
-    "typescript", "ts-node", "tsx",
-    "webpack", "vite", "rollup", "esbuild", "parcel",
-    "eslint", "prettier", "babel",
-    "mongoose", "sequelize", "prisma", "typeorm",
-    "mongodb", "redis", "pg", "mysql",
-    "jsonwebtoken", "bcrypt", "passport",
-    "winston", "pino", "morgan",
-    "dotenv", "cross-env", "rimraf",
-    "fs-extra", "glob", "minimatch",
-    "chalk", "commander", "inquirer",
-    "dayjs", "date-fns", "moment",
-    "uuid", "nanoid", "cuid",
-    "zod", "yup", "joi", "class-validator",
-    "tailwindcss", "styled-components", "emotion",
-    "@testing-library/react", "@testing-library/jest-dom",
-    "@types/node", "@types/react", "@types/express",
-    "next", "nuxt", "gatsby",
+    "react",
+    "react-dom",
+    "vue",
+    "angular",
+    "svelte",
+    "lodash",
+    "underscore",
+    "ramda",
+    "axios",
+    "fetch",
+    "node-fetch",
+    "express",
+    "koa",
+    "fastify",
+    "hapi",
+    "jest",
+    "mocha",
+    "jasmine",
+    "vitest",
+    "playwright",
+    "typescript",
+    "ts-node",
+    "tsx",
+    "webpack",
+    "vite",
+    "rollup",
+    "esbuild",
+    "parcel",
+    "eslint",
+    "prettier",
+    "babel",
+    "mongoose",
+    "sequelize",
+    "prisma",
+    "typeorm",
+    "mongodb",
+    "redis",
+    "pg",
+    "mysql",
+    "jsonwebtoken",
+    "bcrypt",
+    "passport",
+    "winston",
+    "pino",
+    "morgan",
+    "dotenv",
+    "cross-env",
+    "rimraf",
+    "fs-extra",
+    "glob",
+    "minimatch",
+    "chalk",
+    "commander",
+    "inquirer",
+    "dayjs",
+    "date-fns",
+    "moment",
+    "uuid",
+    "nanoid",
+    "cuid",
+    "zod",
+    "yup",
+    "joi",
+    "class-validator",
+    "tailwindcss",
+    "styled-components",
+    "emotion",
+    "@testing-library/react",
+    "@testing-library/jest-dom",
+    "@types/node",
+    "@types/react",
+    "@types/express",
+    "next",
+    "nuxt",
+    "gatsby",
   ]);
 
   if (commonPackages.has(pkgName.toLowerCase())) return true;
@@ -1242,7 +1570,15 @@ async function checkPackageExistsOnRegistry(pkgName: string, language: string): 
     const name = pkgName.split("/")[1];
     if (!name) return false;
 
-    const commonScopes = ["@types", "@babel", "@rollup", "@vitejs", "@nestjs", "@angular", "@mui"];
+    const commonScopes = [
+      "@types",
+      "@babel",
+      "@rollup",
+      "@vitejs",
+      "@nestjs",
+      "@angular",
+      "@mui",
+    ];
     if (commonScopes.includes(scope)) return true;
   }
 
@@ -1264,7 +1600,15 @@ async function checkPackageInSubdirectoryManifest(
   pkgName: string,
   projectPath: string,
 ): Promise<boolean> {
-  const COMMON_SUBDIRS = ["frontend", "backend", "client", "server", "app", "web", "api"];
+  const COMMON_SUBDIRS = [
+    "frontend",
+    "backend",
+    "client",
+    "server",
+    "app",
+    "web",
+    "api",
+  ];
 
   for (const subdir of COMMON_SUBDIRS) {
     const pkgJsonPath = path.join(projectPath, subdir, "package.json");
@@ -1295,7 +1639,9 @@ async function verifyParameterCount(
   issue: ValidationIssue,
   ctx: VerificationContext,
 ): Promise<{ isMismatch: boolean; expected?: string; actual?: number }> {
-  const rangeMatch = issue.message.match(/expects\s+([0-9]+(?:-[0-9]+)?)\s+args,\s+got\s+([0-9]+)/i);
+  const rangeMatch = issue.message.match(
+    /expects\s+([0-9]+(?:-[0-9]+)?)\s+args,\s+got\s+([0-9]+)/i,
+  );
   const actual = rangeMatch ? parseInt(rangeMatch[2], 10) : undefined;
   const expectedRange = rangeMatch?.[1];
 
@@ -1304,7 +1650,12 @@ async function verifyParameterCount(
     const min = parseInt(minStr, 10);
     const max = parseInt(maxStr ?? minStr, 10);
 
-    if (!Number.isNaN(min) && !Number.isNaN(max) && actual >= min && actual <= max) {
+    if (
+      !Number.isNaN(min) &&
+      !Number.isNaN(max) &&
+      actual >= min &&
+      actual <= max
+    ) {
       return { isMismatch: false, expected: expectedRange, actual };
     }
   }
@@ -1331,7 +1682,9 @@ async function verifyParameterCount(
           return {
             isMismatch: false,
             expected:
-              minParamCount === paramCount ? `${paramCount}` : `${minParamCount}-${paramCount}`,
+              minParamCount === paramCount
+                ? `${paramCount}`
+                : `${minParamCount}-${paramCount}`,
             actual,
           };
         }
@@ -1408,18 +1761,39 @@ async function checkImportUsage(
         // Exclude from...import lines (Python)
         if (trimmed.startsWith("from ")) return false;
         // Exclude comment-only lines (JS/TS/Python)
-        if (trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("/*") || trimmed.startsWith("*")) return false;
+        if (
+          trimmed.startsWith("//") ||
+          trimmed.startsWith("#") ||
+          trimmed.startsWith("/*") ||
+          trimmed.startsWith("*")
+        )
+          return false;
         return true;
       })
       .join("\n");
 
     const patterns = [
-      { regex: new RegExp(`\\b${escapedName}\\s*\\(`, "g"), type: "function call" },
-      { regex: new RegExp(`\\b${escapedName}\\.`, "g"), type: "property access" },
-      { regex: new RegExp(`<${escapedName}[\\s/>]`, "g"), type: "JSX component" },
+      {
+        regex: new RegExp(`\\b${escapedName}\\s*\\(`, "g"),
+        type: "function call",
+      },
+      {
+        regex: new RegExp(`\\b${escapedName}\\.`, "g"),
+        type: "property access",
+      },
+      {
+        regex: new RegExp(`<${escapedName}[\\s/>]`, "g"),
+        type: "JSX component",
+      },
       { regex: new RegExp(`\\b${escapedName}\\b`, "g"), type: "reference" },
-      { regex: new RegExp(`type\\s+\\w+.*\\b${escapedName}\\b`, "g"), type: "type usage" },
-      { regex: new RegExp(`as\\s+${escapedName}\\b`, "g"), type: "type assertion" },
+      {
+        regex: new RegExp(`type\\s+\\w+.*\\b${escapedName}\\b`, "g"),
+        type: "type usage",
+      },
+      {
+        regex: new RegExp(`as\\s+${escapedName}\\b`, "g"),
+        type: "type assertion",
+      },
     ];
 
     for (const { regex, type } of patterns) {
@@ -1469,9 +1843,18 @@ async function checkIndirectUsage(
     const content = await fs.readFile(filePath, "utf-8");
 
     const patterns = [
-      { regex: new RegExp(`\\b${functionName}\\b\\s*[,})\\]]`, "g"), pattern: "callback/collection" },
-      { regex: new RegExp(`['"]\\b${functionName}\\b['"]`, "g"), pattern: "string reference" },
-      { regex: new RegExp(`\\.\\b${functionName}\\b`, "g"), pattern: "method assignment" },
+      {
+        regex: new RegExp(`\\b${functionName}\\b\\s*[,})\\]]`, "g"),
+        pattern: "callback/collection",
+      },
+      {
+        regex: new RegExp(`['"]\\b${functionName}\\b['"]`, "g"),
+        pattern: "string reference",
+      },
+      {
+        regex: new RegExp(`\\.\\b${functionName}\\b`, "g"),
+        pattern: "method assignment",
+      },
     ];
 
     for (const { regex, pattern } of patterns) {
@@ -1496,8 +1879,12 @@ async function checkFileImports(
   const fileName = issue.name || issue.file;
 
   // 1. Check reverseImportGraph (resolved imports)
-  const reverseImportGraph: any = (ctx.projectContext as any).reverseImportGraph;
-  if (reverseImportGraph && typeof reverseImportGraph[Symbol.iterator] === "function") {
+  const reverseImportGraph: any = (ctx.projectContext as any)
+    .reverseImportGraph;
+  if (
+    reverseImportGraph &&
+    typeof reverseImportGraph[Symbol.iterator] === "function"
+  ) {
     for (const [absPath, reverseList] of reverseImportGraph as Iterable<
       [string, string[]]
     >) {
@@ -1506,7 +1893,7 @@ async function checkFileImports(
         absPath === fileName ||
         absPath.endsWith(`/${fileName}`) ||
         path.basename(absPath).replace(/\.[^.]+$/, "") ===
-        path.basename(fileName).replace(/\.[^.]+$/, "")
+          path.basename(fileName).replace(/\.[^.]+$/, "")
       ) {
         importers.push(...reverseList);
       }
@@ -1534,10 +1921,16 @@ async function checkFileImports(
     }
   }
 
-  return { isImported: importers.length > 0, importers: [...new Set(importers)] };
+  return {
+    isImported: importers.length > 0,
+    importers: [...new Set(importers)],
+  };
 }
 
-function resolveContextFilePath(filePath: string, ctx: VerificationContext): string | null {
+function resolveContextFilePath(
+  filePath: string,
+  ctx: VerificationContext,
+): string | null {
   if (!filePath) return null;
 
   const files = ctx.projectContext.files;
@@ -1573,7 +1966,11 @@ function resolveContextFilePath(filePath: string, ctx: VerificationContext): str
 async function checkPartiallyUsedModuleExport(
   issue: DeadCodeIssue,
   ctx: VerificationContext,
-): Promise<{ isPartiallyUsed: boolean; importers: string[]; usedExports: string[] }> {
+): Promise<{
+  isPartiallyUsed: boolean;
+  importers: string[];
+  usedExports: string[];
+}> {
   if (issue.type !== "unusedExport") {
     return { isPartiallyUsed: false, importers: [], usedExports: [] };
   }
@@ -1607,7 +2004,11 @@ async function checkPartiallyUsedModuleExport(
   for (const [importerFile, importerInfo] of ctx.projectContext.files) {
     if (importerFile === resolvedFile) continue;
     for (const imp of importerInfo.imports) {
-      const resolvedImport = resolveImport(imp.source, importerFile, allFileKeys);
+      const resolvedImport = resolveImport(
+        imp.source,
+        importerFile,
+        allFileKeys,
+      );
       if (resolvedImport !== resolvedFile) continue;
       importers.add(importerFile);
       for (const sym of imp.namedImports) {
@@ -1626,7 +2027,11 @@ async function checkPartiallyUsedModuleExport(
   ]);
 
   if (exportedNames.size < 2) {
-    return { isPartiallyUsed: false, importers: Array.from(importers), usedExports: [] };
+    return {
+      isPartiallyUsed: false,
+      importers: Array.from(importers),
+      usedExports: [],
+    };
   }
 
   const usedOtherExports = Array.from(exportedNames).filter(
@@ -1638,6 +2043,17 @@ async function checkPartiallyUsedModuleExport(
     importers: Array.from(importers),
     usedExports: usedOtherExports,
   };
+}
+
+function isLikelyModuleSurfaceFile(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, "/").toLowerCase();
+
+  return (
+    /(?:^|\/)index\.(?:ts|tsx|js|jsx|mjs|cjs)$/.test(normalized) ||
+    /(?:^|\/)(?:exports|public-api|api)\.(?:ts|tsx|js|jsx|mjs|cjs)$/.test(
+      normalized,
+    )
+  );
 }
 
 async function checkIfEntryPoint(
@@ -1672,9 +2088,7 @@ async function checkIfEntryPoint(
 // Result Filtering Helpers
 // ============================================================================
 
-export function getConfirmedFindings(
-  result: VerificationResult,
-): {
+export function getConfirmedFindings(result: VerificationResult): {
   hallucinations: ValidationIssue[];
   deadCode: DeadCodeIssue[];
 } {
@@ -1698,7 +2112,10 @@ export function getConfirmedFindings(
     .map((f) => f.original as DeadCodeIssue);
 
   return {
-    hallucinations: [...confirmedHallucinations, ...highConfidenceUncertainHallucinations],
+    hallucinations: [
+      ...confirmedHallucinations,
+      ...highConfidenceUncertainHallucinations,
+    ],
     deadCode: [...confirmedDeadCode, ...highConfidenceUncertainDeadCode],
   };
 }

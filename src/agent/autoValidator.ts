@@ -11,7 +11,11 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import { FileWatcher, FileChangeEvent } from "./fileWatcher.js";
 import { orchestrateContext } from "../context/contextOrchestrator.js";
-import { refreshFileContext, markGuardianActive, markGuardianInactive } from "../context/projectContext.js";
+import {
+  refreshFileContext,
+  markGuardianActive,
+  markGuardianInactive,
+} from "../context/projectContext.js";
 import {
   extractUsagesAST,
   extractImportsAST,
@@ -22,9 +26,7 @@ import {
   loadManifestDependencies,
   loadPythonModuleExports,
 } from "../tools/validation/manifest.js";
-import {
-  extractSymbolsAST,
-} from "../tools/validation/extractors/index.js";
+import { extractSymbolsAST } from "../tools/validation/extractors/index.js";
 import {
   validateManifest,
   validateSymbols,
@@ -32,14 +34,22 @@ import {
   validateUsagePatterns,
   getLineFromCode,
 } from "../tools/validation/validation.js";
-import { detectDeadCode, detectUnusedLocals, shouldSkipFrameworkPattern } from "../tools/validation/deadCode.js";
+import {
+  detectDeadCode,
+  detectUnusedLocals,
+  detectUnusedClassMethods,
+  shouldSkipFrameworkPattern,
+} from "../tools/validation/deadCode.js";
 import { impactAnalyzer } from "../analyzers/impactAnalyzer.js";
 import { logger } from "../utils/logger.js";
 import { shouldExcludeFile } from "../utils/fileFilter.js";
 import { sendNotification } from "./mcpNotifications.js";
 import { ManifestDependencies } from "../tools/validation/types.js";
 import { PROMPT_PATTERNS, VALIDATION_CONSTRAINTS } from "../prompts/library.js";
-import { generateAntiPatternContext, enrichIssuesWithAntiPatterns } from "../analyzers/antiPatterns.js";
+import {
+  generateAntiPatternContext,
+  enrichIssuesWithAntiPatterns,
+} from "../analyzers/antiPatterns.js";
 import {
   verifyFindingsAutomatically,
   getConfirmedFindings,
@@ -66,6 +76,8 @@ export interface ValidationAlert {
   timestamp: number;
   llmMessage: string;
   isInitialScan?: boolean;
+  projectPath?: string;
+  agentName?: string;
 }
 
 export type AgentMode = "auto" | "learning" | "strict";
@@ -94,9 +106,12 @@ export class AutoValidator {
   private static readonly API_CONTRACT_DEBOUNCE_MS = 500; // Match per-file watch debounce feel
   private activeValidationCount: number = 0;
   private validationQueue: Set<string> = new Set();
+  private validatingFiles: Set<string> = new Set();
+  private fileChangeVersions: Map<string, number> = new Map();
+  private fileValidationVersions: Map<string, number> = new Map();
   private activeRefreshCount: number = 0;
-  private static readonly MAX_CONCURRENT_VALIDATIONS = 2;
-  private static readonly MAX_CONCURRENT_REFRESHES = 3;
+  private static readonly MAX_CONCURRENT_VALIDATIONS = 4;
+  private static readonly MAX_CONCURRENT_REFRESHES = 5;
 
   // During guardian initialization, we start the watcher early but buffer events.
   // This prevents missing changes that occur while context/manifest scans are running.
@@ -109,15 +124,34 @@ export class AutoValidator {
 
   // Common path patterns for scope detection
   private static readonly FRONTEND_PATTERNS = [
-    '/frontend/', '/client/', '/web/', '/app/', '/src/',
-    '/components/', '/pages/', '/views/', '/hooks/', '/services/'
+    "/frontend/",
+    "/client/",
+    "/web/",
+    "/app/",
+    "/src/",
+    "/components/",
+    "/pages/",
+    "/views/",
+    "/hooks/",
+    "/services/",
   ];
   private static readonly BACKEND_PATTERNS = [
-    '/backend/', '/server/', '/api/', '/services/',
-    '/routes/', '/routers/', '/controllers/', '/models/', '/db/'
+    "/backend/",
+    "/server/",
+    "/api/",
+    "/services/",
+    "/routes/",
+    "/routers/",
+    "/controllers/",
+    "/models/",
+    "/db/",
   ];
   private static readonly SHARED_PATTERNS = [
-    '/shared/', '/common/', '/types/', '/interfaces/', '/utils/'
+    "/shared/",
+    "/common/",
+    "/types/",
+    "/interfaces/",
+    "/utils/",
   ];
 
   /**
@@ -143,7 +177,7 @@ export class AutoValidator {
     projectPath: string,
     language: string = "typescript",
     mode: AgentMode = "auto",
-    agentName: string = "The Guardian"
+    agentName: string = "The Guardian",
   ) {
     this.projectPath = projectPath;
     this.language = language;
@@ -173,17 +207,54 @@ export class AutoValidator {
     */
 
     // Start watcher early so we don't miss edits during initialization.
-    // Events are buffered until context + manifests are ready.
-    logger.info("Starting file watcher (early, buffered until ready)...");
+    // Validations are allowed immediately so vibe-coding edits are not queued
+    // behind startup scans.
+    logger.info("Starting file watcher (ready immediately)...");
     this.watcher.start();
 
+    // Mark guardian active immediately so context consumers can reuse the cache.
+    markGuardianActive(this.projectPath);
+
+    // Start processing file events right away (no startup buffering delay).
+    this.isInitialized = true;
+
+    // Flush any edge-case buffered events collected before the ready flag flipped.
+    if (this.bufferedEvents.size > 0) {
+      const buffered = Array.from(this.bufferedEvents.values());
+      this.bufferedEvents.clear();
+      for (const ev of buffered) {
+        try {
+          this.handleFileChange(ev);
+        } catch {
+          // Best-effort
+        }
+      }
+    }
+
+    // Continue startup work in the background so watcher responsiveness stays high.
+    void this.bootstrapInBackground();
+
+    // Silent ready status to avoid UI clutter
+    /*
+    await sendNotification("guardian_ready", {
+      message: `✅ ${this.agentName}: Ready and watching ${this.projectFileCount} files!`,
+      fileCount: this.projectFileCount,
+      mode: detectedMode,
+      projectPath: this.projectPath,
+    });
+    */
+  }
+
+  private async bootstrapInBackground(): Promise<void> {
     try {
       // Pre-build context: detect full-stack and use "all" to include every language
       logger.info("Loading project context...");
       this.isFullStack = await this.detectFullStackProject();
       const contextLanguage = this.isFullStack ? "all" : this.language;
       if (this.isFullStack) {
-        logger.info("Full-stack project detected — building unified multi-language context");
+        logger.info(
+          "Full-stack project detected — building unified multi-language context",
+        );
       }
       const orchestration = await orchestrateContext({
         projectPath: this.projectPath,
@@ -192,15 +263,15 @@ export class AutoValidator {
       const context = orchestration.projectContext;
       logger.info("Context built.");
 
-      // Mark this project as guardian-managed — all tools will now
-      // use this cached context without TTL/staleness rebuilds
-      markGuardianActive(this.projectPath);
-
       // Detect project type
       this.projectFileCount = context.files?.size || 0;
       const detectedMode = this.detectProjectMode();
-      logger.info(`VibeGuard Initialized: Found ${this.projectFileCount} files in ${this.projectPath}`);
-      logger.info(`Operating Mode: ${detectedMode} (Language: ${this.isFullStack ? "all (full-stack)" : this.language})`);
+      logger.info(
+        `VibeGuard Initialized: Found ${this.projectFileCount} files in ${this.projectPath}`,
+      );
+      logger.info(
+        `Operating Mode: ${detectedMode} (Language: ${this.isFullStack ? "all (full-stack)" : this.language})`,
+      );
 
       // Load manifests for all detected languages
       logger.info("Loading dependency manifests...");
@@ -213,9 +284,13 @@ export class AutoValidator {
         this.pyManifest = await loadManifestDependencies(pyRoot, "python");
         this.pythonExports = await loadPythonModuleExports(pyRoot);
         // Keep this.manifest as the "primary" for backward compat
-        this.manifest = this.language === "python" ? this.pyManifest : this.tsManifest;
+        this.manifest =
+          this.language === "python" ? this.pyManifest : this.tsManifest;
       } else {
-        this.manifest = await loadManifestDependencies(this.projectPath, this.language);
+        this.manifest = await loadManifestDependencies(
+          this.projectPath,
+          this.language,
+        );
         if (this.language === "python") {
           this.pythonExports = await loadPythonModuleExports(this.projectPath);
         }
@@ -229,39 +304,19 @@ export class AutoValidator {
           logger.error("Error running initial health check:", err);
         });
       } else {
-        logger.info("New project detected - skipping initial health check, entering Learning Mode");
+        logger.info(
+          "New project detected - skipping initial health check, entering Learning Mode",
+        );
         this.pushLearningModeNotification();
       }
     } catch (err) {
       // Keep watcher alive even if initialization partially fails. Without this,
       // buffered events can remain stuck forever and guardian appears "not working".
-      logger.error(`Guardian initialization failed for ${this.projectPath}, continuing in degraded mode:`, err);
+      logger.error(
+        `Guardian initialization failed for ${this.projectPath}, continuing in degraded mode:`,
+        err,
+      );
     }
-
-    // Mark initialized and flush any buffered file change events.
-    this.isInitialized = true;
-    if (this.bufferedEvents.size > 0) {
-      const buffered = Array.from(this.bufferedEvents.values());
-      this.bufferedEvents.clear();
-      logger.info(`Flushing ${buffered.length} buffered file event(s) from initialization window...`);
-      for (const ev of buffered) {
-        try {
-          this.handleFileChange(ev);
-        } catch {
-          // Best-effort
-        }
-      }
-    }
-
-    // Silent ready status to avoid UI clutter
-    /*
-    await sendNotification("guardian_ready", {
-      message: `✅ ${this.agentName}: Ready and watching ${this.projectFileCount} files!`,
-      fileCount: this.projectFileCount,
-      mode: detectedMode,
-      projectPath: this.projectPath,
-    });
-    */
   }
 
   private detectProjectMode(): AgentMode {
@@ -304,14 +359,28 @@ export class AutoValidator {
     }
 
     // Helper to detect language of a subdirectory based on its manifest files
-    const detectDirLanguage = async (dirPath: string): Promise<"python" | "typescript" | "both" | "unknown"> => {
+    const detectDirLanguage = async (
+      dirPath: string,
+    ): Promise<"python" | "typescript" | "both" | "unknown"> => {
       let dirHasPython = false;
       let dirHasTS = false;
       for (const m of ["requirements.txt", "pyproject.toml", "Pipfile"]) {
-        try { await fs.access(path.join(dirPath, m)); dirHasPython = true; break; } catch { /* Not found */ }
+        try {
+          await fs.access(path.join(dirPath, m));
+          dirHasPython = true;
+          break;
+        } catch {
+          /* Not found */
+        }
       }
       for (const m of ["package.json", "tsconfig.json"]) {
-        try { await fs.access(path.join(dirPath, m)); dirHasTS = true; break; } catch { /* Not found */ }
+        try {
+          await fs.access(path.join(dirPath, m));
+          dirHasTS = true;
+          break;
+        } catch {
+          /* Not found */
+        }
       }
       if (dirHasPython && dirHasTS) return "both";
       if (dirHasPython) return "python";
@@ -361,7 +430,9 @@ export class AutoValidator {
         backend: pythonRoot || this.projectPath,
         frontend: tsRoot || this.projectPath,
       };
-      logger.info(`Full-stack structure detected: backend=${pythonRoot || this.projectPath}, frontend=${tsRoot || this.projectPath}`);
+      logger.info(
+        `Full-stack structure detected: backend=${pythonRoot || this.projectPath}, frontend=${tsRoot || this.projectPath}`,
+      );
     }
 
     return hasPython && hasTypeScript;
@@ -373,7 +444,9 @@ export class AutoValidator {
    * For non-full-stack projects, lazily loads the correct manifest if
    * the file language differs from the guardian's start language.
    */
-  private getManifestForLanguage(fileLang: string): ManifestDependencies | null {
+  private getManifestForLanguage(
+    fileLang: string,
+  ): ManifestDependencies | null {
     if (this.isFullStack) {
       if (fileLang === "python") return this.pyManifest;
       return this.tsManifest; // typescript, javascript
@@ -389,7 +462,8 @@ export class AutoValidator {
 
     // Lazy load: file language differs from guardian language.
     // Check if we already lazy-loaded a manifest for this language.
-    if (manifestLang === "typescript" && this.tsManifest) return this.tsManifest;
+    if (manifestLang === "typescript" && this.tsManifest)
+      return this.tsManifest;
     if (manifestLang === "python" && this.pyManifest) return this.pyManifest;
 
     // Schedule lazy load (non-blocking for the current call) and return null
@@ -416,7 +490,9 @@ export class AutoValidator {
     if (manifestLang === "typescript" && this.tsManifest) return;
     if (manifestLang === "python" && this.pyManifest) return;
 
-    logger.info(`Lazy-loading ${manifestLang} manifest (file language differs from guardian language "${this.language}")`);
+    logger.info(
+      `Lazy-loading ${manifestLang} manifest (file language differs from guardian language "${this.language}")`,
+    );
 
     // Fire-and-forget: load in the background so next validation picks it up
     loadManifestDependencies(this.projectPath, manifestLang)
@@ -426,7 +502,9 @@ export class AutoValidator {
         } else if (manifestLang === "python") {
           this.pyManifest = manifest;
         }
-        logger.info(`Lazy-loaded ${manifestLang} manifest: ${manifest.all.size} dependencies`);
+        logger.info(
+          `Lazy-loaded ${manifestLang} manifest: ${manifest.all.size} dependencies`,
+        );
       })
       .catch((err) => {
         logger.warn(`Failed to lazy-load ${manifestLang} manifest:`, err);
@@ -467,8 +545,8 @@ export class AutoValidator {
     for (const pattern of AutoValidator.FRONTEND_PATTERNS) {
       if (normalizedPath.includes(pattern)) {
         // But make sure it's not in a backend directory
-        const isBackend = AutoValidator.BACKEND_PATTERNS.some(p =>
-          normalizedPath.includes(p)
+        const isBackend = AutoValidator.BACKEND_PATTERNS.some((p) =>
+          normalizedPath.includes(p),
         );
         if (!isBackend) {
           return "frontend";
@@ -484,13 +562,16 @@ export class AutoValidator {
     }
 
     // Detect by file extension and content patterns
-    if (filePath.endsWith('.tsx') || filePath.endsWith('.jsx')) {
+    if (filePath.endsWith(".tsx") || filePath.endsWith(".jsx")) {
       return "frontend";
     }
 
-    if (filePath.endsWith('.py') && !filePath.includes('test')) {
+    if (filePath.endsWith(".py") && !filePath.includes("test")) {
       // Check if it's clearly a backend file
-      if (normalizedPath.includes('main.py') || normalizedPath.includes('app.py')) {
+      if (
+        normalizedPath.includes("main.py") ||
+        normalizedPath.includes("app.py")
+      ) {
         return "backend";
       }
     }
@@ -505,65 +586,70 @@ export class AutoValidator {
   private filterIssuesByScope(
     issues: any[],
     fileScope: FileScope,
-    isLenient: boolean
+    isLenient: boolean,
   ): any[] {
     if (isLenient) {
       // In lenient mode, show critical/high severity issues
       // PLUS keep issue types that the later lenient filter explicitly preserves:
       // - unusedImport, unusedFunction, unusedExport (per-file code hygiene)
       // - dependencyHallucination, missingDependency (build-breaking or suspicious)
-      return issues.filter(issue =>
-        issue.severity === 'critical' ||
-        issue.severity === 'high' ||
-        issue.type === 'unusedImport' ||
-        issue.type === 'unusedFunction' ||
-        issue.type === 'unusedExport' ||
-        issue.type === 'dependencyHallucination' ||
-        issue.type === 'missingDependency'
+      return issues.filter(
+        (issue) =>
+          issue.severity === "critical" ||
+          issue.severity === "high" ||
+          issue.type === "unusedImport" ||
+          issue.type === "unusedFunction" ||
+          issue.type === "unusedExport" ||
+          issue.type === "dependencyHallucination" ||
+          issue.type === "missingDependency",
       );
     }
 
-    return issues.filter(issue => {
+    return issues.filter((issue) => {
       // Always show critical issues
-      if (issue.severity === 'critical') return true;
+      if (issue.severity === "critical") return true;
 
       // Always show API contract mismatches (they affect both sides)
-      if (issue.type === 'apiContractMismatch') return true;
+      if (issue.type === "apiContractMismatch") return true;
 
       // Always show dead-code hygiene findings (local unuseds) regardless of scope.
       // These are high-signal and should not be dropped by scope heuristics.
-      if (issue.type === 'unusedFunction' || issue.type === 'unusedExport' || issue.type === 'orphanedFile') {
+      if (
+        issue.type === "unusedFunction" ||
+        issue.type === "unusedExport" ||
+        issue.type === "orphanedFile"
+      ) {
         return true;
       }
 
       // For high severity, show if relevant to scope
-      if (issue.severity === 'high') {
+      if (issue.severity === "high") {
         // If we can't determine scope, show all high severity
-        if (fileScope === 'unknown') return true;
+        if (fileScope === "unknown") return true;
 
         // Dead code in shared files affects everyone
-        if (issue.type === 'deadCode' && fileScope === 'shared') return true;
+        if (issue.type === "deadCode" && fileScope === "shared") return true;
 
         // Unused imports are always relevant
-        if (issue.type === 'unusedImport') return true;
+        if (issue.type === "unusedImport") return true;
 
         return true; // Show other high severity issues
       }
 
       // For medium/low severity, be more selective
-      if (fileScope === 'frontend') {
+      if (fileScope === "frontend") {
         // In frontend files, prioritize frontend-specific issues
-        if (issue.type === 'unusedImport') return true;
-        if (issue.type === 'nonExistentFunction') return true;
-        if (issue.type === 'nonExistentMethod') return true;
+        if (issue.type === "unusedImport") return true;
+        if (issue.type === "nonExistentFunction") return true;
+        if (issue.type === "nonExistentMethod") return true;
         return false; // Filter out less relevant issues
       }
 
-      if (fileScope === 'backend') {
+      if (fileScope === "backend") {
         // In backend files, prioritize backend-specific issues
-        if (issue.type === 'unusedImport') return true;
-        if (issue.type === 'nonExistentFunction') return true;
-        if (issue.type === 'nonExistentMethod') return true;
+        if (issue.type === "unusedImport") return true;
+        if (issue.type === "nonExistentFunction") return true;
+        if (issue.type === "nonExistentMethod") return true;
         return false;
       }
 
@@ -578,18 +664,19 @@ export class AutoValidator {
    * guardian filtering behavior without needing to run the file watcher.
    */
   static applyLenientModeFiltering(allIssues: any[]): any[] {
-    return allIssues.filter((i) =>
-      i.severity === "critical" ||
-      i.severity === "high" ||
-      // Keep common, high-signal hygiene findings
-      i.type === "unusedImport" ||
-      i.type === "unusedFunction" ||
-      i.type === "unusedExport" ||
-      // Keep method-call hallucinations in learning mode
-      i.type === "nonExistentMethod" ||
-      // Keep dependency issues even if low severity (important during vibecoding)
-      i.type === "dependencyHallucination" ||
-      i.type === "missingDependency",
+    return allIssues.filter(
+      (i) =>
+        i.severity === "critical" ||
+        i.severity === "high" ||
+        // Keep common, high-signal hygiene findings
+        i.type === "unusedImport" ||
+        i.type === "unusedFunction" ||
+        i.type === "unusedExport" ||
+        // Keep method-call hallucinations in learning mode
+        i.type === "nonExistentMethod" ||
+        // Keep dependency issues even if low severity (important during vibecoding)
+        i.type === "dependencyHallucination" ||
+        i.type === "missingDependency",
     );
   }
 
@@ -600,6 +687,8 @@ export class AutoValidator {
       timestamp: Date.now(),
       llmMessage: `📚 **${this.agentName}: Learning Mode Active**\n\nThis appears to be a new project (${this.projectFileCount} files). I'll be lenient and learn your patterns as you build.\n\nOnce you have more than ${AutoValidator.LEARNING_MODE_FILE_COUNT} files, I'll switch to strict validation.`,
       isInitialScan: true,
+      projectPath: this.projectPath,
+      agentName: this.agentName,
     };
 
     if (this.onAlert) {
@@ -622,11 +711,15 @@ export class AutoValidator {
             message: issue.message,
             suggestion: issue.suggestion,
             line: issue.line,
-            file: issue.file ? path.relative(this.projectPath, issue.file) : undefined,
+            file: issue.file
+              ? path.relative(this.projectPath, issue.file)
+              : undefined,
           })),
           timestamp: Date.now(),
           llmMessage: this.createApiContractMessage(apiContractResult),
           isInitialScan: true,
+          projectPath: this.projectPath,
+          agentName: this.agentName,
         };
 
         logger.info(
@@ -636,6 +729,16 @@ export class AutoValidator {
         if (this.onAlert) {
           this.onAlert(apiContractAlert);
         }
+      } else if (this.onAlert) {
+        this.onAlert({
+          file: this.getApiContractAlertKey(),
+          issues: [],
+          timestamp: Date.now(),
+          llmMessage: `🔗 **${this.agentName}: API Contract Validation**\n\nNo API contract issues found in initial scan.`,
+          isInitialScan: true,
+          projectPath: this.projectPath,
+          agentName: this.agentName,
+        });
       }
 
       // Run dead code detection on existing codebase
@@ -644,13 +747,21 @@ export class AutoValidator {
       if (this.isFullStack && this.projectStructure) {
         const backendRoot = this.projectStructure.backend!;
         const frontendRoot = this.projectStructure.frontend!;
-        logger.info(`Running dead code detection per-scope: backend=${backendRoot}, frontend=${frontendRoot}`);
+        logger.info(
+          `Running dead code detection per-scope: backend=${backendRoot}, frontend=${frontendRoot}`,
+        );
         const [backendDead, frontendDead] = await Promise.all([
-          detectDeadCode(context, undefined, (fp) => fp.startsWith(backendRoot)),
-          detectDeadCode(context, undefined, (fp) => fp.startsWith(frontendRoot)),
+          detectDeadCode(context, undefined, (fp) =>
+            fp.startsWith(backendRoot),
+          ),
+          detectDeadCode(context, undefined, (fp) =>
+            fp.startsWith(frontendRoot),
+          ),
         ]);
         deadCodeIssues = [...backendDead, ...frontendDead];
-        logger.info(`Dead code per-scope: backend=${backendDead.length}, frontend=${frontendDead.length}`);
+        logger.info(
+          `Dead code per-scope: backend=${backendDead.length}, frontend=${frontendDead.length}`,
+        );
       } else {
         deadCodeIssues = await detectDeadCode(context);
       }
@@ -660,7 +771,9 @@ export class AutoValidator {
       let confirmedDeadCode = deadCodeIssues;
       const verifyLang = this.isFullStack ? "all" : this.language;
       if (deadCodeIssues.length > 0) {
-        logger.debug(`Verifying ${deadCodeIssues.length} dead code findings...`);
+        logger.debug(
+          `Verifying ${deadCodeIssues.length} dead code findings...`,
+        );
         const verificationResult = await verifyFindingsAutomatically(
           [],
           deadCodeIssues,
@@ -669,7 +782,9 @@ export class AutoValidator {
           verifyLang,
         );
         confirmedDeadCode = getConfirmedFindings(verificationResult).deadCode;
-        logger.debug(`Verification complete: ${confirmedDeadCode.length} confirmed (filtered ${verificationResult.stats.falsePositiveCount} false positives)`);
+        logger.debug(
+          `Verification complete: ${confirmedDeadCode.length} confirmed (filtered ${verificationResult.stats.falsePositiveCount} false positives)`,
+        );
       }
 
       if (confirmedDeadCode.length > 0) {
@@ -681,20 +796,37 @@ export class AutoValidator {
             message: dc.message,
             suggestion: (dc as any).suggestion,
             line: (dc as any).line,
-            file: (dc as any).file ? path.relative(this.projectPath, (dc as any).file) : undefined,
+            file: (dc as any).file
+              ? path.relative(this.projectPath, (dc as any).file)
+              : undefined,
           })),
           timestamp: Date.now(),
           llmMessage: this.createInitialScanMessage(confirmedDeadCode),
           isInitialScan: true,
+          projectPath: this.projectPath,
+          agentName: this.agentName,
         };
 
-        logger.info(`Initial scan found ${confirmedDeadCode.length} confirmed issues in existing codebase`);
+        logger.info(
+          `Initial scan found ${confirmedDeadCode.length} confirmed issues in existing codebase`,
+        );
 
         if (this.onAlert) {
           this.onAlert(alert);
         }
       } else {
         logger.info("Initial scan: No issues found in existing codebase");
+        if (this.onAlert) {
+          this.onAlert({
+            file: "INITIAL_SCAN",
+            issues: [],
+            timestamp: Date.now(),
+            llmMessage: `📋 **${this.agentName}: Initial Scan Complete** - No existing dead-code issues found.`,
+            isInitialScan: true,
+            projectPath: this.projectPath,
+            agentName: this.agentName,
+          });
+        }
       }
 
       // Phase 3: Per-file hallucination and local dead code scan
@@ -714,7 +846,10 @@ export class AutoValidator {
         projectPath: this.projectPath,
         language: contextLanguage,
       });
-      const symbolTable = buildSymbolTable(orchestrationForSymbols.projectContext, orchestrationForSymbols.relevantSymbols);
+      const symbolTable = buildSymbolTable(
+        orchestrationForSymbols.projectContext,
+        orchestrationForSymbols.relevantSymbols,
+      );
 
       const detectedMode = this.detectProjectMode();
       const strictModeForInitialScan = detectedMode === "strict";
@@ -725,11 +860,11 @@ export class AutoValidator {
       let filesScanned = 0;
 
       // Scan most-recently-modified files first.
-      const orderedFiles = (Array.from(
-        (context.files as Map<string, any>).entries(),
-      ) as Array<[string, any]>).sort(
-        (a, b) => (b[1].lastModified || 0) - (a[1].lastModified || 0),
-      );
+      const orderedFiles = (
+        Array.from((context.files as Map<string, any>).entries()) as Array<
+          [string, any]
+        >
+      ).sort((a, b) => (b[1].lastModified || 0) - (a[1].lastModified || 0));
 
       for (const [filePath, fileInfo] of orderedFiles) {
         if (filesScanned >= MAX_INITIAL_FILES_TO_SCAN) break;
@@ -753,7 +888,13 @@ export class AutoValidator {
           const imports = extractImportsAST(content, fileLang);
           const fileManifest = this.getManifestForLanguage(fileLang);
           if (fileManifest) {
-            const manifestIssues = await validateManifest(imports, fileManifest, content, fileLang, filePath);
+            const manifestIssues = await validateManifest(
+              imports,
+              fileManifest,
+              content,
+              fileLang,
+              filePath,
+            );
             for (const issue of manifestIssues) {
               // Attach file path so the verifier can read the file
               issue.file = filePath;
@@ -764,10 +905,12 @@ export class AutoValidator {
           // Tier 1: Symbol validation — catches hallucinated bare function calls
           // (e.g., reportInventoryMetricsToCloud(), dispatchSystemDiagnostics())
           // These are NOT imports, so validateManifest can't catch them.
-          const usages = extractUsagesAST(content, fileLang, imports, { filePath });
+          const usages = extractUsagesAST(content, fileLang, imports, {
+            filePath,
+          });
           const typeReferences =
-            fileLang === "typescript" || fileLang === "javascript" ?
-              extractTypeReferencesAST(content, fileLang, { filePath })
+            fileLang === "typescript" || fileLang === "javascript"
+              ? extractTypeReferencesAST(content, fileLang, { filePath })
               : [];
           const symbolIssues = validateSymbols(
             usages,
@@ -790,17 +933,35 @@ export class AutoValidator {
           // Tier 2: Local dead code — catches unused non-exported functions/constants
           const localDeadCode = detectUnusedLocals(content, filePath);
           perFileDeadCode.push(...localDeadCode);
+
+          // Tier 2b: Class method dead code — catches methods on exported singletons
+          // that are never called across the project (e.g. spoonacularService.getRecipeNutrition).
+          // detectUnusedLocals hard-skips sym.type === "method"; detectDeadCode only tracks
+          // top-level exported symbols — so this cross-file instance-method check fills the gap.
+          const classMethodDeadCode = await detectUnusedClassMethods(
+            content,
+            filePath,
+            context,
+          );
+          perFileDeadCode.push(...classMethodDeadCode);
         } catch (err) {
           logger.debug(`Skipping initial scan of ${filePath}: ${err}`);
         }
       }
 
-      logger.info(`Per-file scan complete: ${filesScanned} files, ${perFileHallucinations.length} hallucinations, ${perFileDeadCode.length} local dead code`);
+      logger.info(
+        `Per-file scan complete: ${filesScanned} files, ${perFileHallucinations.length} hallucinations, ${perFileDeadCode.length} local dead code`,
+      );
 
       // Verify per-file findings to eliminate false positives
       const allPerFileFindings = [...perFileHallucinations, ...perFileDeadCode];
+      let confirmedPerFileHallucinations: any[] = [];
+      let confirmedPerFileDeadCode: any[] = [];
+
       if (allPerFileFindings.length > 0) {
-        logger.debug(`Verifying ${allPerFileFindings.length} per-file findings...`);
+        logger.debug(
+          `Verifying ${allPerFileFindings.length} per-file findings...`,
+        );
         const perFileVerification = await verifyFindingsAutomatically(
           perFileHallucinations,
           perFileDeadCode,
@@ -809,8 +970,15 @@ export class AutoValidator {
           verifyLang,
         );
         const confirmedPerFile = getConfirmedFindings(perFileVerification);
-        const confirmedPerFileAll = [...confirmedPerFile.hallucinations, ...confirmedPerFile.deadCode];
-        logger.debug(`Per-file verification: ${confirmedPerFileAll.length} confirmed (filtered ${perFileVerification.stats.falsePositiveCount} false positives)`);
+        confirmedPerFileHallucinations = confirmedPerFile.hallucinations;
+        confirmedPerFileDeadCode = confirmedPerFile.deadCode;
+        const confirmedPerFileAll = [
+          ...confirmedPerFileHallucinations,
+          ...confirmedPerFileDeadCode,
+        ];
+        logger.debug(
+          `Per-file verification: ${confirmedPerFileAll.length} confirmed (filtered ${perFileVerification.stats.falsePositiveCount} false positives)`,
+        );
 
         if (confirmedPerFileAll.length > 0) {
           const perFileAlert: ValidationAlert = {
@@ -821,18 +989,43 @@ export class AutoValidator {
               message: issue.message || "",
               suggestion: issue.suggestion,
               line: issue.line,
-              file: issue.file ? path.relative(this.projectPath, issue.file) : undefined,
+              file: issue.file
+                ? path.relative(this.projectPath, issue.file)
+                : undefined,
             })),
             timestamp: Date.now(),
-            llmMessage: this.createPerFileScanMessage(confirmedPerFile.hallucinations, confirmedPerFile.deadCode),
+            llmMessage: this.createPerFileScanMessage(
+              confirmedPerFileHallucinations,
+              confirmedPerFileDeadCode,
+            ),
             isInitialScan: true,
+            projectPath: this.projectPath,
+            agentName: this.agentName,
           };
 
-          logger.info(`Per-file scan found ${confirmedPerFileAll.length} confirmed issues`);
+          logger.info(
+            `Per-file scan found ${confirmedPerFileAll.length} confirmed issues`,
+          );
           if (this.onAlert) {
             this.onAlert(perFileAlert);
           }
         }
+      }
+
+      const confirmedPerFileAll = [
+        ...confirmedPerFileHallucinations,
+        ...confirmedPerFileDeadCode,
+      ];
+      if (confirmedPerFileAll.length === 0 && this.onAlert) {
+        this.onAlert({
+          file: "INITIAL_FILE_SCAN",
+          issues: [],
+          timestamp: Date.now(),
+          llmMessage: `🔍 **${this.agentName}: Per-File Scan Complete**\n\nNo hallucination or local dead-code issues found in initial scan.`,
+          isInitialScan: true,
+          projectPath: this.projectPath,
+          agentName: this.agentName,
+        });
       }
     } catch (err) {
       logger.error("Error running initial health check:", err);
@@ -843,7 +1036,10 @@ export class AutoValidator {
     return `📋 **${this.agentName}: Initial Scan Complete** - Found **${deadCodeIssues.length} potential issues** in existing codebase. Use 'get_guardian_alerts' to see details.`;
   }
 
-  private createPerFileScanMessage(hallucinations: any[], deadCode: any[]): string {
+  private createPerFileScanMessage(
+    hallucinations: any[],
+    deadCode: any[],
+  ): string {
     const parts: string[] = [];
     parts.push(`🔍 **${this.agentName}: Per-File Scan Complete**`);
     parts.push("");
@@ -852,7 +1048,9 @@ export class AutoValidator {
       parts.push(`**${hallucinations.length} Hallucinated Import(s):**`);
       for (const h of hallucinations.slice(0, 5)) {
         const relFile = path.relative(this.projectPath, h.file || "");
-        parts.push(`- [${h.severity?.toUpperCase()}] ${h.message}${relFile ? ` in \`${relFile}\`` : ""}`);
+        parts.push(
+          `- [${h.severity?.toUpperCase()}] ${h.message}${relFile ? ` in \`${relFile}\`` : ""}`,
+        );
         if (h.suggestion) parts.push(`  Suggestion: ${h.suggestion}`);
       }
       if (hallucinations.length > 5) {
@@ -862,10 +1060,14 @@ export class AutoValidator {
     }
 
     if (deadCode.length > 0) {
-      parts.push(`**${deadCode.length} Unused Local Function(s)/Constant(s):**`);
+      parts.push(
+        `**${deadCode.length} Unused Local Function(s)/Constant(s):**`,
+      );
       for (const dc of deadCode.slice(0, 5)) {
         const relFile = path.relative(this.projectPath, dc.file || "");
-        parts.push(`- [${dc.severity?.toUpperCase()}] ${dc.message}${relFile ? ` in \`${relFile}\`` : ""}`);
+        parts.push(
+          `- [${dc.severity?.toUpperCase()}] ${dc.message}${relFile ? ` in \`${relFile}\`` : ""}`,
+        );
       }
       if (deadCode.length > 5) {
         parts.push(`  ... and ${deadCode.length - 5} more`);
@@ -878,7 +1080,20 @@ export class AutoValidator {
     return parts.join("\n");
   }
 
-  private createApiContractMessage(result: { issues: ApiContractIssue[]; summary: { totalIssues: number; critical: number; high: number; medium: number; low: number; matchedEndpoints: number; matchedTypes: number; unmatchedFrontend: number; unmatchedBackend: number; }; }): string {
+  private createApiContractMessage(result: {
+    issues: ApiContractIssue[];
+    summary: {
+      totalIssues: number;
+      critical: number;
+      high: number;
+      medium: number;
+      low: number;
+      matchedEndpoints: number;
+      matchedTypes: number;
+      unmatchedFrontend: number;
+      unmatchedBackend: number;
+    };
+  }): string {
     const lines: string[] = [];
     lines.push(`🔗 **${this.agentName}: API Contract Validation**`);
     lines.push("");
@@ -894,7 +1109,9 @@ export class AutoValidator {
 
     if (result.summary.critical > 0) {
       lines.push("**Critical Issues (Fix Immediately):**");
-      const critical = result.issues.filter((i: ApiContractIssue) => i.severity === "critical").slice(0, 3);
+      const critical = result.issues
+        .filter((i: ApiContractIssue) => i.severity === "critical")
+        .slice(0, 3);
       critical.forEach((issue: ApiContractIssue) => {
         lines.push(`- ${issue.message}`);
         lines.push(`  Suggestion: ${issue.suggestion}`);
@@ -921,12 +1138,20 @@ export class AutoValidator {
     return `API_CONTRACT_SCAN:${this.agentName}`;
   }
 
-  private isApiContractRelevantChange(filePath: string, fileLang: string, content: string): boolean {
+  private isApiContractRelevantChange(
+    filePath: string,
+    fileLang: string,
+    content: string,
+  ): boolean {
     const normalized = filePath.toLowerCase();
     if (!/\.(py|ts|tsx|js|jsx)$/.test(normalized)) return false;
 
     // Directory heuristics (routes, services, schemas, types, etc.)
-    if (/(?:\/(routes|routers|controllers|services|api|schemas|models|dto|types|interfaces|clients|hooks|lib)\/)/i.test(normalized)) {
+    if (
+      /(?:\/(routes|routers|controllers|services|api|schemas|models|dto|types|interfaces|clients|hooks|lib)\/)/i.test(
+        normalized,
+      )
+    ) {
       return true;
     }
 
@@ -942,7 +1167,9 @@ export class AutoValidator {
     // Content heuristics for direct HTTP calls and route declarations
     if (
       (fileLang === "typescript" || fileLang === "javascript") &&
-      /\b(fetch\s*\(|axios\.|ApiService\.|api\.(get|post|put|patch|delete)\b|app\.(get|post|put|patch|delete)\b|router\.(get|post|put|patch|delete)\b)/.test(content)
+      /\b(fetch\s*\(|axios\.|ApiService\.|api\.(get|post|put|patch|delete)\b|app\.(get|post|put|patch|delete)\b|router\.(get|post|put|patch|delete)\b)/.test(
+        content,
+      )
     ) {
       return true;
     }
@@ -1001,7 +1228,9 @@ export class AutoValidator {
 
   private async runApiContractValidation(triggerFile: string): Promise<void> {
     this.lastApiContractValidation = Date.now();
-    logger.info(`API file changed, triggering contract validation [${this.agentName}]: ${triggerFile}`);
+    logger.info(
+      `API file changed, triggering contract validation [${this.agentName}]: ${triggerFile}`,
+    );
 
     const apiContractResult = await validateApiContracts(this.projectPath);
     const apiContractAlert: ValidationAlert = {
@@ -1012,11 +1241,15 @@ export class AutoValidator {
         message: issue.message,
         suggestion: issue.suggestion,
         line: issue.line,
-        file: issue.file ? path.relative(this.projectPath, issue.file) : undefined,
+        file: issue.file
+          ? path.relative(this.projectPath, issue.file)
+          : undefined,
       })),
       timestamp: Date.now(),
       llmMessage: this.createApiContractMessage(apiContractResult),
       isInitialScan: false,
+      projectPath: this.projectPath,
+      agentName: this.agentName,
     };
 
     if (this.onAlert) {
@@ -1028,6 +1261,10 @@ export class AutoValidator {
     this.watcher.stop();
     this.debounceTimers.forEach((timer) => clearTimeout(timer));
     this.debounceTimers.clear();
+    this.validationQueue.clear();
+    this.validatingFiles.clear();
+    this.fileChangeVersions.clear();
+    this.fileValidationVersions.clear();
     if (this.apiContractValidationTimer) {
       clearTimeout(this.apiContractValidationTimer);
       this.apiContractValidationTimer = null;
@@ -1041,11 +1278,16 @@ export class AutoValidator {
     // The file watcher already has ignore patterns, but this catches edge cases.
     if (shouldExcludeFile(event.path)) return;
 
+    const nextVersion = (this.fileChangeVersions.get(event.path) || 0) + 1;
+    this.fileChangeVersions.set(event.path, nextVersion);
+
     // If initialization is still running, buffer the latest event per path.
     // This avoids missing real-time edits made immediately after start_guardian returns.
     if (!this.isInitialized) {
       this.bufferedEvents.set(event.path, event);
-      logger.debug(`Buffered file event during init: ${event.type} ${event.path}`);
+      logger.debug(
+        `Buffered file event during init: ${event.type} ${event.path}`,
+      );
       return;
     }
 
@@ -1065,22 +1307,31 @@ export class AutoValidator {
       this.newFilesTracked.add(event.path);
       this.projectFileCount++;
 
-      logger.debug(`New file detected: ${event.path} (${fileLang}) - refreshing context...`);
+      logger.debug(
+        `New file detected: ${event.path} (${fileLang}) - refreshing context...`,
+      );
       refreshPromise = this.throttledRefresh(event.path, refreshLang);
 
       // Check if we should exit learning mode
-      if (this.mode === "auto" && this.projectFileCount >= AutoValidator.LEARNING_MODE_FILE_COUNT) {
+      if (
+        this.mode === "auto" &&
+        this.projectFileCount >= AutoValidator.LEARNING_MODE_FILE_COUNT
+      ) {
         // Only switch if we were previously in learning mode (implied by auto + threshold)
         // But for simplicity, we just let the next detectProjectMode call handle it
       }
     } else if (event.type === "change") {
-      logger.debug(`File modified: ${event.path} (${fileLang}) - refreshing context...`);
+      logger.debug(
+        `File modified: ${event.path} (${fileLang}) - refreshing context...`,
+      );
       refreshPromise = this.throttledRefresh(event.path, refreshLang);
     } else if (event.type === "unlink") {
       this.newFilesTracked.delete(event.path);
       this.projectFileCount = Math.max(0, this.projectFileCount - 1);
 
-      logger.debug(`File deleted: ${event.path} (${fileLang}) - removing from context...`);
+      logger.debug(
+        `File deleted: ${event.path} (${fileLang}) - removing from context...`,
+      );
       refreshPromise = this.throttledRefresh(event.path, refreshLang);
 
       // File is deleted — emit a clear alert immediately instead of trying to validate.
@@ -1092,6 +1343,8 @@ export class AutoValidator {
           issues: [],
           timestamp: Date.now(),
           llmMessage: `🗑️ ${this.agentName}: File deleted - ${relativePath}. Issues cleared.`,
+          projectPath: this.projectPath,
+          agentName: this.agentName,
         };
         this.onAlert(clearAlert);
       }
@@ -1112,9 +1365,9 @@ export class AutoValidator {
     }
 
     const timer = setTimeout(() => {
-      this.enqueueValidation(event.path);
+      this.enqueueValidation(event.path, nextVersion);
       this.debounceTimers.delete(event.path);
-    }, 500);
+    }, 150);
 
     this.debounceTimers.set(event.path, timer);
   }
@@ -1124,14 +1377,20 @@ export class AutoValidator {
    * Without this, 30 file changes = 30 concurrent refreshes, each spawning
    * git subprocesses and writing to disk simultaneously.
    */
-  private async throttledRefresh(filePath: string, language: string): Promise<void> {
+  private async throttledRefresh(
+    filePath: string,
+    language: string,
+  ): Promise<void> {
     // Wait if too many refreshes are already running
     while (this.activeRefreshCount >= AutoValidator.MAX_CONCURRENT_REFRESHES) {
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
     this.activeRefreshCount++;
     try {
-      await refreshFileContext(this.projectPath, filePath, { language });
+      await refreshFileContext(this.projectPath, filePath, {
+        language,
+        deferGraphRebuild: true,
+      });
     } catch (err) {
       logger.warn(`Failed to refresh context for ${filePath}:`, err);
     } finally {
@@ -1144,42 +1403,94 @@ export class AutoValidator {
    * Without this, N concurrent validateFile calls each spawn git subprocesses,
    * AST parsing, and verification — causing a subprocess storm that can hang the system.
    */
-  private enqueueValidation(filePath: string): void {
-    if (this.activeValidationCount >= AutoValidator.MAX_CONCURRENT_VALIDATIONS) {
+  private enqueueValidation(filePath: string, requestedVersion?: number): void {
+    const latestVersion = this.fileChangeVersions.get(filePath) || 0;
+    const targetVersion =
+      requestedVersion !== undefined
+        ? Math.max(requestedVersion, latestVersion)
+        : latestVersion;
+
+    this.fileValidationVersions.set(filePath, targetVersion);
+
+    if (this.validatingFiles.has(filePath)) {
       this.validationQueue.add(filePath);
       return;
     }
-    this.runValidation(filePath);
+
+    if (
+      this.activeValidationCount >= AutoValidator.MAX_CONCURRENT_VALIDATIONS
+    ) {
+      this.validationQueue.add(filePath);
+      return;
+    }
+    this.runValidation(filePath, targetVersion);
   }
 
-  private async runValidation(filePath: string): Promise<void> {
+  private async runValidation(
+    filePath: string,
+    targetVersion: number,
+  ): Promise<void> {
     this.activeValidationCount++;
+    this.validatingFiles.add(filePath);
     try {
-      await this.validateFile(filePath);
+      await this.validateFile(filePath, false, targetVersion);
     } finally {
       this.activeValidationCount--;
+      this.validatingFiles.delete(filePath);
       this.processValidationQueue();
     }
   }
 
   private processValidationQueue(): void {
-    // Drain queue up to concurrency limit
-    while (this.validationQueue.size > 0 && this.activeValidationCount < AutoValidator.MAX_CONCURRENT_VALIDATIONS) {
-      const next = this.validationQueue.values().next().value;
-      if (!next) break;
+    if (
+      this.activeValidationCount >= AutoValidator.MAX_CONCURRENT_VALIDATIONS ||
+      this.validationQueue.size === 0
+    ) {
+      return;
+    }
+
+    const queuedFiles = Array.from(this.validationQueue.values());
+    for (const next of queuedFiles) {
+      if (
+        this.activeValidationCount >= AutoValidator.MAX_CONCURRENT_VALIDATIONS
+      ) {
+        break;
+      }
+      if (this.validatingFiles.has(next)) {
+        continue;
+      }
+
       this.validationQueue.delete(next);
-      this.runValidation(next);
+      const latestVersion =
+        this.fileValidationVersions.get(next) ||
+        this.fileChangeVersions.get(next) ||
+        0;
+      this.runValidation(next, latestVersion);
     }
   }
 
-  private async validateFile(filePath: string): Promise<void> {
+  private async validateFile(
+    filePath: string,
+    awaitApiContractValidation: boolean = true,
+    targetVersion: number =
+      this.fileValidationVersions.get(filePath) ||
+      this.fileChangeVersions.get(filePath) ||
+      0,
+  ): Promise<void> {
     try {
-      // Wait for ALL pending context refreshes to complete before validating.
-      // This prevents race conditions where validation runs on stale/partial context
-      // (e.g., reverseImportGraph missing entries because refreshFileContext hasn't finished).
-      if (this.pendingRefreshes.size > 0) {
-        logger.debug(`Waiting for ${this.pendingRefreshes.size} pending context refreshes...`);
-        await Promise.all(this.pendingRefreshes.values());
+      // Wait only for THIS file's own context refresh, not all pending refreshes.
+      // Waiting for every in-flight refresh (e.g. 5 simultaneous agent edits) was
+      // the primary head-of-line-blocking bottleneck in multi-agent vibe-coding:
+      // file E's validation would stall until files A-D finished refreshing, even
+      // though those refreshes updated unrelated parts of the context.
+      // Each file's reverseImportGraph entry is updated by its own refresh, so
+      // awaiting only the current file's refresh is sufficient for correctness.
+      const ownRefresh = this.pendingRefreshes.get(filePath);
+      if (ownRefresh) {
+        logger.debug(
+          `Waiting for own context refresh: ${path.relative(this.projectPath, filePath)}`,
+        );
+        await ownRefresh;
       }
 
       const isNewFile = this.newFilesTracked.has(filePath);
@@ -1203,20 +1514,31 @@ export class AutoValidator {
       const content = await fs.readFile(filePath, "utf-8");
       const relativePath = path.relative(this.projectPath, filePath);
 
-      logger.info(`Auto-validating (${isLenient ? "Lenient" : "Strict"}) [${fileLang}]: ${relativePath}`);
+      logger.info(
+        `Auto-validating (${isLenient ? "Lenient" : "Strict"}) [${fileLang}]: ${relativePath}`,
+      );
 
       // Trigger API contract validation for API-relevant files. Includes routes,
       // schemas/models/types, direct fetch/axios usage, and entry API files.
       // Use trailing debounce so rapid edits still produce a follow-up scan.
-      const isApiFile = this.isApiContractRelevantChange(filePath, fileLang, content);
+      const isApiFile = this.isApiContractRelevantChange(
+        filePath,
+        fileLang,
+        content,
+      );
       if (isApiFile) {
         this.scheduleApiContractValidation(relativePath);
+        if (awaitApiContractValidation) {
+          await this.runQueuedApiContractValidation();
+        }
       }
 
       // Use orchestrateContext with "all" for full-stack, or the FILE's language
       // so that TSX changes are validated against a TypeScript-aware context
       // even if the guardian was started with a different language.
-      const contextLanguage = this.isFullStack ? "all" : this.resolveContextLanguage(fileLang);
+      const contextLanguage = this.isFullStack
+        ? "all"
+        : this.resolveContextLanguage(fileLang);
       const orchestration = await orchestrateContext({
         projectPath: this.projectPath,
         language: contextLanguage,
@@ -1228,21 +1550,32 @@ export class AutoValidator {
       const imports = extractImportsASTWithOptions(content, fileLang, {
         filePath,
       });
-      const usedSymbols = extractUsagesAST(content, fileLang, imports, { filePath });
-      const symbolTable = buildSymbolTable(context, orchestration.relevantSymbols);
+      const usedSymbols = extractUsagesAST(content, fileLang, imports, {
+        filePath,
+      });
+      const symbolTable = buildSymbolTable(
+        context,
+        orchestration.relevantSymbols,
+      );
 
       // Extract type references for unused import detection
       // This is essential for TypeScript where imports might only be used as types
       const typeReferences =
-        fileLang === "typescript" || fileLang === "javascript" ?
-          extractTypeReferencesAST(content, fileLang, { filePath })
+        fileLang === "typescript" || fileLang === "javascript"
+          ? extractTypeReferencesAST(content, fileLang, { filePath })
           : [];
 
       // Tier 0: Check manifest dependencies (use the correct manifest for this file's language)
       let manifestIssues: any[] = [];
       const fileManifest = this.getManifestForLanguage(fileLang);
       if (fileManifest) {
-        manifestIssues = await validateManifest(imports, fileManifest, content, fileLang, filePath);
+        manifestIssues = await validateManifest(
+          imports,
+          fileManifest,
+          content,
+          fileLang,
+          filePath,
+        );
       }
 
       // Tier 1: Validate symbols (hallucination detection)
@@ -1257,7 +1590,7 @@ export class AutoValidator {
         context,
         filePath,
         undefined, // missingPackages (calculated internally)
-        typeReferences
+        typeReferences,
       );
 
       // Validate usage patterns (architectural consistency)
@@ -1277,7 +1610,7 @@ export class AutoValidator {
             const blast = impactAnalyzer.traceBlastRadius(
               sym.name,
               context.symbolGraph,
-              2
+              2,
             );
 
             if (blast.severity === "high") {
@@ -1306,14 +1639,14 @@ export class AutoValidator {
       // We only run this for the changed file to avoid full project scans.
       const exportedDeadCodeIssues: any[] = [];
       const fileSymbols = extractSymbolsAST(content, filePath, fileLang);
-      const exportedSymbols = fileSymbols.filter(s => s.isExported);
+      const exportedSymbols = fileSymbols.filter((s) => s.isExported);
 
       if (exportedSymbols.length > 0 && context.reverseImportGraph) {
         for (const sym of exportedSymbols) {
           // Skip React components and framework patterns
           if (shouldSkipFrameworkPattern(sym.name)) continue;
           // Skip type exports (interfaces, types) - they might be used as type annotations
-          if (sym.type === 'interface' || sym.type === 'type') continue;
+          if (sym.type === "interface" || sym.type === "type") continue;
 
           // Check if this exported symbol is imported anywhere
           const importers = context.reverseImportGraph.get(filePath);
@@ -1334,7 +1667,10 @@ export class AutoValidator {
               const importerInfo = context.files.get(importerPath);
               if (importerInfo) {
                 for (const imp of importerInfo.imports) {
-                  if (imp.namedImports.includes(sym.name) || imp.defaultImport === sym.name) {
+                  if (
+                    imp.namedImports.includes(sym.name) ||
+                    imp.defaultImport === sym.name
+                  ) {
                     isImported = true;
                     break;
                   }
@@ -1359,8 +1695,26 @@ export class AutoValidator {
 
       deadCodeIssues.push(...exportedDeadCodeIssues);
 
+      // Tier 2c: Class method dead code — catches instance methods on exported singletons
+      // that are never called anywhere in the project
+      // (e.g. spoonacularService.getRecipeNutrition(), spoonacularService.autocompleteIngredient()).
+      // detectUnusedLocals hard-skips sym.type === "method"; detectDeadCode only walks
+      // top-level exported symbols — this cross-file, instance-origin-tracked check fills that gap.
+      const classMethodDeadCode = await detectUnusedClassMethods(
+        content,
+        filePath,
+        context,
+      );
+      deadCodeIssues.push(...classMethodDeadCode);
+
       // Combine all issues for verification
-      let allIssues = [...manifestIssues, ...symbolIssues, ...patternIssues, ...deadCodeIssues, ...impactIssues];
+      let allIssues = [
+        ...manifestIssues,
+        ...symbolIssues,
+        ...patternIssues,
+        ...deadCodeIssues,
+        ...impactIssues,
+      ];
 
       // === SMART SCOPE FILTERING (NEW) ===
       // Detect file scope and filter issues by relevance
@@ -1369,14 +1723,30 @@ export class AutoValidator {
 
       // Apply scope-based filtering
       allIssues = this.filterIssuesByScope(allIssues, fileScope, isLenient);
-      logger.debug(`After scope filtering: ${allIssues.length} relevant issues`);
+      logger.debug(
+        `After scope filtering: ${allIssues.length} relevant issues`,
+      );
 
       // === AUTOMATED VERIFICATION (eliminates false positives) ===
       if (allIssues.length > 0) {
-        logger.debug(`Verifying ${allIssues.length} findings to eliminate false positives...`);
+        logger.debug(
+          `Verifying ${allIssues.length} findings to eliminate false positives...`,
+        );
         const verificationResult = await verifyFindingsAutomatically(
-          allIssues.filter(i => i.type !== 'deadCode' && i.type !== 'unusedExport' && i.type !== 'unusedFunction' && i.type !== 'orphanedFile') as any,
-          allIssues.filter(i => i.type === 'deadCode' || i.type === 'unusedExport' || i.type === 'unusedFunction' || i.type === 'orphanedFile') as any,
+          allIssues.filter(
+            (i) =>
+              i.type !== "deadCode" &&
+              i.type !== "unusedExport" &&
+              i.type !== "unusedFunction" &&
+              i.type !== "orphanedFile",
+          ) as any,
+          allIssues.filter(
+            (i) =>
+              i.type === "deadCode" ||
+              i.type === "unusedExport" ||
+              i.type === "unusedFunction" ||
+              i.type === "orphanedFile",
+          ) as any,
           context,
           this.projectPath,
           fileLang,
@@ -1386,25 +1756,28 @@ export class AutoValidator {
         const confirmed = getConfirmedFindings(verificationResult);
 
         // Reconstruct allIssues with verified findings
-        allIssues = [
-          ...confirmed.hallucinations,
-          ...confirmed.deadCode,
-        ];
+        allIssues = [...confirmed.hallucinations, ...confirmed.deadCode];
 
-        logger.debug(`Verification complete: ${allIssues.length} confirmed (filtered ${verificationResult.stats.falsePositiveCount} false positives)`);
+        logger.debug(
+          `Verification complete: ${allIssues.length} confirmed (filtered ${verificationResult.stats.falsePositiveCount} false positives)`,
+        );
       }
 
       // === SMART MODE FILTERING ===
       if (isLenient) {
         // In learning/new file mode:
         // 1. Ignore architectural deviations (we are learning patterns)
-        allIssues = allIssues.filter(i => i.type !== 'architecturalDeviation');
+        allIssues = allIssues.filter(
+          (i) => i.type !== "architecturalDeviation",
+        );
 
         // 2. Ignore PROJECT-WIDE dead code in new/changing files (orphaned files, etc.)
         // but KEEP per-file local dead code (unusedFunction, unusedExport from detectUnusedLocals)
         // because local unused functions/constants are genuine code hygiene issues
         // that are cheap to detect and valuable to report.
-        allIssues = allIssues.filter(i => i.type !== 'deadCode' && i.type !== 'orphanedFile');
+        allIssues = allIssues.filter(
+          (i) => i.type !== "deadCode" && i.type !== "orphanedFile",
+        );
 
         // 3. Filter out "Medium" severity symbol issues
         // BUT keep unusedImport, unusedFunction, and unusedExport warnings
@@ -1414,6 +1787,17 @@ export class AutoValidator {
       }
 
       if (allIssues.length > 0) {
+        const latestVersion =
+          this.fileValidationVersions.get(filePath) ||
+          this.fileChangeVersions.get(filePath) ||
+          0;
+        if (latestVersion > targetVersion) {
+          logger.debug(
+            `Skipping stale validation alert for ${relativePath}: version ${targetVersion} < latest ${latestVersion}`,
+          );
+          return;
+        }
+
         const alert = await this.formatAlert(filePath, allIssues, fileLang);
         logger.warn(`Found ${allIssues.length} issues in ${relativePath}`);
 
@@ -1421,6 +1805,17 @@ export class AutoValidator {
           this.onAlert(alert);
         }
       } else {
+        const latestVersion =
+          this.fileValidationVersions.get(filePath) ||
+          this.fileChangeVersions.get(filePath) ||
+          0;
+        if (latestVersion > targetVersion) {
+          logger.debug(
+            `Skipping stale clear alert for ${relativePath}: version ${targetVersion} < latest ${latestVersion}`,
+          );
+          return;
+        }
+
         logger.info(`No issues found in ${relativePath}`);
         // Notify handler that issues are cleared for this file
         if (this.onAlert) {
@@ -1429,6 +1824,8 @@ export class AutoValidator {
             issues: [],
             timestamp: Date.now(),
             llmMessage: `✅ ${this.agentName}: Issues resolved in ${relativePath}`,
+            projectPath: this.projectPath,
+            agentName: this.agentName,
           };
           this.onAlert(clearAlert);
         }
@@ -1438,7 +1835,11 @@ export class AutoValidator {
     }
   }
 
-  private async formatAlert(filePath: string, issues: any[], fileLang: string): Promise<ValidationAlert> {
+  private async formatAlert(
+    filePath: string,
+    issues: any[],
+    fileLang: string,
+  ): Promise<ValidationAlert> {
     const relativePath = path.relative(this.projectPath, filePath);
 
     // Enrich issues with anti-pattern context (async)
@@ -1455,18 +1856,30 @@ export class AutoValidator {
     }));
 
     // Create a natural language message for the LLM (async for anti-pattern context)
-    const llmMessage = await this.createLLMMessage(relativePath, enrichedIssues, fileLang);
+    const llmMessage = await this.createLLMMessage(
+      relativePath,
+      enrichedIssues,
+      fileLang,
+    );
 
     return {
       file: relativePath,
       issues: issueList,
       timestamp: Date.now(),
       llmMessage,
+      projectPath: this.projectPath,
+      agentName: this.agentName,
     };
   }
 
-  private async createLLMMessage(file: string, issues: any[], fileLang: string): Promise<string> {
-    const critical = issues.filter((i) => i.severity === "critical" || i.severity === "high");
+  private async createLLMMessage(
+    file: string,
+    issues: any[],
+    fileLang: string,
+  ): Promise<string> {
+    const critical = issues.filter(
+      (i) => i.severity === "critical" || i.severity === "high",
+    );
     const count = issues.length;
 
     const task = `There are ${count} issue(s) detected in \`${file}\`. ${critical.length > 0 ? `**${critical.length} issues are CRITICAL.**` : ""} Review the following issues and provide fixes according to the project context.`;
@@ -1475,22 +1888,30 @@ export class AutoValidator {
     const roleMsg = PROMPT_PATTERNS.role(this.agentName, task);
 
     // Include validation constraints from the library
-    const constrainedMsg = PROMPT_PATTERNS.withConstraints(roleMsg, VALIDATION_CONSTRAINTS);
+    const constrainedMsg = PROMPT_PATTERNS.withConstraints(
+      roleMsg,
+      VALIDATION_CONSTRAINTS,
+    );
 
     // Add specific issues
-    const issuesList = issues.map((i, idx) => {
-      let item = `${idx + 1}. [${i.severity.toUpperCase()}] ${i.type}: ${i.message}`;
-      if (i.line) item += ` (Line ${i.line})`;
-      if (i.suggestion) item += `\n   Suggestion: ${i.suggestion}`;
-      // Include anti-pattern context if available
-      if (i.antiPattern) {
-        item += `\n   📚 ${i.antiPattern.id}: ${i.antiPattern.name} - ${i.antiPattern.description}`;
-      }
-      return item;
-    }).join("\n");
+    const issuesList = issues
+      .map((i, idx) => {
+        let item = `${idx + 1}. [${i.severity.toUpperCase()}] ${i.type}: ${i.message}`;
+        if (i.line) item += ` (Line ${i.line})`;
+        if (i.suggestion) item += `\n   Suggestion: ${i.suggestion}`;
+        // Include anti-pattern context if available
+        if (i.antiPattern) {
+          item += `\n   📚 ${i.antiPattern.id}: ${i.antiPattern.name} - ${i.antiPattern.description}`;
+        }
+        return item;
+      })
+      .join("\n");
 
     // Generate anti-pattern context for LLM
-    const antiPatternContext = await generateAntiPatternContext(issues, fileLang);
+    const antiPatternContext = await generateAntiPatternContext(
+      issues,
+      fileLang,
+    );
 
     let message = `${constrainedMsg}\n\nDETECTED ISSUES:\n${issuesList}`;
 
