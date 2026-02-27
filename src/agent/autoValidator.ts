@@ -1835,6 +1835,69 @@ export class AutoValidator {
     }
   }
 
+  /**
+   * Revalidate a set of relative file paths (usually hydrated from persisted alerts)
+   * so stale issues are cleared quickly after guardian startup.
+   */
+  async revalidatePersistedAlertFiles(relativeFiles: string[]): Promise<void> {
+    const uniqueFiles = Array.from(
+      new Set(
+        relativeFiles
+          .map((file) => file.replace(/\\/g, "/").replace(/^\/+/, ""))
+          .filter((file) => !!file),
+      ),
+    );
+
+    if (uniqueFiles.length === 0) return;
+
+    logger.info(
+      `Revalidating ${uniqueFiles.length} persisted alert file(s) for ${this.agentName}...`,
+    );
+
+    for (const relativePath of uniqueFiles) {
+      const absolutePath = path.resolve(this.projectPath, relativePath);
+      if (shouldExcludeFile(absolutePath)) continue;
+
+      try {
+        await fs.access(absolutePath);
+      } catch {
+        if (this.onAlert) {
+          this.onAlert({
+            file: relativePath,
+            issues: [],
+            timestamp: Date.now(),
+            llmMessage: `🧹 ${this.agentName}: Cleared stale alert for missing file ${relativePath}`,
+            projectPath: this.projectPath,
+            agentName: this.agentName,
+          });
+        }
+        continue;
+      }
+
+      const nextVersion = (this.fileChangeVersions.get(absolutePath) || 0) + 1;
+      this.fileChangeVersions.set(absolutePath, nextVersion);
+      this.fileValidationVersions.set(absolutePath, nextVersion);
+
+      if (this.validatingFiles.has(absolutePath)) {
+        this.enqueueValidation(absolutePath, nextVersion);
+        continue;
+      }
+
+      this.validatingFiles.add(absolutePath);
+
+      try {
+        await this.validateFile(absolutePath, false, nextVersion);
+      } catch (err) {
+        logger.warn(
+          `Failed persisted-alert revalidation for ${relativePath}:`,
+          err,
+        );
+      } finally {
+        this.validatingFiles.delete(absolutePath);
+      }
+    }
+  }
+
   private async formatAlert(
     filePath: string,
     issues: any[],

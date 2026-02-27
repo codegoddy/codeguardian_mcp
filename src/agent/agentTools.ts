@@ -95,6 +95,75 @@ function countPendingAlertsForScope(projectPath: string, agentName: string): num
   return count;
 }
 
+function alertBelongsToScope(
+  storageKey: string,
+  alert: ValidationAlert,
+  normalizedTargetProject: string,
+  agentName: string,
+): boolean {
+  if (alert.agentName && alert.agentName !== agentName) return false;
+
+  const alertProjectPath = normalizeProjectPath(alert.projectPath);
+  if (alertProjectPath) {
+    return alertProjectPath === normalizedTargetProject;
+  }
+
+  const keyProjectPath = getProjectPathFromStorageKey(storageKey);
+  if (keyProjectPath) {
+    return keyProjectPath === normalizedTargetProject;
+  }
+
+  if (
+    isApiContractScanAlertKey(alert.file) &&
+    alert.file !== `API_CONTRACT_SCAN:${agentName}`
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function collectAlertFilesForRevalidation(
+  projectPath: string,
+  agentName: string,
+): string[] {
+  const normalizedTargetProject = path.resolve(projectPath);
+  const files = new Set<string>();
+
+  for (const [storageKey, alert] of fileAlerts.entries()) {
+    if (!Array.isArray(alert.issues) || alert.issues.length === 0) continue;
+    if (
+      !alertBelongsToScope(
+        storageKey,
+        alert,
+        normalizedTargetProject,
+        agentName,
+      )
+    ) {
+      continue;
+    }
+
+    // Revalidate direct per-file alerts.
+    if (
+      alert.file &&
+      !isApiContractScanAlertKey(alert.file) &&
+      !alert.file.startsWith("INITIAL_SCAN") &&
+      !alert.file.startsWith("INITIAL_FILE_SCAN")
+    ) {
+      files.add(alert.file);
+    }
+
+    // Also revalidate issue-backed files from initial/API scan alerts.
+    for (const issue of alert.issues) {
+      if (issue.file) {
+        files.add(issue.file);
+      }
+    }
+  }
+
+  return Array.from(files.values());
+}
+
 function removeAlertsForGuardianScope(projectPath: string, agentName: string): number {
   const normalizedTargetProject = path.resolve(projectPath);
   let removed = 0;
@@ -503,6 +572,21 @@ Each Guardian watches its own path and language.`,
       });
 
       activeGuardians.set(agent_name, guardian);
+
+      const revalidationCandidates = collectAlertFilesForRevalidation(
+        absolutePath,
+        agent_name,
+      );
+      if (revalidationCandidates.length > 0) {
+        void guardian
+          .revalidatePersistedAlertFiles(revalidationCandidates)
+          .catch((err) => {
+            logger.warn(
+              `Failed to revalidate persisted alerts for ${agent_name}:`,
+              err,
+            );
+          });
+      }
 
       // Persist config so guardian survives server restarts (new LLM sessions).
       // Await to avoid races where tests/cleanup stop a guardian before persistence settles.
@@ -1101,6 +1185,22 @@ export async function restoreGuardians(): Promise<number> {
         });
 
         activeGuardians.set(config.agentName, guardian);
+
+        const revalidationCandidates = collectAlertFilesForRevalidation(
+          config.projectPath,
+          config.agentName,
+        );
+        if (revalidationCandidates.length > 0) {
+          void guardian
+            .revalidatePersistedAlertFiles(revalidationCandidates)
+            .catch((err) => {
+              logger.warn(
+                `Failed to revalidate restored alerts for ${config.agentName}:`,
+                err,
+              );
+            });
+        }
+
         restored++;
       } catch (err) {
         logger.error(`Error restoring guardian '${config.agentName}':`, err);

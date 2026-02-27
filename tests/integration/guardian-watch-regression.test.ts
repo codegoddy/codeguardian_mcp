@@ -24,6 +24,51 @@ async function cleanupTempDir(root: string): Promise<void> {
 
 describe("watch mode regression", () => {
   it(
+    "revalidates persisted-alert files and emits clear alerts for clean files",
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "codeguardian-revalidate-"));
+
+      let guardian: AutoValidator | undefined;
+      const targetFile = path.join(root, "src/index.ts");
+
+      try {
+        await writeFile(
+          path.join(root, "package.json"),
+          JSON.stringify({ name: "revalidate-regression", private: true, dependencies: {} }),
+        );
+
+        await writeFile(
+          targetFile,
+          `export function run() {
+  return "ok";
+}
+`,
+        );
+
+        const alerts: any[] = [];
+        guardian = new AutoValidator(root, "typescript", "strict", "RevalidateRegression");
+        guardian.setAlertHandler((alert) => alerts.push(alert));
+
+        await guardian.revalidatePersistedAlertFiles(["src/index.ts"]);
+
+        const clearAlert = alerts.find((a) => a.file === "src/index.ts");
+        expect(clearAlert).toBeTruthy();
+        expect(clearAlert.issues).toEqual([]);
+      } finally {
+        if (guardian) {
+          try {
+            guardian.stop();
+          } catch {
+            // ignore cleanup errors
+          }
+        }
+        await cleanupTempDir(root);
+      }
+    },
+    60_000,
+  );
+
+  it(
     "does not emit stale per-file alerts when a newer change version exists",
     async () => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "codeguardian-watch-stale-"));
